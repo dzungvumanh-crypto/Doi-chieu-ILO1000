@@ -3543,6 +3543,213 @@ def stats_annual(
     )
 
 
+# ─── Báo cáo chấm công tháng (suy ra từ đơn nghỉ phép đã duyệt) ────────────
+@router.get("/export/attendance-monthly")
+def export_attendance_monthly(
+    year: int,
+    month: int = Query(..., ge=1, le=12),
+    db: sqlite3.Connection = Depends(get_db),
+    current: dict = Depends(require_feature("leaves.stats_export")),
+):
+    """Bảng chấm công toàn trung tâm, theo mẫu giấy "TONG HOP CHAM CONG TTTT"
+    của Phòng Tổng hợp — nhóm theo phòng ban, mỗi người 1 dòng, X = đi làm,
+    P = nghỉ phép (suy ra từ leave_records đã duyệt), để trống = T7/CN/lễ.
+
+    CHỈ tự động được phần suy ra từ đơn nghỉ phép — các buổi họp/tập huấn/công
+    tác (không qua hệ thống nghỉ phép) và cột xếp loại thi đua KHÔNG có nguồn
+    dữ liệu nào trong phần mềm nên không tự điền được; Phòng Tổng hợp bổ sung
+    thủ công sau khi tải về, đúng như mẫu giấy vẫn dùng.
+    """
+    import calendar
+    import openpyxl
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    _scope_required = (current["role"] not in ("admin", "giam_doc", "pho_giam_doc")
+                       and not _is_tong_hop_staff(current, db))
+    _dept_sql    = " AND u.department_id = ?" if _scope_required else ""
+    _dept_params = [current.get("department_id")] if _scope_required else []
+
+    staffs = db.execute(
+        f"""SELECT u.id, u.full_name, u.employee_code, d.name AS dept_name
+           FROM user_tttt u
+           LEFT JOIN departments d ON u.department_id = d.id
+           WHERE u.is_active=1 AND (u.is_deleted=0 OR u.is_deleted IS NULL)
+             AND u.department_id IS NOT NULL{_dept_sql}
+           ORDER BY d.name, u.full_name""",
+        _dept_params
+    ).fetchall()
+
+    days_in_month = calendar.monthrange(year, month)[1]
+    start = date(year, month, 1)
+    end = date(year, month, days_in_month)
+    lich = _load_lich(db, start, end)
+
+    staff_ids = [s["id"] for s in staffs]
+    leave_days_by_staff: dict[int, set] = {sid: set() for sid in staff_ids}
+    if staff_ids:
+        placeholders = ",".join("?" for _ in staff_ids)
+        rows = db.execute(
+            f"""SELECT staff_id, start_date, end_date, spread_dates FROM leave_records
+               WHERE status='approved' AND staff_id IN ({placeholders})
+                 AND start_date <= ? AND end_date >= ?""",
+            (*staff_ids, end.isoformat(), start.isoformat()),
+        ).fetchall()
+        for r in rows:
+            if r["spread_dates"]:
+                for ds in json.loads(r["spread_dates"]):
+                    d = date.fromisoformat(ds)
+                    if start <= d <= end:
+                        leave_days_by_staff[r["staff_id"]].add(d)
+            else:
+                d = max(date.fromisoformat(r["start_date"]), start)
+                e = min(date.fromisoformat(r["end_date"]), end)
+                while d <= e:
+                    leave_days_by_staff[r["staff_id"]].add(d)
+                    d += timedelta(days=1)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"Cham cong {month:02d}-{year}"
+
+    FONT_NAME = "Times New Roman"
+    total_cols = 3 + days_in_month + 3  # STT, Họ và tên, Mã cán bộ, các ngày, X, N.L, Ăn ca
+    last_col = get_column_letter(total_cols)
+    left_end = total_cols // 2
+
+    ws.merge_cells(f"A1:{get_column_letter(left_end)}1")
+    ws.cell(1, 1, "NGÂN HÀNG NÔNG NGHIỆP").font = Font(name=FONT_NAME, size=12, bold=True)
+    ws.merge_cells(f"{get_column_letter(left_end + 1)}1:{last_col}1")
+    c = ws.cell(1, left_end + 1, "CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM")
+    c.font = Font(name=FONT_NAME, size=12, bold=True)
+    c.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A2:{get_column_letter(left_end)}2")
+    ws.cell(2, 1, "VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM").font = Font(name=FONT_NAME, size=12, bold=True)
+    ws.merge_cells(f"{get_column_letter(left_end + 1)}2:{last_col}2")
+    c = ws.cell(2, left_end + 1, "Độc lập - Tự do - Hạnh phúc")
+    c.font = Font(name=FONT_NAME, size=12, bold=True)
+    c.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A3:{get_column_letter(left_end)}3")
+    ws.cell(3, 1, "TRUNG TÂM THANH TOÁN").font = Font(name=FONT_NAME, size=12, bold=True)
+
+    ws.merge_cells(f"A5:{last_col}5")
+    tc = ws.cell(5, 1, "BẢNG CHẤM CÔNG LAO ĐỘNG")
+    tc.font = Font(name=FONT_NAME, size=14, bold=True)
+    tc.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A6:{last_col}6")
+    tc = ws.cell(6, 1, f"Tháng {month:02d} năm {year}")
+    tc.font = Font(name=FONT_NAME, size=12, bold=True)
+    tc.alignment = Alignment(horizontal="center")
+
+    HEADER_ROW = 8
+    hdr_font = Font(name=FONT_NAME, size=11, bold=True)
+    weekend_fill = PatternFill("solid", fgColor="FFFFFF00")
+    holiday_fill = PatternFill("solid", fgColor="C8E6C9")
+    thin = Side(style="thin", color="000000")
+    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.cell(HEADER_ROW, 1, "STT").font = hdr_font
+    ws.cell(HEADER_ROW, 2, "Họ và tên").font = hdr_font
+    ws.cell(HEADER_ROW, 3, "Mã cán bộ").font = hdr_font
+    ws.column_dimensions["A"].width = 5
+    ws.column_dimensions["B"].width = 24
+    ws.column_dimensions["C"].width = 12
+    day_col0 = 4
+    for dnum in range(1, days_in_month + 1):
+        col = day_col0 + dnum - 1
+        cell = ws.cell(HEADER_ROW, col, dnum)
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = cell_border
+        ws.column_dimensions[get_column_letter(col)].width = 3.5
+        d = date(year, month, dnum)
+        if not la_ngay_lam_viec(d, lich):
+            cell.fill = holiday_fill if d in lich.ngay_le else weekend_fill
+    sum_col0 = day_col0 + days_in_month
+    for i, label in enumerate(("X", "N.L", "Ăn ca")):
+        col = sum_col0 + i
+        cell = ws.cell(HEADER_ROW, col, label)
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center")
+        ws.column_dimensions[get_column_letter(col)].width = 7
+    for ci in range(1, total_cols + 1):
+        ws.cell(HEADER_ROW, ci).border = cell_border
+        ws.cell(HEADER_ROW, ci).alignment = Alignment(horizontal="center", vertical="center")
+
+    ri = HEADER_ROW + 1
+    cur_dept = None
+    dept_stt = 0
+    for s in staffs:
+        if s["dept_name"] != cur_dept:
+            if cur_dept is not None:
+                ws.cell(ri, 2, dept_stt)
+                ri += 1
+            cur_dept = s["dept_name"]
+            dept_stt = 0
+            ws.cell(ri, 2, cur_dept or "(Chưa gán phòng)").font = Font(name=FONT_NAME, size=11, bold=True)
+            ri += 1
+        dept_stt += 1
+        ws.cell(ri, 1, dept_stt).alignment = Alignment(horizontal="center")
+        ws.cell(ri, 2, s["full_name"] or "")
+        ws.cell(ri, 3, s["employee_code"] or "").alignment = Alignment(horizontal="center")
+        x_count = 0
+        for dnum in range(1, days_in_month + 1):
+            d = date(year, month, dnum)
+            col = day_col0 + dnum - 1
+            cell = ws.cell(ri, col)
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = cell_border
+            if not la_ngay_lam_viec(d, lich):
+                cell.fill = holiday_fill if d in lich.ngay_le else weekend_fill
+                continue
+            if d in leave_days_by_staff.get(s["id"], set()):
+                cell.value = "P"
+            else:
+                cell.value = "X"
+                x_count += 1
+        total_work_days = sum(
+            1 for dnum in range(1, days_in_month + 1)
+            if la_ngay_lam_viec(date(year, month, dnum), lich)
+        )
+        ws.cell(ri, sum_col0, x_count).alignment = Alignment(horizontal="center")
+        ws.cell(ri, sum_col0 + 1, total_work_days).alignment = Alignment(horizontal="center")
+        ws.cell(ri, sum_col0 + 2, x_count).alignment = Alignment(horizontal="center")
+        for ci in range(1, total_cols + 1):
+            ws.cell(ri, ci).border = cell_border
+        ri += 1
+    if cur_dept is not None:
+        ws.cell(ri, 2, dept_stt)
+        ri += 1
+
+    ri += 1
+    note = ws.cell(ri, 1,
+        "Ghi chú: X = đi làm, P = nghỉ phép (tự động lấy từ đơn nghỉ phép đã duyệt trong hệ thống), "
+        "ô để trống (tô màu) = Thứ Bảy/Chủ nhật/ngày lễ. Các buổi họp/tập huấn/công tác và cột xếp loại "
+        "thi đua KHÔNG có trong dữ liệu nghỉ phép nên chưa tự điền — Phòng Tổng hợp bổ sung thủ công.")
+    note.font = Font(name=FONT_NAME, size=9, italic=True, color="666666")
+    ws.merge_cells(f"A{ri}:{last_col}{ri}")
+
+    ri += 2
+    third = total_cols // 3
+    ws.cell(ri, 1, "LẬP BẢNG").font = Font(name=FONT_NAME, bold=True)
+    ws.cell(ri, third + 1, "KIỂM SOÁT").font = Font(name=FONT_NAME, bold=True)
+    ws.cell(ri, 2 * third + 1, "GIÁM ĐỐC").font = Font(name=FONT_NAME, bold=True)
+    for c in (1, third + 1, 2 * third + 1):
+        ws.cell(ri, c).alignment = Alignment(horizontal="center")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''bao_cao_cham_cong_{month:02d}_{year}.xlsx"},
+    )
+
+
 # ─── Dashboard lãnh đạo ─────────────────────────────────────────────────────
 
 @router.get("/stats/leader-dashboard")

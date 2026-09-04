@@ -337,6 +337,46 @@ async def leaves_page():
 
     await _sidebar("leaves")
 
+    # Tô sáng dòng+cột kiểu Excel khi rê chuột trên các bảng đơn nghỉ phép
+    # (Dashboard/Chờ duyệt/Khai báo hộ...) — các bảng này dựng bằng ui.row()
+    # xếp cạnh nhau (không phải <table> thật) nên CSS :hover thường chỉ tô
+    # được dòng; tô thêm cột phải dùng JS: khoanh vùng .hl-table, coi mỗi
+    # .hl-row là 1 dòng, mỗi CON TRỰC TIẾP của .hl-row là 1 "cột" theo đúng
+    # thứ tự dựng — rê vào cột nào thì tô cột đó ở MỌI dòng cùng bảng.
+    ui.add_head_html("""
+    <style>.hl-col-active { background-color: rgba(220,38,38,0.10) !important; }</style>
+    <script>
+    (function() {
+      if (window._leavesHlBound) return;
+      window._leavesHlBound = true;
+      document.addEventListener('mouseover', function(e) {
+        var row = e.target.closest ? e.target.closest('.hl-row') : null;
+        if (!row) return;
+        var table = row.closest('.hl-table');
+        if (!table) return;
+        var cell = e.target;
+        while (cell && cell.parentElement !== row) cell = cell.parentElement;
+        if (!cell) return;
+        var idx = Array.prototype.indexOf.call(row.children, cell);
+        if (idx < 0) return;
+        table.querySelectorAll('.hl-row').forEach(function(r) {
+          var c = r.children[idx];
+          if (c) c.classList.add('hl-col-active');
+        });
+      });
+      document.addEventListener('mouseout', function(e) {
+        var row = e.target.closest ? e.target.closest('.hl-row') : null;
+        if (!row) return;
+        var table = row.closest('.hl-table');
+        if (!table) return;
+        table.querySelectorAll('.hl-col-active').forEach(function(c) {
+          c.classList.remove('hl-col-active');
+        });
+      });
+    })();
+    </script>
+    """)
+
 
 
     current_user = api.get_current_user()
@@ -2722,11 +2762,11 @@ async def leaves_page():
 
             _hdr_cls  = "font-semibold text-red-800 text-xs shrink-0 border-r border-red-400 pr-2 mr-1"
 
-            with ui.column().classes("w-full gap-0 border-2 border-gray-400 rounded"):
+            with ui.column().classes("hl-table w-full gap-0 border-2 border-gray-400 rounded"):
 
                 # Header
 
-                with ui.row().classes("w-full bg-red-50 border-b-2 border-red-400 px-3 py-2 items-center gap-0"):
+                with ui.row().classes("hl-row w-full bg-red-50 border-b-2 border-red-400 px-3 py-2 items-center gap-0"):
 
                     if show_checkbox or export_sel is not None:
                         _all_ids = [lv["id"] for lv in leaves]
@@ -2806,7 +2846,7 @@ async def leaves_page():
                     )
                     _row_bg = "bg-red-50 border-red-300" if _needs_action else "bg-white border-gray-300"
 
-                    with ui.row().classes(f"w-full {_row_bg} border-b border-gray-300 px-3 py-1.5 items-center gap-0 hover:bg-red-100"):
+                    with ui.row().classes(f"hl-row w-full {_row_bg} border-b border-gray-300 px-3 py-1.5 items-center gap-0 hover:bg-red-100"):
 
                         if show_checkbox:
 
@@ -5013,24 +5053,6 @@ async def leaves_page():
 
                         ui.button("Tải báo cáo Excel", icon="download", on_click=_download_stats).classes("bg-blue-700 text-white")
 
-                        # Báo cáo NPBB — Phòng Tổng hợp chốt tổng gửi báo cáo (không phải
-                        # từng cá nhân tự làm), quét dữ liệu đơn nghỉ phép bắt buộc trong
-                        # năm đã chọn ở trên — xem export_npbb_batch() ở backend.
-                        async def _download_npbb(mau: str):
-                            try:
-                                content = await asyncio.to_thread(
-                                    api.download, "/api/leaves/export/npbb-batch",
-                                    params={"year": s_year_sel.value, "mau": mau},
-                                )
-                                ui.download(content, f"bao_cao_npbb_mau{mau}_{s_year_sel.value}.docx")
-                            except Exception as e:
-                                _handle_api_error(e)
-
-                        with ui.button("Báo cáo NPBB", icon="assignment").classes("bg-orange-700 text-white"):
-                            with ui.menu():
-                                ui.menu_item("Mẫu đăng ký (Mẫu 19 — gửi TCNS)", on_click=lambda: _download_npbb("19"))
-                                ui.menu_item("Mẫu điều chỉnh (Mẫu 18 — nội bộ)", on_click=lambda: _download_npbb("18"))
-
                         # Mẫu đơn gốc (.docx) — Phòng Tổng hợp tải để in/phát cho ai cần
                         # điền tay, không qua bước điền dữ liệu (xem export_mau_don ở BE).
                         async def _download_mau_don(loai: str, fname: str):
@@ -5064,6 +5086,69 @@ async def leaves_page():
                     ui.label("Chọn năm và nhấn 'Tải báo cáo Excel' để xuất file tổng hợp phép. "
                              "Mục 'Mẫu đơn' tải file gốc dùng để dựng đơn thật, chỉ để tham khảo/in phát tay, "
                              "không tự điền dữ liệu.").classes("text-sm text-gray-500")
+
+                    ui.separator().classes("my-4")
+
+                    with ui.row().classes("w-full items-center justify-between"):
+                        ui.label("BÁO CÁO HÀNG THÁNG").classes("text-sm font-bold text-red-800")
+                        ui.label("(Cập nhật theo mẫu chính thức của TCNS)").classes("text-xs text-gray-500 italic")
+
+                    with ui.row().classes("gap-3 mb-2 mt-2 items-center"):
+
+                        _today_month = _dt_mod.date.today().month
+
+                        s_month_year_sel = ui.select(
+                            {y: str(y) for y in range(_today_year - 2, _today_year + 2)},
+                            label="Năm", value=_today_year,
+                        ).classes("w-28")
+
+                        s_month_sel = ui.select(
+                            {m: f"Tháng {m:02d}" for m in range(1, 13)},
+                            label="Tháng", value=_today_month,
+                        ).classes("w-32")
+
+                        # Báo cáo NPBB — Phòng Tổng hợp chốt tổng gửi báo cáo (không phải
+                        # từng cá nhân tự làm), quét dữ liệu đơn nghỉ phép bắt buộc trong
+                        # năm đã chọn (export_npbb_batch chỉ lọc theo năm, chưa lọc theo
+                        # tháng — Tháng ở hàng này chỉ dùng cho "Báo cáo chấm công" bên
+                        # cạnh) — xem export_npbb_batch() ở backend.
+                        async def _download_npbb(mau: str):
+                            try:
+                                content = await asyncio.to_thread(
+                                    api.download, "/api/leaves/export/npbb-batch",
+                                    params={"year": s_month_year_sel.value, "mau": mau},
+                                )
+                                ui.download(content, f"bao_cao_npbb_mau{mau}_{s_month_year_sel.value}.docx")
+                            except Exception as e:
+                                _handle_api_error(e)
+
+                        with ui.button("Báo cáo NPBB", icon="assignment").classes("bg-orange-700 text-white"):
+                            with ui.menu():
+                                ui.menu_item("Mẫu đăng ký (Mẫu 19 — gửi TCNS)", on_click=lambda: _download_npbb("19"))
+                                ui.menu_item("Mẫu điều chỉnh (Mẫu 18 — nội bộ)", on_click=lambda: _download_npbb("18"))
+
+                        # Suy ra hoàn toàn từ đơn nghỉ phép đã duyệt — X = đi làm, P = phép.
+                        # Không có nguồn dữ liệu cho họp/tập huấn/xếp loại thi đua nên các
+                        # phần đó bỏ trống trên file tải về, xem export_attendance_monthly().
+                        async def _download_attendance():
+                            try:
+                                content = await asyncio.to_thread(
+                                    api.download, "/api/leaves/export/attendance-monthly",
+                                    params={"year": s_month_year_sel.value, "month": s_month_sel.value},
+                                )
+                                ui.download(content,
+                                             f"bao_cao_cham_cong_{s_month_sel.value:02d}_{s_month_year_sel.value}.xlsx")
+                            except Exception as e:
+                                _handle_api_error(e)
+
+                        ui.button("Báo cáo chấm công", icon="event_available",
+                                  on_click=_download_attendance).classes("bg-blue-700 text-white")
+
+                    ui.label("Báo cáo NPBB: tổng hợp đăng ký nghỉ phép bắt buộc và điều chỉnh trong năm đã chọn. "
+                             "Báo cáo chấm công: suy ra từ đơn nghỉ phép đã duyệt trong tháng — X = đi làm, "
+                             "P = nghỉ phép, để trống = T7/CN/lễ; các buổi họp/tập huấn/công tác và cột xếp loại "
+                             "thi đua KHÔNG tự điền được (không có dữ liệu), cần Phòng Tổng hợp bổ sung thủ công."
+                             ).classes("text-sm text-gray-500")
 
 
 
@@ -5154,9 +5239,9 @@ async def leaves_page():
                                 else:
                                     for dl in _leaves: _export_sel.discard(dl["id"])
 
-                            with ui.column().classes("w-full gap-0 border-2 border-gray-400 rounded"):
+                            with ui.column().classes("hl-table w-full gap-0 border-2 border-gray-400 rounded"):
 
-                                with ui.row().classes("w-full bg-red-50 border-b-2 border-red-400 px-3 py-2 items-center gap-0"):
+                                with ui.row().classes("hl-row w-full bg-red-50 border-b-2 border-red-400 px-3 py-2 items-center gap-0"):
 
                                     _all_sel_checkboxes.append(
                                         ui.checkbox(value=False, on_change=_decl_select_all).props("dense").classes("w-6 shrink-0 mr-2").tooltip("Chọn / Bỏ chọn tất cả")
@@ -5180,7 +5265,7 @@ async def leaves_page():
 
                                 for _di, dl in enumerate(leaves, 1):
 
-                                    with ui.row().classes("w-full bg-white border-b border-gray-100 px-3 py-1.5 items-center gap-0 hover:bg-purple-50"):
+                                    with ui.row().classes("hl-row w-full bg-white border-b border-gray-100 px-3 py-1.5 items-center gap-0 hover:bg-purple-50"):
 
                                         def _on_decl_ck(e, l=dl["id"]):
 
