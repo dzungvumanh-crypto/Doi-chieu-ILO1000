@@ -527,6 +527,32 @@ async def leaves_page():
 
 
 
+    # ── Cảnh báo đơn có ứng phép năm sau trước khi duyệt ────────────────────
+
+    def _borrow_year_label(lv: dict) -> str:
+        try:
+            return f"năm {int((lv.get('start_date') or '')[:4]) + 1}"
+        except Exception:
+            return "năm sau"
+
+    async def _borrow_confirm_or_run(lv: dict, run):
+        """`borrow_next_year_days` > 0 nghĩa là đơn đã ăn vào hạn mức phép năm
+        sau lúc tạo (xem _check_quota_or_borrow ở backend) — người duyệt phải
+        được cảnh báo trước khi hoàn tất duyệt, không âm thầm duyệt qua.
+        `run` là hàm async không tham số, thực hiện việc duyệt thật."""
+        borrow = lv.get("borrow_next_year_days") or 0
+        if not borrow:
+            await run()
+            return
+        _ask_confirm(
+            "Đơn có ứng phép năm sau",
+            f"Đơn nghỉ phép của {lv.get('staff_name', '')} ({lv.get('department_name', '')}) "
+            f"có sử dụng {borrow:.0f} ngày phép của {_borrow_year_label(lv)}. Tiếp tục duyệt?",
+            run, "Tiếp tục duyệt", "bg-orange-600",
+        )
+
+
+
     # ── Dialog từ chối (yêu cầu lý do) ──────────────────────────────────────
 
     _reject_cb: list = [None]
@@ -1499,7 +1525,7 @@ async def leaves_page():
                                     ui.label("Bước 1 → KSV phê duyệt").classes("text-xs font-bold text-orange-700 uppercase")
                                     if _is_admin and status == "pending_ksv":
                                         with ui.row().classes("gap-1"):
-                                            async def _admin_ksv_approve(l=lid):
+                                            async def _admin_ksv_approve(lv=leave, l=lid):
                                                 async def _do(payload, _l=l):
                                                     try:
                                                         await asyncio.to_thread(api.put, f"/api/leaves/{_l}/ksv-review", payload)
@@ -1508,8 +1534,10 @@ async def leaves_page():
                                                         if updated: await open_detail(updated)
                                                     except Exception as e:
                                                         _handle_api_error(e)
-                                                await _sign_then_approve(l, "ksv", f"/api/leaves/{l}/preview",
-                                                                         "Duyệt bước KSV", _do)
+                                                async def _run(_l=l):
+                                                    await _sign_then_approve(_l, "ksv", f"/api/leaves/{_l}/preview",
+                                                                             "Duyệt bước KSV", _do)
+                                                await _borrow_confirm_or_run(lv, _run)
                                             ui.button(icon="check", on_click=_admin_ksv_approve).props("round dense flat").classes("text-green-600 bg-green-50").tooltip("Phê duyệt KSV")
                                             async def _admin_ksv_reject(l=lid):
                                                 async def _cb(reason, _l=l):
@@ -1550,7 +1578,12 @@ async def leaves_page():
                                                     if updated: await open_detail(updated)
                                                 except Exception as e:
                                                     _handle_api_error(e)
-                                            _ask_confirm("Xác nhận TH", "Xác nhận & chuyển lên Ban lãnh đạo?", _do, "Xác nhận", "bg-green-600")
+                                            _th_borrow = lv.get("borrow_next_year_days") or 0
+                                            _th_msg = "Xác nhận & chuyển lên Ban lãnh đạo?"
+                                            if _th_borrow:
+                                                _th_msg += (f" ⚠ Đơn này có sử dụng {_th_borrow:.0f} ngày phép "
+                                                            f"của {_borrow_year_label(lv)}.")
+                                            _ask_confirm("Xác nhận TH", _th_msg, _do, "Xác nhận", "bg-green-600")
                                         ui.button(icon="check", on_click=_admin_th_approve).props("round dense flat").classes("text-green-600 bg-green-50").tooltip("Xác nhận TH")
                                         async def _admin_th_reject(l=lid):
                                             async def _cb(reason, _l=l):
@@ -1594,15 +1627,17 @@ async def leaves_page():
                                 ui.label("Bước 3 → Giám đốc phê duyệt").classes("text-xs font-bold text-blue-700 uppercase")
                                 if _is_admin and status == "pending_gd":
                                     with ui.row().classes("gap-1"):
-                                        async def _admin_gd_approve(l=lid):
+                                        async def _admin_gd_approve(lv=leave, l=lid):
                                             async def _do(payload, _l=l):
                                                 try:
                                                     await asyncio.to_thread(api.put, f"/api/leaves/{_l}/gd-review", payload)
                                                     detail_drawer.hide(); ui.notify("Đã duyệt GĐ!", type="positive"); _nav_pending()
                                                 except Exception as e:
                                                     _handle_api_error(e)
-                                            await _sign_then_approve(l, "gd", f"/api/leaves/{l}/preview",
-                                                                     "Duyệt bước Giám đốc", _do)
+                                            async def _run(_l=l):
+                                                await _sign_then_approve(_l, "gd", f"/api/leaves/{_l}/preview",
+                                                                         "Duyệt bước Giám đốc", _do)
+                                            await _borrow_confirm_or_run(lv, _run)
                                         ui.button(icon="check", on_click=_admin_gd_approve).props("round dense flat").classes("text-green-600 bg-green-50").tooltip("Phê duyệt GĐ")
                                         async def _admin_gd_reject(l=lid):
                                             async def _cb(reason, _l=l):
@@ -1677,7 +1712,7 @@ async def leaves_page():
 
                         if ksv_act and api.has_feature("leaves.approve_ksv"):
 
-                            async def _ksv_approve(l=lid):
+                            async def _ksv_approve(lv=leave, l=lid):
 
                                 async def _do(payload, _l=l):
 
@@ -1695,8 +1730,10 @@ async def leaves_page():
 
                                         _handle_api_error(e)
 
-                                await _sign_then_approve(l, "ksv", f"/api/leaves/{l}/preview",
-                                                         "Xác nhận phê duyệt", _do)
+                                async def _run(_l=l):
+                                    await _sign_then_approve(_l, "ksv", f"/api/leaves/{_l}/preview",
+                                                             "Xác nhận phê duyệt", _do)
+                                await _borrow_confirm_or_run(lv, _run)
 
 
 
@@ -1755,6 +1792,10 @@ async def leaves_page():
                                          " ⚠ Người duyệt là Phó Giám đốc nhưng giấy ủy quyền chưa/không còn "
                                          "hiệu lực hôm nay — chuyển lên bây giờ thì đơn sẽ đứng lại cho tới khi "
                                          "ủy quyền được gia hạn.")
+                                _th_borrow = lv.get("borrow_next_year_days") or 0
+                                if _th_borrow:
+                                    _warn += (f" ⚠ Đơn này có sử dụng {_th_borrow:.0f} ngày phép "
+                                              f"của {_borrow_year_label(lv)}.")
                                 _ask_confirm(
                                     "Xác nhận phê duyệt",
                                     f"Xác nhận đơn của {lv.get('staff_name','')} và chuyển lên Ban lãnh đạo?{_warn}",
@@ -1802,7 +1843,7 @@ async def leaves_page():
 
                         if gd_act and api.has_feature("leaves.approve_gd"):
 
-                            async def _gd_approve(l=lid):
+                            async def _gd_approve(lv=leave, l=lid):
 
                                 async def _do(payload, _l=l):
 
@@ -1820,8 +1861,10 @@ async def leaves_page():
 
                                         _handle_api_error(e)
 
-                                await _sign_then_approve(l, "gd", f"/api/leaves/{l}/preview",
-                                                         "Xác nhận phê duyệt", _do)
+                                async def _run(_l=l):
+                                    await _sign_then_approve(_l, "gd", f"/api/leaves/{_l}/preview",
+                                                             "Xác nhận phê duyệt", _do)
+                                await _borrow_confirm_or_run(lv, _run)
 
 
 
@@ -2184,6 +2227,8 @@ async def leaves_page():
 
                 return
 
+            _bulk_lv_map = {lv["id"]: lv for lv in pending_leaves}
+
 
 
             async def _do_bulk(_ids=ids):
@@ -2249,9 +2294,20 @@ async def leaves_page():
 
 
 
+            _borrow_ids = [i for i in ids if (_bulk_lv_map.get(i, {}).get("borrow_next_year_days") or 0) > 0]
+            _bulk_msg = f"Bạn có chắc chắn muốn phê duyệt {len(ids)} đơn đã chọn?"
+            if _borrow_ids:
+                _lines = []
+                for i in _borrow_ids:
+                    _lv = _bulk_lv_map.get(i, {})
+                    _lines.append(f"{_lv.get('staff_name', '')} ({_lv.get('department_name', '')}) — "
+                                  f"{_borrow_year_label(_lv)}")
+                _bulk_msg += (f" ⚠ Trong đó có {len(_borrow_ids)} đơn sử dụng ngày phép của năm sau: "
+                              + "; ".join(_lines))
+
             _ask_confirm("Xác nhận phê duyệt",
 
-                         f"Bạn có chắc chắn muốn phê duyệt {len(ids)} đơn đã chọn?",
+                         _bulk_msg,
 
                          _do_bulk, "Phê duyệt", "bg-green-600")
 
