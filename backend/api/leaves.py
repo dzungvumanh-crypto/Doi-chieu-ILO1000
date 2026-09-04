@@ -87,6 +87,11 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
     Đếm tất cả loại TRỪ thai_san/bao_hiem.
     include_pending=True: cộng thêm đơn đang chờ duyệt (dùng khi kiểm tra quota lúc nộp lại).
     exclude_id: bỏ qua đơn đang xem (dùng khi in phiếu).
+
+    Có tính "ứng phép năm sau" (borrow_next_year_days, xem
+    _check_quota_or_borrow): phần đã ứng bị trừ khỏi năm gốc của đơn, cộng
+    sang năm sau — nên đơn tạo năm N-1 có ứng vẫn cộng đúng vào năm N dù ngày
+    nghỉ thực tế không nằm trong năm N.
     """
     if include_pending:
         statuses = ("'approved','pending_ksv','pending_tong_hop','pending_gd'")
@@ -101,7 +106,7 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
     # rơi vào năm đang tính, xem thêm vòng lặp clip theo d.year bên dưới.
     params += [f"{year}-12-31", f"{year}-01-01"]
     rows = db.execute(
-        f"""SELECT spread_dates, start_date, end_date FROM leave_records
+        f"""SELECT spread_dates, start_date, end_date, borrow_next_year_days FROM leave_records
             WHERE staff_id=? {excl} AND status IN ({statuses})
               AND leave_type NOT IN ('thai_san','bao_hiem')
               AND start_date <= ? AND end_date >= ?""",
@@ -110,17 +115,34 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
     total = 0.0
     _lich: LichLamViec | None = None  # lazy load khi cần
     for row in rows:
+        borrow = row["borrow_next_year_days"] or 0.0
         if row["spread_dates"]:
-            total += len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
+            yr_count = len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
         else:
             if _lich is None:
                 _lich = _load_lich(db, date(year, 1, 1), date(year, 12, 31))
             d = date.fromisoformat(row["start_date"])
             e = date.fromisoformat(row["end_date"])
+            yr_count = 0
             while d <= e:
                 if d.year == year and la_ngay_lam_viec(d, _lich):
-                    total += 1
+                    yr_count += 1
                 d += timedelta(days=1)
+        total += yr_count - borrow
+    # Phần ứng TỪ năm trước SANG năm đang tính — đơn gốc nằm hẳn ở year-1
+    # nhưng phần vượt hạn mức đã được tính vào year, cộng riêng ở đây vì câu
+    # SELECT trên chỉ lấy đơn có ngày nghỉ chồng lên year.
+    borrowed_params: list = [staff_id]
+    if exclude_id is not None:
+        borrowed_params.append(exclude_id)
+    borrowed_params.append(str(year - 1))
+    for row in db.execute(
+        f"""SELECT borrow_next_year_days FROM leave_records
+            WHERE staff_id=? {excl} AND status IN ({statuses})
+              AND strftime('%Y', start_date) = ?""",
+        borrowed_params,
+    ).fetchall():
+        total += row["borrow_next_year_days"] or 0.0
     return total
 
 
@@ -136,7 +158,7 @@ def _calc_used_days_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
                 if include_pending else "'approved'")
     placeholders = ",".join("?" * len(staff_ids))
     rows = db.execute(
-        f"""SELECT staff_id, spread_dates, start_date, end_date FROM leave_records
+        f"""SELECT staff_id, spread_dates, start_date, end_date, borrow_next_year_days FROM leave_records
             WHERE staff_id IN ({placeholders}) AND status IN ({statuses})
               AND leave_type NOT IN ('thai_san','bao_hiem')
               AND start_date <= ? AND end_date >= ?""",
@@ -145,17 +167,28 @@ def _calc_used_days_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
     result = {sid: 0.0 for sid in staff_ids}
     _lich: LichLamViec | None = None
     for row in rows:
+        borrow = row["borrow_next_year_days"] or 0.0
         if row["spread_dates"]:
-            result[row["staff_id"]] += len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
+            yr_count = len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
         else:
             if _lich is None:
                 _lich = _load_lich(db, date(year, 1, 1), date(year, 12, 31))
             d = date.fromisoformat(row["start_date"])
             e = date.fromisoformat(row["end_date"])
+            yr_count = 0
             while d <= e:
                 if d.year == year and la_ngay_lam_viec(d, _lich):
-                    result[row["staff_id"]] += 1
+                    yr_count += 1
                 d += timedelta(days=1)
+        result[row["staff_id"]] += yr_count - borrow
+    # Phần ứng TỪ năm trước SANG năm đang tính — xem chú thích trong _calc_used_days.
+    for row in db.execute(
+        f"""SELECT staff_id, borrow_next_year_days FROM leave_records
+            WHERE staff_id IN ({placeholders}) AND status IN ({statuses})
+              AND strftime('%Y', start_date) = ?""",
+        list(staff_ids) + [str(year - 1)],
+    ).fetchall():
+        result[row["staff_id"]] += row["borrow_next_year_days"] or 0.0
     return result
 
 
@@ -188,26 +221,32 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
     used_by_staff: dict = {}
     _lich: LichLamViec | None = None
     for r in db.execute(
-        f"""SELECT staff_id, start_date, end_date, spread_dates FROM leave_records
+        f"""SELECT staff_id, start_date, end_date, spread_dates, borrow_next_year_days FROM leave_records
            WHERE staff_id IN ({placeholders}) AND status='approved'
              AND leave_type NOT IN ('thai_san','bao_hiem')
              AND start_date <= ? AND end_date >= ?""",
         list(staff_ids) + [f"{prev_year}-12-31", f"{prev_year}-01-01"],
     ).fetchall():
         sid = r["staff_id"]
+        # Phần đã "ứng" sang year (= prev_year + 1) không tính là đã dùng của
+        # prev_year — nếu không carry-over sẽ bị tính hụt (coi như dùng hết cả
+        # phần đã chuyển sang năm sau), xem _check_quota_or_borrow.
+        borrow = r["borrow_next_year_days"] or 0.0
         if r["spread_dates"]:
             used_by_staff[sid] = used_by_staff.get(sid, 0.0) + len(
                 [d for d in json.loads(r["spread_dates"]) if d.startswith(str(prev_year))]
-            )
+            ) - borrow
         else:
             if _lich is None:
                 _lich = _load_lich(db, date(prev_year, 1, 1), date(prev_year, 12, 31))
             d = date.fromisoformat(r["start_date"])
             e = date.fromisoformat(r["end_date"])
+            yr_count = 0
             while d <= e:
                 if d.year == prev_year and la_ngay_lam_viec(d, _lich):
-                    used_by_staff[sid] = used_by_staff.get(sid, 0.0) + 1
+                    yr_count += 1
                 d += timedelta(days=1)
+            used_by_staff[sid] = used_by_staff.get(sid, 0.0) + yr_count - borrow
     result = {}
     for sid in staff_ids:
         prev_quota = quota_by_staff.get(sid)
@@ -215,6 +254,59 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
             prev_quota = float(compute_annual_leave(join_by_staff.get(sid), prev_year))
         result[sid] = max(0.0, prev_quota - used_by_staff.get(sid, 0.0))
     return result
+
+
+def _check_quota_or_borrow(staff_id: int, join_industry_date: Optional[str], leave_type: str,
+                           leave_days: float, ref_year: int, confirm_borrow: bool,
+                           db: sqlite3.Connection) -> float:
+    """Kiểm tra hạn mức phép năm — thay cho khối kiểm tra copy-paste ở
+    create_leave/resubmit_leave/create_direct_leave.
+
+    Trả về số ngày cần "ứng" trước vào hạn mức năm sau (0.0 nếu không vượt
+    hạn mức năm nay). bat_buoc/thai_san/bao_hiem không áp dụng — trả về 0.0
+    ngay, không đọc gì thêm (khớp _NO_QUOTA_TYPES + "!= bat_buoc" cũ).
+
+    confirm_borrow=False mà vượt hạn mức: 409 kèm code "quota_exceeded_borrow"
+    để FE hiện popup hỏi "ứng phép năm sau" — KHÔNG phải lỗi cứng 400, người
+    dùng có thể xác nhận rồi gọi lại với confirm_borrow=True.
+    confirm_borrow=True mà năm sau CŨNG không đủ chỗ ứng: 400 cứng, không cho
+    tạo đơn dù đã đồng ý ứng (không ứng được "khống").
+    """
+    if leave_type in _NO_QUOTA_TYPES or leave_type == "bat_buoc":
+        return 0.0
+
+    carry_eff = compute_carry_over(staff_id, ref_year, db, effective=True, ref_date=date(ref_year, 1, 1))
+    _q_row = db.execute(
+        "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
+        (staff_id, ref_year),
+    ).fetchone()
+    quota = (float(_q_row["quota_days"]) if _q_row
+             else float(compute_annual_leave(join_industry_date, ref_year)))
+    used_total = _calc_used_days(staff_id, ref_year, db, include_pending=True)
+    remaining = quota + carry_eff - used_total
+    if leave_days <= remaining:
+        return 0.0
+
+    overflow = leave_days - max(0.0, remaining)
+    if not confirm_borrow:
+        raise HTTPException(409, detail={
+            "code": "quota_exceeded_borrow",
+            "year": ref_year, "next_year": ref_year + 1,
+            "remaining": remaining, "borrow_days": overflow,
+        })
+
+    next_year = ref_year + 1
+    _q_next = db.execute(
+        "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
+        (staff_id, next_year),
+    ).fetchone()
+    next_quota = (float(_q_next["quota_days"]) if _q_next
+                  else float(compute_annual_leave(join_industry_date, next_year)))
+    next_used = _calc_used_days(staff_id, next_year, db, include_pending=True)
+    next_remaining = next_quota - next_used
+    if overflow > next_remaining:
+        raise HTTPException(400, f"Đã vượt quá hạn mức ngày nghỉ phép của năm {ref_year} và {next_year}")
+    return overflow
 
 
 def _load_lich(db: sqlite3.Connection, start: date, end: date) -> LichLamViec:
@@ -390,6 +482,24 @@ def _validate_ksv(ksv_id: Optional[int], current: dict, db: sqlite3.Connection) 
     return dict(ksv)
 
 
+def _is_alt_ksv(current: dict, staff_id: int, db: sqlite3.Connection) -> bool:
+    """Trưởng/Phó phòng CÙNG PHÒNG với người nộp đơn — được duyệt THAY bước
+    KSV dù không phải người được chỉ định ban đầu.
+
+    Trước đây chỉ đúng người được chỉ định (ksv_approver_id) hoặc Admin mới
+    duyệt được — nếu người đó đang nghỉ phép/vắng mặt, đơn đứng yên ở
+    pending_ksv vô thời hạn, chỉ Admin "duyệt nhanh" gỡ được. Điều kiện dưới
+    đây khớp đúng tập ứng viên hợp lệ lúc CHỌN KSV khi tạo đơn (_validate_ksv):
+    cùng phòng ban, không tự duyệt đơn của chính mình.
+    """
+    if current["role"] not in ("truong_phong", "pho_phong"):
+        return False
+    if current["id"] == staff_id:
+        return False
+    row = db.execute("SELECT department_id FROM user_tttt WHERE id = ?", (staff_id,)).fetchone()
+    return bool(row and row["department_id"] and row["department_id"] == current.get("department_id"))
+
+
 def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
     today = _vn_now().date().isoformat()
     r = db.execute(
@@ -490,6 +600,7 @@ def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
         "declarer_name":          r["declarer_name"] or "",
         "spread_dates":           json.loads(r["spread_dates"]) if r["spread_dates"] else None,
         "recall_reason":          r["recall_reason"],
+        "borrow_next_year_days":  r["borrow_next_year_days"] or 0.0,
         "created_at":             r["created_at"],
         "rejected_step":          (
             "GĐ"  if r["status"] == "rejected" and r["gd_approved_at"]
@@ -585,26 +696,13 @@ def _create_leave_core(body: LeaveCreate, current: dict, db: sqlite3.Connection,
         if eff_start < _vn_now().date():
             raise HTTPException(400, "Nghỉ phép năm phải từ hôm nay trở đi")
 
-    # Kiểm tra hạn mức (không áp dụng cho bat_buoc, thai_san, bao_hiem)
-    if body.leave_type not in _NO_QUOTA_TYPES and body.leave_type != "bat_buoc":
-        ref_year  = eff_start.year
-        carry_eff = compute_carry_over(current["id"], ref_year, db,
-                                       effective=True, ref_date=eff_start)
-        # Ưu tiên hạn mức nhập tay (leave_quotas), khớp đúng get_quotas/download_leave_form
-        # — trước đây dùng thẳng current["annual_leave_days"] (công thức thô, sai năm),
-        # bỏ qua override của admin.
-        _q_row = db.execute(
-            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
-            (current["id"], ref_year),
-        ).fetchone()
-        quota = (
-            float(_q_row["quota_days"]) if _q_row
-            else float(compute_annual_leave(current.get("join_industry_date"), ref_year))
-        )
-        used_total = _calc_used_days(current["id"], ref_year, db, include_pending=True)
-        remaining  = quota + carry_eff - used_total
-        if leave_days > remaining:
-            raise HTTPException(400, f"Vượt quá số ngày phép còn lại ({remaining:.0f} ngày)")
+    # Kiểm tra hạn mức — trả về số ngày cần ứng trước năm sau nếu vượt hạn mức
+    # năm nay và người tạo đơn đã đồng ý (confirm_borrow_next_year), 0.0 nếu
+    # không vượt hoặc loại nghỉ không áp dụng (bat_buoc/thai_san/bao_hiem).
+    borrow_days = _check_quota_or_borrow(
+        current["id"], current.get("join_industry_date"), body.leave_type,
+        leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+    )
 
     if body.leave_type == "bat_buoc" and leave_days < 5:
         raise HTTPException(400, "Nghỉ phép bắt buộc phải từ 5 ngày làm việc trở lên")
@@ -685,12 +783,12 @@ def _create_leave_core(body: LeaveCreate, current: dict, db: sqlite3.Connection,
         """INSERT INTO leave_records
                (staff_id, start_date, end_date, leave_type, reason, status,
                 ksv_approver_id, gd_approver_id, gd_approved_at, spread_dates,
-                adjusts_leave_id, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                adjusts_leave_id, borrow_next_year_days, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (current["id"], eff_start.isoformat(), eff_end.isoformat(),
          body.leave_type, body.reason, initial_status, ksv_approver_id,
          gd_approver_id, gd_approved_at, spread_json, adjusts_leave_id,
-         str(_vn_now()), str(_vn_now())),
+         borrow_days, str(_vn_now()), str(_vn_now())),
     )
     leave_id = cur.lastrowid
     if body.signature:
@@ -787,17 +885,26 @@ def list_leaves(
         elif _is_tong_hop_staff(current, db):
             if role in ("truong_phong", "pho_phong"):
                 # PP/TP Tổng hợp: duyệt bước TH cho toàn trung tâm
-                # VÀ duyệt bước KSV cho nhân viên phòng mình
+                # VÀ duyệt bước KSV cho nhân viên phòng mình (kể cả KSV thay
+                # thế — cùng phòng, không phải người được chỉ định ban đầu,
+                # xem _is_alt_ksv).
                 clauses.append(
                     f"(status = 'pending_tong_hop' OR "
-                    f"(ksv_approver_id = ? AND status = 'pending_ksv') OR {_gd_unack})"
+                    f"((ksv_approver_id = ? OR staff_id IN "
+                    f"(SELECT id FROM user_tttt WHERE department_id = ? AND id != ?)) "
+                    f"AND status = 'pending_ksv') OR {_gd_unack})"
                 )
-                params.append(current["id"])
+                params += [current["id"], current.get("department_id"), current["id"]]
             else:
                 clauses.append(f"(status = 'pending_tong_hop' OR {_gd_unack})")
         elif role in ("truong_phong", "pho_phong"):
-            clauses.append("ksv_approver_id = ? AND status = 'pending_ksv'")
-            params.append(current["id"])
+            # Kể cả KSV thay thế cùng phòng — xem _is_alt_ksv.
+            clauses.append(
+                "((ksv_approver_id = ? OR staff_id IN "
+                "(SELECT id FROM user_tttt WHERE department_id = ? AND id != ?)) "
+                "AND status = 'pending_ksv')"
+            )
+            params += [current["id"], current.get("department_id"), current["id"]]
         else:
             return []
 
@@ -1252,15 +1359,17 @@ def ksv_review(
         raise HTTPException(404, "Không tìm thấy đơn nghỉ phép")
     if leave["status"] != LeaveStatus.PENDING_KSV:
         raise HTTPException(400, f"Đơn đang ở trạng thái '{leave['status']}'")
-    if leave["ksv_approver_id"] != current["id"] and current["role"] != "admin":
+    if (leave["ksv_approver_id"] != current["id"] and current["role"] != "admin"
+            and not _is_alt_ksv(current, leave["staff_id"], db)):
         raise HTTPException(403, "Bạn không phải người được chỉ định duyệt bước này")
     if body.action == "reject" and not body.comment:
         raise HTTPException(400, "Vui lòng nhập lý do từ chối")
 
     old = leave["status"]
     new_status = LeaveStatus.PENDING_TONG_HOP if body.action == "approve" else LeaveStatus.REJECTED
-    # Nếu admin thực hiện: ghi lại chính admin là người duyệt bước này
-    if current["role"] == "admin":
+    # Nếu admin hoặc KSV thay thế cùng phòng thực hiện: ghi lại đúng người vừa
+    # duyệt (không phải người được chỉ định ban đầu), xem _is_alt_ksv.
+    if leave["ksv_approver_id"] != current["id"]:
         db.execute("UPDATE leave_records SET ksv_approver_id=? WHERE id=?", (current["id"], leave_id))
     db.execute(
         "UPDATE leave_records SET ksv_approved_at=?, ksv_comment=? WHERE id=?",
@@ -1438,22 +1547,13 @@ def resubmit_leave(
         leave_days = _period_days(eff_start, eff_end, _lich, body.leave_type)
         spread_json = None
 
-    if body.leave_type not in _NO_QUOTA_TYPES and body.leave_type != "bat_buoc":
-        ref_year  = eff_start.year
-        carry_eff = compute_carry_over(current["id"], ref_year, db,
-                                       effective=True, ref_date=eff_start)
-        _q_row = db.execute(
-            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
-            (current["id"], ref_year),
-        ).fetchone()
-        quota = (
-            float(_q_row["quota_days"]) if _q_row
-            else float(compute_annual_leave(current.get("join_industry_date"), ref_year))
-        )
-        used_cur  = _calc_used_days(current["id"], ref_year, db, include_pending=True)
-        remaining = quota + carry_eff - used_cur
-        if leave_days > remaining:
-            raise HTTPException(400, f"Vượt quá số ngày phép còn lại ({remaining:.0f} ngày)")
+    # leave["status"] lúc vào hàm luôn là REJECTED (chặn ở trên) nên không cần
+    # exclude_id — _calc_used_days trong _check_quota_or_borrow không đếm đơn
+    # rejected.
+    borrow_days = _check_quota_or_borrow(
+        current["id"], current.get("join_industry_date"), body.leave_type,
+        leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+    )
 
     # Kiểm tra trùng ngày theo spread_dates thực tế
     if body.spread_dates:
@@ -1526,10 +1626,11 @@ def resubmit_leave(
                ksv_approver_id=?, ksv_approved_at=NULL, ksv_comment=NULL,
                tong_hop_approver_id=NULL, tong_hop_approved_at=NULL, tong_hop_comment=NULL,
                gd_approver_id=?, gd_approved_at=?, gd_comment=NULL,
-               leave_type=?, start_date=?, end_date=?, reason=?, spread_dates=?
+               leave_type=?, start_date=?, end_date=?, reason=?, spread_dates=?,
+               borrow_next_year_days=?
            WHERE id=?""",
         (ksv_approver_id, new_gd_approver_id, new_gd_approved_at, body.leave_type, eff_start.isoformat(),
-         eff_end.isoformat(), body.reason, spread_json, leave_id),
+         eff_end.isoformat(), body.reason, spread_json, borrow_days, leave_id),
     )
     # Đơn quay lại từ đầu → chữ ký của người duyệt cũ không còn giá trị. Ngày tháng
     # và số ngày phép trên phiếu đã đổi, giữ lại là để chữ ký thật nằm trên tờ đơn khác.
@@ -1743,7 +1844,10 @@ def _can_view_form(r, current: dict, db: sqlite3.Connection) -> bool:
             or r["gd_approver_id"] == current["id"]
             or r["direct_by"] == current["id"]
             or _is_tong_hop_staff(current, db)
-            or current["role"] in ("admin", "giam_doc", "pho_giam_doc"))
+            or current["role"] in ("admin", "giam_doc", "pho_giam_doc")
+            # Trưởng/Phó phòng cùng phòng — được xem/duyệt THAY bước KSV nếu
+            # người được chỉ định vắng mặt, xem _is_alt_ksv.
+            or (r["status"] == LeaveStatus.PENDING_KSV and _is_alt_ksv(current, r["staff_id"], db)))
 
 
 def _draft_form_row(body: LeaveCreate, current: dict, db: sqlite3.Connection) -> dict:
@@ -1789,6 +1893,9 @@ def _draft_form_row(body: LeaveCreate, current: dict, db: sqlite3.Connection) ->
         # chỉnh NPBB (npbb_adjust_leave) không đi qua bước xem trước này nên
         # dòng giả lập không bao giờ là đơn điều chỉnh, xem _build_form_ctx.
         "adjusts_leave_id": None,
+        # Đơn chưa tạo — chưa thể biết có phải ứng phép năm sau không (chỉ xác
+        # định lúc gửi thật, xem _check_quota_or_borrow), luôn coi như 0 ở đây.
+        "borrow_next_year_days": 0,
     }
 
 
@@ -2250,7 +2357,8 @@ def _sig_slot_for(r, current: dict, db: sqlite3.Connection) -> str:
     if r["staff_id"] == current["id"]:
         return "nguoi_de_nghi"
     if r["status"] == LeaveStatus.PENDING_KSV and (
-            r["ksv_approver_id"] == current["id"] or current["role"] == "admin"):
+            r["ksv_approver_id"] == current["id"] or current["role"] == "admin"
+            or _is_alt_ksv(current, r["staff_id"], db)):
         return "ksv"
     if r["status"] == LeaveStatus.PENDING_GD and (
             r["gd_approver_id"] == current["id"] or current["role"] == "admin"):
@@ -3602,35 +3710,22 @@ def create_direct_leave(
         conflict_str = ", ".join(sorted(set(conflict_dates))[:5])
         raise HTTPException(409, f"Nhân viên đã có đơn nghỉ vào ngày: {conflict_str}. Vui lòng kiểm tra lại.")
 
-    # Kiểm tra hạn mức (không áp dụng cho thai_san, bao_hiem)
-    if body.leave_type not in _NO_QUOTA_TYPES:
-        # sqlite3.Row không có .get() — (row or {}).get(...) crash 500 nếu đã có
-        # dòng leave_quotas (kể cả quota_days=0). Ưu tiên leave_quotas (nhập tay/
-        # upload file), chỉ fallback công thức ngày vào ngành khi chưa có.
-        _q_row = db.execute(
-            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
-            (body.staff_id, eff_start.year),
-        ).fetchone()
-        quota = (
-            float(_q_row["quota_days"]) if _q_row
-            else float(compute_annual_leave(staff["join_industry_date"], eff_start.year))
-        )
-        carry     = compute_carry_over(body.staff_id, eff_start.year, db, effective=True, ref_date=eff_start)
-        used      = _calc_used_days(body.staff_id, eff_start.year, db, include_pending=True)
-        remaining = quota + carry - used
-        if leave_days > remaining:
-            raise HTTPException(400,
-                f"Vượt quá hạn mức phép năm {eff_start.year}. "
-                f"Còn lại {remaining:.0f} ngày, khai báo {leave_days} ngày.")
+    # Kiểm tra hạn mức — dùng chung _check_quota_or_borrow (trước đây khối này
+    # tự viết riêng, thiếu điều kiện miễn bat_buoc nên "khai báo hộ" nghỉ bắt
+    # buộc bị từ chối sai khi hết hạn mức, khác với create_leave/resubmit_leave).
+    borrow_days = _check_quota_or_borrow(
+        body.staff_id, staff["join_industry_date"], body.leave_type,
+        leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+    )
 
     cur = db.execute(
         """INSERT INTO leave_records
                (staff_id, start_date, end_date, leave_type, reason, status,
-                is_direct, direct_by, spread_dates, created_at, updated_at)
-           VALUES (?,?,?,?,?,'approved',1,?,?,?,?)""",
+                is_direct, direct_by, spread_dates, borrow_next_year_days, created_at, updated_at)
+           VALUES (?,?,?,?,?,'approved',1,?,?,?,?,?)""",
         (body.staff_id, eff_start.isoformat(), eff_end.isoformat(),
          body.leave_type, body.reason,
-         current["id"], spread_json, str(_vn_now()), str(_vn_now())),
+         current["id"], spread_json, borrow_days, str(_vn_now()), str(_vn_now())),
     )
     leave_id = cur.lastrowid
     if body.leave_type not in _NO_QUOTA_TYPES:

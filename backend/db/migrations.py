@@ -1446,6 +1446,14 @@ def _ensure_indexes():
         # backend/api/leaves.py). Báo cáo NPBB (mẫu 18/19 TCNS) so sánh ngày
         # "đã đăng ký" (đơn gốc) vs "điều chỉnh" (đơn này) qua liên kết đó.
         "ALTER TABLE leave_records ADD COLUMN adjusts_leave_id INTEGER REFERENCES leave_records(id)",
+
+        # ── Người 3 — Ứng trước ngày phép của năm sau khi hết hạn mức năm nay —
+        # 2026-09-04 ────────────────────────────────────────────────────────
+        # Lưu ĐÚNG phần ngày vượt hạn mức năm nay mà người tạo đơn đã đồng ý
+        # "ứng" trước vào quỹ phép năm sau (KHÔNG phải phần đơn tự nhiên vắt
+        # qua ranh giới năm — phần đó tính lại từ ngày thật của đơn, xem
+        # _calc_used_days). Xem _check_quota_or_borrow trong backend/api/leaves.py.
+        "ALTER TABLE leave_records ADD COLUMN borrow_next_year_days REAL DEFAULT 0",
     ]
     _mig_log = logging.getLogger(__name__)
 

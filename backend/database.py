@@ -78,7 +78,7 @@ def compute_carry_over(staff_id: int, year: int, db,
         compute_annual_leave(staff["join_industry_date"] if staff else None, prev_year)
     )
     rows = db.execute(
-        """SELECT start_date, end_date, spread_dates FROM leave_records
+        """SELECT start_date, end_date, spread_dates, borrow_next_year_days FROM leave_records
            WHERE staff_id=? AND status='approved'
              AND leave_type NOT IN ('thai_san','bao_hiem')
              AND start_date <= ? AND end_date >= ?""",
@@ -91,17 +91,23 @@ def compute_carry_over(staff_id: int, year: int, db,
     used = 0.0
     _lich = None
     for row in rows:
+        # Phần đã "ứng" sang năm sau (borrow_next_year_days, xem
+        # backend/api/leaves.py::_check_quota_or_borrow) không tính là đã dùng
+        # của prev_year — nếu không carry-over sẽ bị tính hụt.
+        borrow = row["borrow_next_year_days"] or 0.0
         if row["spread_dates"]:
-            used += len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(prev_year))])
+            used += len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(prev_year))]) - borrow
         else:
             if _lich is None:
                 _lich = tai_lich(db, _date(prev_year, 1, 1), _date(prev_year, 12, 31))
             d = _date.fromisoformat(row["start_date"])
             end = _date.fromisoformat(row["end_date"])
+            yr_count = 0
             while d <= end:
                 if d.year == prev_year and la_ngay_lam_viec(d, _lich):
-                    used += 1
+                    yr_count += 1
                 d += timedelta(days=1)
+            used += yr_count - borrow
     return max(0.0, prev_quota - used)
 
 
