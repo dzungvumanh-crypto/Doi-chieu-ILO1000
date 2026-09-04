@@ -37,9 +37,11 @@ def write_audit(
 
 
 def compute_annual_leave(join_date_str, year: int = None) -> int:
-    """Tính số ngày phép năm: 12 ngày + 1 ngày mỗi 4 năm vào ngành.
+    """Tính số ngày phép năm: 12 ngày + 1 ngày mỗi 5 năm vào ngành (đúng Điều 113
+    Bộ luật Lao động — đối chiếu báo cáo thật 2026 khớp 67/72 người theo mốc 5
+    năm, so với chỉ 12/72 nếu tính theo 4 năm).
 
-    Ví dụ: vào ngành 2007, năm 2011 → 13 ngày; năm 2015 → 14 ngày.
+    Ví dụ: vào ngành 2007, năm 2012 → 13 ngày; năm 2017 → 14 ngày.
     Trả về 12 nếu join_date_str là None hoặc không hợp lệ.
     """
     if not join_date_str:
@@ -47,9 +49,9 @@ def compute_annual_leave(join_date_str, year: int = None) -> int:
     from datetime import date
     try:
         join_date = join_date_str if isinstance(join_date_str, date) else date.fromisoformat(str(join_date_str))
-        ref_year = year or date.today().year
+        ref_year = year or _vn_now().date().year
         years = ref_year - join_date.year
-        return 12 + max(0, years // 4)
+        return 12 + max(0, years // 5)
     except Exception:
         return 12
 
@@ -60,13 +62,13 @@ def compute_carry_over(staff_id: int, year: int, db,
 
     effective=True : chỉ trả giá trị nếu ref_date (hoặc hôm nay) còn trong Q1.
     effective=False: luôn trả số ngày thực tế, dùng để hiển thị / in phiếu.
-    ref_date       : ngày tham chiếu thay cho date.today() khi check Q1
+    ref_date       : ngày tham chiếu thay cho _vn_now().date() khi check Q1
                      (dùng khi tạo đơn nghỉ trong tương lai).
     """
     from datetime import date as _date, timedelta
     import json
     if effective:
-        check_date = ref_date if ref_date else _date.today()
+        check_date = ref_date if ref_date else _vn_now().date()
         if check_date > _date(year, 3, 31):
             return 0.0
     prev_year = year - 1
