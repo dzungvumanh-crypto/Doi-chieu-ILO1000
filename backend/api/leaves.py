@@ -3418,6 +3418,40 @@ def export_npbb_batch(
     )
 
 
+# ─── Mẫu đơn (file .docx gốc, tải về ở tab Báo cáo tổng hợp) ────────────────
+# Phòng Tổng hợp cần bản mẫu để in/phát cho ai cần điền tay — trả nguyên file
+# .docx dùng để dựng đơn thật (docxtpl), KHÔNG qua bước điền dữ liệu vì các
+# mẫu này chỉ có ý nghĩa khi gắn với 1 đơn/nhân sự cụ thể (không có "bản rỗng"
+# chuẩn — các placeholder {{ }} cần dữ liệu thật của đơn để tính ra).
+_MAU_DON_FILES = {
+    "nv":             (os.path.join(_TPL_DIR, "don_xin_nghi_phep_nv.docx"), "mau_don_nghi_phep_nhan_vien.docx"),
+    "tp":             (os.path.join(_TPL_DIR, "don_xin_nghi_phep_tp.docx"), "mau_don_nghi_phep_truong_pho_phong.docx"),
+    "pgd":            (os.path.join(_TPL_DIR, "don_xin_nghi_phep_pgd.docx"), "mau_don_nghi_phep_pho_giam_doc.docx"),
+    "gd":             (os.path.join(_TPL_DIR, "don_xin_nghi_phep_gd.docx"), "mau_don_nghi_phep_giam_doc.docx"),
+    "npbb_dangky":    (_NPBB_REGISTER_TPL_PATH, "mau_don_dang_ky_npbb.docx"),
+    "npbb_dieuchinh": (_NPBB_ADJUST_TPL_PATH, "mau_don_dieu_chinh_npbb.docx"),
+}
+
+
+@router.get("/export/mau-don")
+def export_mau_don(
+    loai: str = Query(..., pattern="^(nv|tp|pgd|gd|npbb_dangky|npbb_dieuchinh)$"),
+    current: dict = Depends(require_feature("leaves.stats_export")),
+):
+    """Tải file mẫu đơn gốc (.docx) — xem _MAU_DON_FILES."""
+    tpl_path, fname = _MAU_DON_FILES[loai]
+    if not os.path.exists(tpl_path):
+        raise HTTPException(500, "Chưa có file mẫu đơn này")
+    with open(tpl_path, "rb") as f:
+        content = f.read()
+    from fastapi.responses import Response
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 # ─── Báo cáo năm ────────────────────────────────────────────────────────────
 
 @router.get("/stats/annual/{year}")

@@ -1679,7 +1679,11 @@ async def leaves_page():
 
                         try:
 
-                            content = await asyncio.to_thread(api.download, f"/api/leaves/{l}/download")
+                            # timeout=160: backend cho Word cold-start tới 150s trước khi coi
+                            # là treo thật (leave_pdf._CONVERT_TIMEOUT) — mặc định 60s của
+                            # api.download() sẽ rớt về docx chưa ký oan dù server không lỗi.
+                            content = await asyncio.to_thread(
+                                api.download, f"/api/leaves/{l}/download", None, 160)
 
                             ui.download(content, f"phieu_nghi_phep_{l}.pdf")
 
@@ -2511,7 +2515,7 @@ async def leaves_page():
 
                     # ── C→c tab nghỉ phép ──────────────────────────────────────
 
-                    # Tab Báo cáo năm → xuất tất cả đơn trong năm
+                    # Tab Báo cáo tổng hợp → xuất tất cả đơn trong năm
                     if t_stats and _tab_match(t_stats, cur):
                         from datetime import date as _d_stats
                         _yr_stats = _d_stats.today().year
@@ -2948,7 +2952,7 @@ async def leaves_page():
 
             t_quota   = ui.tab("Hạn mức phép") if api.has_feature("leaves.quota_admin") else None
 
-            t_stats   = ui.tab("Báo cáo năm") if api.has_feature("leaves.stats_export") else None
+            t_stats   = ui.tab("Báo cáo tổng hợp") if api.has_feature("leaves.stats_export") else None
 
             t_direct  = ui.tab("Khai báo hộ") if api.has_feature("leaves.declare_direct") else None
 
@@ -4643,7 +4647,7 @@ async def leaves_page():
                                                  value=12, min=0, max=365,
                                                  on_change=_update_q_remaining).classes("w-full mt-2")
 
-                        ui.label("Công thức: 12 ngày + 1 ngày mỗi 4 năm công tác").classes("text-xs text-gray-500 mt-1 mb-4")
+                        ui.label("Công thức: 12 ngày + 1 ngày mỗi 5 năm công tác").classes("text-xs text-gray-500 mt-1 mb-4")
 
                         q_used_input = ui.number("Đã dùng (có thể sửa thủ công)",
                                                   value=0, min=0, max=365,
@@ -5027,9 +5031,39 @@ async def leaves_page():
                                 ui.menu_item("Mẫu đăng ký (Mẫu 19 — gửi TCNS)", on_click=lambda: _download_npbb("19"))
                                 ui.menu_item("Mẫu điều chỉnh (Mẫu 18 — nội bộ)", on_click=lambda: _download_npbb("18"))
 
+                        # Mẫu đơn gốc (.docx) — Phòng Tổng hợp tải để in/phát cho ai cần
+                        # điền tay, không qua bước điền dữ liệu (xem export_mau_don ở BE).
+                        async def _download_mau_don(loai: str, fname: str):
+                            try:
+                                content = await asyncio.to_thread(
+                                    api.download, "/api/leaves/export/mau-don",
+                                    params={"loai": loai},
+                                )
+                                ui.download(content, fname)
+                            except Exception as e:
+                                _handle_api_error(e)
+
+                        with ui.button("Mẫu đơn", icon="description").classes("bg-gray-600 text-white"):
+                            with ui.menu():
+                                ui.menu_item("Đơn xin nghỉ phép — Nhân viên",
+                                             on_click=lambda: _download_mau_don("nv", "mau_don_nghi_phep_nhan_vien.docx"))
+                                ui.menu_item("Đơn xin nghỉ phép — Trưởng/Phó phòng",
+                                             on_click=lambda: _download_mau_don("tp", "mau_don_nghi_phep_truong_pho_phong.docx"))
+                                ui.menu_item("Đơn xin nghỉ phép — Phó Giám đốc",
+                                             on_click=lambda: _download_mau_don("pgd", "mau_don_nghi_phep_pho_giam_doc.docx"))
+                                ui.menu_item("Đơn xin nghỉ phép — Giám đốc",
+                                             on_click=lambda: _download_mau_don("gd", "mau_don_nghi_phep_giam_doc.docx"))
+                                ui.separator()
+                                ui.menu_item("Đăng ký nghỉ phép bắt buộc (NPBB)",
+                                             on_click=lambda: _download_mau_don("npbb_dangky", "mau_don_dang_ky_npbb.docx"))
+                                ui.menu_item("Điều chỉnh nghỉ phép bắt buộc (NPBB)",
+                                             on_click=lambda: _download_mau_don("npbb_dieuchinh", "mau_don_dieu_chinh_npbb.docx"))
 
 
-                    ui.label("Chọn năm và nhấn 'Tải báo cáo Excel' để xuất file tổng hợp phép.").classes("text-sm text-gray-500")
+
+                    ui.label("Chọn năm và nhấn 'Tải báo cáo Excel' để xuất file tổng hợp phép. "
+                             "Mục 'Mẫu đơn' tải file gốc dùng để dựng đơn thật, chỉ để tham khảo/in phát tay, "
+                             "không tự điền dữ liệu.").classes("text-sm text-gray-500")
 
 
 

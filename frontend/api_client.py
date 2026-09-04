@@ -370,10 +370,19 @@ def post_download(path: str, data: dict = None, timeout: float = None) -> bytes:
         raise Exception(str(e))
 
 
-def download(path: str, params: dict = None) -> bytes:
-    """Download file (docx, xlsx, etc.)"""
+def download(path: str, params: dict = None, timeout: float = None) -> bytes:
+    """Download file (docx, xlsx, etc.)
+
+    timeout=None giữ mặc định 60s của _download_client — không đủ cho phiếu nghỉ
+    phép PDF: backend cho phép Word khởi động nguội mất tới 150s
+    (leave_pdf._CONVERT_TIMEOUT) trước khi coi là treo thật. Trước đây route này
+    không có cách nào nâng timeout như post_upload()/post_download() ở trên nên
+    ai bấm "Tải phiếu" đúng lúc Word chưa ấm sẽ bị rớt về bản .docx chưa ký dù
+    server không hề lỗi, chỉ đang xử lý chậm — xem caller ở leaves.py.
+    """
     try:
-        r = _download_client.get(f"{BACKEND_URL}{path}", headers=_headers(), params=params)
+        kw = {"timeout": timeout} if timeout is not None else {}
+        r = _download_client.get(f"{BACKEND_URL}{path}", headers=_headers(), params=params, **kw)
         r.raise_for_status()
         return r.content
     except httpx.HTTPStatusError as e:
