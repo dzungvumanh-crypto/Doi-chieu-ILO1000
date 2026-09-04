@@ -20,21 +20,32 @@
   format/màu/border/công thức nào khi port. NGOẠI LỆ duy nhất (theo yêu
   cầu bổ sung sau khi port): dòng ngày ở tiêu đề A4 đổi từ "(dd/mm/yyyy)"
   sang "(Ngày d tháng m năm yyyy)" — xem `_format_vn_date()`.
-- Session lưu theo `ngay` — 1 bản CHUNG cho cả phòng (bản gốc dùng SQLite
-  riêng, khoá theo ngay+user_id tự nhập, vốn chỉ 1 người/máy nên không có
-  khái niệm "chung"). Nhiều người cùng chấm 1 ngày: ai lưu sau cùng là bản
-  hiện hành (ghi đè `doi_chieu_citad_sessions`), nhưng mỗi lần lưu đều ghi
-  thêm 1 dòng vào `doi_chieu_citad_history` (ngay, staff_id, created_at) —
-  xem `get_reconciliation_history()` — nút "Lịch sử đối chiếu" trên trang
-  hiển thị đúng thứ tự ai đã chấm ngày đó lúc nào.
+- Session khoá theo **`(ngay, created_by)`** — mỗi người TỰ lập 1 bảng riêng
+  cho mỗi ngày (đổi từ 04/09/2026, xem migration "khoá ngay riêng → id +
+  UNIQUE(ngay, created_by)" trong `backend/db/migrations.py`). 1 ngày có thể
+  có N bảng của N người khác nhau, không còn ép cả phòng dùng chung 1 bảng
+  duy nhất/ngày như bản trước — người thứ 2 chấm cùng ngày giờ tự lập được
+  bảng CỦA RIÊNG HỌ thay vì bị chặn hoặc phải sửa đè lên bảng người thứ nhất.
+  Mỗi lần lưu ghi thêm 1 dòng vào `doi_chieu_citad_history` gắn `session_id`
+  (khoá theo đúng bảng đang lưu, không phải theo `ngay` — 1 ngày giờ có thể
+  ứng nhiều `session_id` khác nhau) — xem `get_reconciliation_history()` —
+  nút "Lịch sử đối chiếu" trên trang hiển thị đúng thứ tự ai đã chấm bảng
+  nào lúc nào.
 - **"Lưu bản tạm" / "Lưu bản cuối" (`status`, thêm 2026-08-20)** — xem
   `session_save()`. Bản tạm cho phép NGƯỜI KHÁC người lập bảng (`created_by`)
-  vào nạp riêng Napas/PSS-MDP qua Extension, cứu tình huống 1 người chấm 5
-  Cổng CITAD/PaymentHub nhưng Napas/PSS-MDP phải người khác quét (trang CITAD
-  đó chỉ có ở Cổng 1). Bản cuối CHỐT — không ai sửa được nữa kể cả người lập
-  bảng, chỉ Admin mở khoá lại qua `session_admin_unlock()`. `created_by` KHÁC
-  `updated_by`: created_by cố định (người lập bảng, đầu tiên lưu ngày đó),
-  updated_by đổi theo người lưu sau cùng (kể cả người chỉ nạp Napas).
+  vào nạp riêng Napas/PSS-MDP qua Extension (tham số `target_created_by` —
+  trỏ đúng bảng CỦA NGƯỜI ĐÓ, không phải bảng của người gọi), cứu tình huống
+  1 người chấm 5 Cổng CITAD/PaymentHub nhưng Napas/PSS-MDP phải người khác
+  quét (trang CITAD đó chỉ có ở Cổng 1). Bản cuối CHỐT — không ai sửa được
+  nữa kể cả người lập bảng, chỉ Admin mở khoá lại qua `session_admin_unlock()`.
+  `created_by` KHÁC `updated_by`: created_by cố định (người lập bảng — CŨNG
+  LÀ khoá của bảng, không đổi được), updated_by đổi theo người lưu sau cùng
+  (kể cả người chỉ nạp Napas vào bảng của người khác).
+- **Sổ trực** (`get_reconciliation_status()`, dùng bởi `so_truc_service.
+  check_citad_status`) coi 1 ngày là "đã đối chiếu, đã khớp" nếu BẤT KỲ bảng
+  nào của ngày đó (trong số có thể nhiều bảng của nhiều người) đã "Lưu bảng
+  cuối" và khớp — không cần chỉ định 1 bảng "chính thức" riêng (xác nhận yêu
+  cầu Phòng Thanh toán 04/09/2026).
 - `build_extension_zip()`: nén thư mục `extension_citad/` (nằm ở gốc repo,
   cạnh `backend/`) thành 1 file .zip TẠI THỜI ĐIỂM TẢI — không lưu sẵn file
   zip nào, luôn khớp đúng code hiện tại của extension, không cần bước build
@@ -224,11 +235,10 @@ class SessionForbiddenError(Exception):
 _NAPAS_ONLY_FIELDS = ("napas_m", "napas_t", "pssmdp_m", "pssmdp_t")
 
 
-# ── Session theo ngày — 1 bản CHUNG cho cả phòng (không tách theo người) ────
-# "Lưu bản tạm"/"Lưu bản cuối" (status) — xem docstring đầu file. Nhiều người
-# cùng chấm 1 ngày: ai lưu sau cùng là bản hiện hành (ghi đè
-# doi_chieu_citad_sessions), nhưng mỗi lần lưu đều lưu NGUYÊN VẸN số liệu
-# phiên chấm đó vào doi_chieu_citad_history — xem get_reconciliation_history()/
+# ── Session theo (ngay, created_by) — mỗi người 1 bảng riêng/ngày ──────────
+# "Lưu bản tạm"/"Lưu bản cuối" (status) — xem docstring đầu file. Mỗi lần lưu
+# lưu NGUYÊN VẸN số liệu phiên chấm đó vào doi_chieu_citad_history (gắn
+# session_id của đúng bảng đang lưu) — xem get_reconciliation_history()/
 # get_history_entry_data() — nên xem/tải lại đúng bản của từng lần lưu, không
 # chỉ biết ai đã sửa lúc nào. Các lần lưu tạm LIÊN TIẾP không đẻ thêm dòng
 # lịch sử mới — chỉ UPDATE tại chỗ dòng lịch sử tạm gần nhất (tránh phình
@@ -238,25 +248,41 @@ _NAPAS_ONLY_FIELDS = ("napas_m", "napas_t", "pssmdp_m", "pssmdp_t")
 # riêng, gây hiểu lầm "nhảy ra thêm 1 dòng bảng tạm" khi người dùng nhìn
 # thấy 2 dòng cho cùng 1 lần chấm — theo yêu cầu người dùng, 1 lần chấm chỉ
 # nên là 1 dòng, đổi trạng thái tại chỗ). Dòng lịch sử MỚI chỉ sinh ra khi
-# KHÔNG có dòng tạm nào đang mở — ngày chưa từng lưu, hoặc dòng gần nhất đã
+# KHÔNG có dòng tạm nào đang mở — bảng chưa từng lưu, hoặc dòng gần nhất đã
 # là 'final' (vd sau khi Admin mở khoá rồi lưu tiếp — coi là 1 đợt chấm mới,
 # giữ nguyên dòng 'final' cũ làm mốc lịch sử của đợt trước).
-def session_save(db: sqlite3.Connection, ngay: str, staff_id: int, data: dict, status: str) -> None:
+def session_save(
+    db: sqlite3.Connection,
+    ngay: str,
+    staff_id: int,
+    data: dict,
+    status: str,
+    target_created_by: int | None = None,
+) -> None:
+    """`target_created_by`: None = đang lưu bảng CỦA CHÍNH `staff_id` (tạo mới
+    nếu ngày đó họ chưa từng lập bảng nào, không đụng bảng người khác cùng
+    ngày). Khác None = đang góp Napas/PSS-MDP vào bảng NGƯỜI KHÁC đã lập (phải
+    đã tồn tại — không tạo hộ bảng mới cho người khác)."""
     if status not in ("draft", "final"):
         raise ValueError(f"status không hợp lệ: {status!r}")
 
+    owner = target_created_by if target_created_by is not None else staff_id
     row = db.execute(
-        "SELECT data, status, created_by FROM doi_chieu_citad_sessions WHERE ngay=?", (ngay,)
+        "SELECT id, data, status, created_by FROM doi_chieu_citad_sessions WHERE ngay=? AND created_by=?",
+        (ngay, owner),
     ).fetchone()
 
-    created_by = staff_id  # ngày chưa từng có ai lưu — người này là người lập bảng
-    if row:
+    if row is None:
+        if target_created_by is not None and target_created_by != staff_id:
+            raise SessionForbiddenError("Không tìm thấy bảng của người này cho ngày đó để bổ sung.")
+        # Ngày này họ chưa từng lập bảng — bảng MỚI của riêng họ, không đụng
+        # bảng người khác (nếu có) cùng ngày.
+    else:
         if row["status"] == "final":
             raise SessionLockedError(
-                "Ngày này đã được chốt bản cuối — không thể lưu thêm. Liên hệ Admin nếu cần mở khoá."
+                "Bảng này đã được chốt bản cuối — không thể lưu thêm. Liên hệ Admin nếu cần mở khoá."
             )
-        created_by = row["created_by"] or staff_id
-        if created_by != staff_id:
+        if owner != staff_id:
             # Không phải người lập bảng — chỉ được lưu tạm, chỉ được đổi đúng
             # 4 field Napas/PSS-MDP, giữ nguyên mọi field khác của bản tạm cũ.
             if status == "final":
@@ -273,22 +299,26 @@ def session_save(db: sqlite3.Connection, ngay: str, staff_id: int, data: dict, s
     db.execute(
         """INSERT INTO doi_chieu_citad_sessions (ngay, data, updated_at, updated_by, status, created_by)
            VALUES (?,?,?,?,?,?)
-           ON CONFLICT(ngay) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at,
-                                            updated_by=excluded.updated_by, status=excluded.status,
-                                            created_by=excluded.created_by""",
-        (ngay, data_json, now, staff_id, status, created_by),
+           ON CONFLICT(ngay, created_by) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at,
+                                            updated_by=excluded.updated_by, status=excluded.status""",
+        (ngay, data_json, now, staff_id, status, owner),
     )
+    session_id = db.execute(
+        "SELECT id FROM doi_chieu_citad_sessions WHERE ngay=? AND created_by=?", (ngay, owner)
+    ).fetchone()["id"]
 
     # Gộp lưu tạm liên tiếp vào CÙNG 1 dòng lịch sử — nhưng CHỈ khi cùng 1
-    # người lưu liên tiếp (thêm điều kiện staff_id, xác nhận yêu cầu Phòng
-    # Thanh toán 25/08/2026). TRƯỚC ĐÂY chỉ xét status=='draft', không xét
-    # ai lưu — 2 người khác nhau lưu tạm nối tiếp nhau (vd A lưu tạm, B bổ
-    # sung Napas rồi lưu tạm tiếp) sẽ bị gộp chung 1 dòng, đè mất dấu vết
-    # dòng riêng của A, chỉ còn thấy B trong Lịch sử dù cả 2 đều đã lưu
-    # thật. Khác người thì tách dòng MỚI — mỗi người 1 dòng riêng cho lần
-    # họ lưu, đúng ý "mỗi người chấm là 1 dòng".
+    # người lưu liên tiếp VÀO ĐÚNG BẢNG này (thêm điều kiện staff_id, xác nhận
+    # yêu cầu Phòng Thanh toán 25/08/2026). TRƯỚC ĐÂY chỉ xét status=='draft',
+    # không xét ai lưu — 2 người khác nhau lưu tạm nối tiếp nhau (vd A lưu
+    # tạm, B bổ sung Napas rồi lưu tạm tiếp) sẽ bị gộp chung 1 dòng, đè mất
+    # dấu vết dòng riêng của A, chỉ còn thấy B trong Lịch sử dù cả 2 đều đã
+    # lưu thật. Khác người thì tách dòng MỚI — mỗi người 1 dòng riêng cho lần
+    # họ lưu, đúng ý "mỗi người chấm là 1 dòng". Lọc theo session_id (không
+    # phải ngay) — bảng khác của người khác cùng ngày không được gộp/lẫn vào.
     last_hist = db.execute(
-        "SELECT id, status, staff_id FROM doi_chieu_citad_history WHERE ngay=? ORDER BY id DESC LIMIT 1", (ngay,)
+        "SELECT id, status, staff_id FROM doi_chieu_citad_history WHERE session_id=? ORDER BY id DESC LIMIT 1",
+        (session_id,),
     ).fetchone()
     if last_hist and last_hist["status"] == "draft" and last_hist["staff_id"] == staff_id:
         db.execute(
@@ -298,8 +328,9 @@ def session_save(db: sqlite3.Connection, ngay: str, staff_id: int, data: dict, s
         hist_id = last_hist["id"]
     else:
         cur = db.execute(
-            "INSERT INTO doi_chieu_citad_history (ngay, staff_id, data, created_at, status) VALUES (?,?,?,?,?)",
-            (ngay, staff_id, data_json, now, status),
+            """INSERT INTO doi_chieu_citad_history (ngay, session_id, staff_id, data, created_at, status)
+               VALUES (?,?,?,?,?,?)""",
+            (ngay, session_id, staff_id, data_json, now, status),
         )
         hist_id = cur.lastrowid
 
@@ -313,22 +344,30 @@ def session_save(db: sqlite3.Connection, ngay: str, staff_id: int, data: dict, s
     db.commit()
 
 
-def session_admin_unlock(db: sqlite3.Connection, ngay: str) -> None:
-    """Chỉ Admin gọi được (kiểm tra role ở lớp API) — mở khoá 1 ngày đã
-    "Lưu bản cuối" về lại 'draft' để sửa tiếp. Không đổi created_by (người
-    lập bảng vẫn là người cũ, vẫn là người duy nhất sửa được đủ mọi field
-    sau khi mở khoá — chỉ status đổi)."""
-    db.execute("UPDATE doi_chieu_citad_sessions SET status='draft' WHERE ngay=?", (ngay,))
+def session_admin_unlock(db: sqlite3.Connection, ngay: str, created_by: int) -> None:
+    """Chỉ Admin gọi được (kiểm tra role ở lớp API) — mở khoá ĐÚNG 1 bảng (của
+    `created_by`) đã "Lưu bản cuối" về lại 'draft' để sửa tiếp. `created_by`
+    bắt buộc — 1 ngày giờ có thể có nhiều bảng đã final của nhiều người khác
+    nhau, không còn suy được "bảng nào" nếu chỉ có `ngay`. Không đổi
+    created_by (người lập bảng vẫn là người cũ, vẫn là người duy nhất sửa
+    được đủ mọi field sau khi mở khoá — chỉ status đổi)."""
+    db.execute(
+        "UPDATE doi_chieu_citad_sessions SET status='draft' WHERE ngay=? AND created_by=?",
+        (ngay, created_by),
+    )
     db.commit()
 
 
-def session_get(db: sqlite3.Connection, ngay: str) -> dict | None:
+def session_get(db: sqlite3.Connection, ngay: str, created_by: int) -> dict | None:
+    """Bảng của ĐÚNG `created_by` cho ngày `ngay` — KHÔNG còn "bảng hiện hành
+    duy nhất của ngày" (1 ngày có thể có nhiều bảng của nhiều người, gọi hàm
+    này với `created_by` khác nhau để xem từng bảng)."""
     row = db.execute(
         """SELECT s.data, s.status, s.created_by, u.username AS created_by_username
            FROM doi_chieu_citad_sessions s
            LEFT JOIN user_tttt u ON u.id = s.created_by
-           WHERE s.ngay=?""",
-        (ngay,),
+           WHERE s.ngay=? AND s.created_by=?""",
+        (ngay, created_by),
     ).fetchone()
     if not row:
         return None
@@ -393,15 +432,20 @@ def get_reconciliation_status(db: sqlite3.Connection, ngay: str) -> dict:
     thị số liệu, chỉ trả 2 cờ: có bản LƯU BẢNG CUỐI chưa, và bản đó đã khớp
     (hết chênh lệch) chưa.
 
-    Chỉ tính bản đã "Lưu bảng cuối" (status='final') là "đã có đối chiếu" —
-    bảng tạm (status='draft') vẫn có thể còn đang chấm dở/chưa đủ người góp
-    Napas-PSS-MDP, coi như CHƯA CÓ để Sổ trực vẫn cảnh báo, không để lọt bản
-    tạm chưa hoàn chỉnh."""
-    sess = session_get(db, ngay)
-    is_final = bool(sess) and sess.get("_meta_status") == "final"
+    1 ngày giờ có thể có NHIỀU bảng (của nhiều người) — coi ngày đó "đã đối
+    chiếu, đã khớp" nếu BẤT KỲ bảng nào của ngày đó đã "Lưu bảng cuối"
+    (status='final') VÀ khớp (xác nhận yêu cầu Phòng Thanh toán 04/09/2026:
+    không cần chỉ định 1 bảng "chính thức" riêng). Bảng tạm (status='draft')
+    vẫn có thể còn đang chấm dở/chưa đủ người góp Napas-PSS-MDP nên không
+    tính — coi như CHƯA CÓ để Sổ trực vẫn cảnh báo, không để lọt bản tạm
+    chưa hoàn chỉnh."""
+    rows = db.execute(
+        "SELECT data FROM doi_chieu_citad_sessions WHERE ngay=? AND status='final'", (ngay,)
+    ).fetchall()
+    sessions = [json.loads(r["data"]) for r in rows]
     return {
-        "exists": is_final,
-        "matched": is_final and is_reconciliation_matched(sess),
+        "exists": bool(sessions),
+        "matched": any(is_reconciliation_matched(s) for s in sessions),
     }
 
 
@@ -425,24 +469,29 @@ def get_reconciliation_days(
     den_ngay: str | None = None,
     nguoi_cham: str | None = None,
 ) -> list:
-    """1 dòng/ngày đã có ai chấm — ngày, user chấm đối chiếu (người lập bảng,
-    CỐ ĐỊNH), số lần lưu, cập nhật lúc — phục vụ tab "Lịch sử" (bảng nhiều
-    ngày cùng lúc, lọc theo khoảng ngày + tên người chấm). Lọc/sắp xếp bằng
-    Python vì cột `ngay` lưu dạng text dd/mm/yyyy — so sánh chuỗi trực tiếp
-    trong SQL sẽ SAI thứ tự thời gian (ví dụ "01/12/2026" < "05/01/2026"
-    theo string nhưng đến sau). `nguoi_cham` so khớp KHÔNG phân biệt hoa/
-    thường, khớp theo cả tên đầy đủ lẫn username.
+    """1 dòng/bảng đã có ai chấm — ngày, user chấm đối chiếu (người lập bảng,
+    CỐ ĐỊNH — cũng chính là khoá của bảng đó), số lần lưu, cập nhật lúc —
+    phục vụ tab "Lịch sử" (bảng nhiều ngày cùng lúc, lọc theo khoảng ngày +
+    tên người chấm). 1 ngày có nhiều người chấm thì TỰ NHIÊN trả về nhiều
+    dòng cùng `ngay` khác nhau (mỗi dòng 1 bảng/1 người) — không cần gom
+    nhóm gì thêm. Lọc/sắp xếp bằng Python vì cột `ngay` lưu dạng text
+    dd/mm/yyyy — so sánh chuỗi trực tiếp trong SQL sẽ SAI thứ tự thời gian
+    (ví dụ "01/12/2026" < "05/01/2026" theo string nhưng đến sau).
+    `nguoi_cham` so khớp KHÔNG phân biệt hoa/thường, khớp theo cả tên đầy đủ
+    lẫn username.
 
     Cột hiển thị lấy `created_by` (người lập bảng), KHÔNG lấy `updated_by`
     (người lưu sau cùng) — trước đây dùng updated_by khiến cột này bị "ghi
     đè" mỗi khi người KHÁC người lập bảng chỉ nạp thêm Napas/PSS-MDP vào
     bảng tạm (xem _NAPAS_ONLY_FIELDS), gây hiểu lầm đổi cả người phụ trách.
     Ai đã từng sửa gì lúc nào xem qua icon "Ai đã sửa bảng tạm này"
-    (get_history_edits()), tách hẳn khỏi cột này."""
+    (get_history_edits()), tách hẳn khỏi cột này. Trả kèm `created_by` (id)
+    và `status` để frontend gọi tiếp get_reconciliation_history()/unlock()
+    đúng bảng, không cần đoán."""
     rows = db.execute(
-        """SELECT s.ngay, s.updated_at, u.username AS created_by_username,
-                  u.full_name AS created_by_name,
-                  (SELECT COUNT(*) FROM doi_chieu_citad_history h WHERE h.ngay = s.ngay) AS so_lan_luu
+        """SELECT s.ngay, s.updated_at, s.status, s.created_by,
+                  u.username AS created_by_username, u.full_name AS created_by_name,
+                  (SELECT COUNT(*) FROM doi_chieu_citad_history h WHERE h.session_id = s.id) AS so_lan_luu
            FROM doi_chieu_citad_sessions s
            LEFT JOIN user_tttt u ON u.id = s.created_by"""
     ).fetchall()
@@ -466,8 +515,10 @@ def get_reconciliation_days(
                 continue
         parsed.append((d, {
             "ngay": r["ngay"],
+            "created_by": r["created_by"],
             "created_by_username": r["created_by_username"],
             "created_by_name": r["created_by_name"],
+            "status": r["status"],
             "updated_at": str(r["updated_at"]) if r["updated_at"] else None,
             "so_lan_luu": r["so_lan_luu"],
         }))
@@ -475,10 +526,13 @@ def get_reconciliation_days(
     return [item for _, item in parsed]
 
 
-def get_reconciliation_history(db: sqlite3.Connection, ngay: str) -> list:
-    """Lịch sử từng lần lưu đối chiếu CITAD của 1 ngày cụ thể, theo đúng thứ
-    tự thời gian đã lưu (cũ -> mới) — KHÔNG trả kèm số liệu (có thể nặng nếu
-    nhiều dòng) — xem từng bản cụ thể qua get_history_entry_data(id).
+def get_reconciliation_history(db: sqlite3.Connection, ngay: str, created_by: int) -> list:
+    """Lịch sử từng lần lưu của ĐÚNG 1 bảng cụ thể (ngay, created_by), theo
+    đúng thứ tự thời gian đã lưu (cũ -> mới) — KHÔNG trả kèm số liệu (có thể
+    nặng nếu nhiều dòng) — xem từng bản cụ thể qua get_history_entry_data(id).
+    `created_by` bắt buộc — 1 `ngay` giờ có thể có nhiều bảng của nhiều
+    người, lọc theo `ngay` một mình sẽ trộn lẫn lịch sử của các bảng khác
+    nhau.
 
     `username` mỗi dòng lấy đúng `h.staff_id` — người THỰC SỰ bấm Lưu ra
     đúng dòng lịch sử này (xác nhận yêu cầu Phòng Thanh toán 25/08/2026:
@@ -494,9 +548,11 @@ def get_reconciliation_history(db: sqlite3.Connection, ngay: str) -> list:
         """SELECT h.id, h.status, h.created_at, h.staff_id, hu.username
            FROM doi_chieu_citad_history h
            JOIN user_tttt hu ON hu.id = h.staff_id
-           WHERE h.ngay = ?
+           WHERE h.session_id = (
+               SELECT id FROM doi_chieu_citad_sessions WHERE ngay=? AND created_by=?
+           )
            ORDER BY h.created_at ASC, h.id ASC""",
-        (ngay,),
+        (ngay, created_by),
     ).fetchall()
     return [
         {
@@ -513,19 +569,21 @@ def get_history_entry_data(db: sqlite3.Connection, history_id: int) -> dict | No
     đó (khác nút "Tải" chính, luôn lấy bản HIỆN HÀNH mới nhất).
 
     Kèm `_meta_*` như session_get() — `created_by`/`created_by_username` lấy
-    từ `doi_chieu_citad_sessions` của đúng `ngay` (người lập bảng tính theo
-    NGÀY, không phải theo từng dòng lịch sử — 1 dòng lịch sử có thể do người
-    KHÁC người lập bảng lưu, vd người chỉ nạp Napas).
+    từ `doi_chieu_citad_sessions` của đúng BẢNG (`session_id`) chứa dòng lịch
+    sử này, không phải suy từ `ngay` (1 ngày giờ có thể có nhiều bảng của
+    nhiều người — người lập bảng phải tính theo đúng bảng, không phải theo
+    ngày. 1 dòng lịch sử vẫn có thể do người KHÁC người lập bảng lưu, vd
+    người chỉ nạp Napas vào bảng đó).
 
-    `_meta_status` lấy từ TRẠNG THÁI HIỆN TẠI của ngày đó (`s.status`), KHÔNG
+    `_meta_status` lấy từ TRẠNG THÁI HIỆN TẠI của bảng đó (`s.status`), KHÔNG
     phải `h.status` đóng băng lúc lưu đúng dòng này — nếu dùng h.status, mở
     lại 1 dòng tạm từ TRƯỚC một lần Admin mở khoá rồi chốt lại sẽ hiện nhầm
-    "sửa/lưu tiếp được" dù ngày đó đã khoá thật, bấm Lưu sẽ ăn lỗi 403 (bug
+    "sửa/lưu tiếp được" dù bảng đó đã khoá thật, bấm Lưu sẽ ăn lỗi 403 (bug
     đã gặp thực tế, xem lịch sử sửa)."""
     row = db.execute(
         """SELECT h.data, s.status, s.created_by, u.username AS created_by_username
            FROM doi_chieu_citad_history h
-           LEFT JOIN doi_chieu_citad_sessions s ON s.ngay = h.ngay
+           LEFT JOIN doi_chieu_citad_sessions s ON s.id = h.session_id
            LEFT JOIN user_tttt u ON u.id = s.created_by
            WHERE h.id=?""",
         (history_id,),
@@ -563,19 +621,15 @@ def get_history_edits(db: sqlite3.Connection, history_id: int) -> list:
 
 
 def session_delete(db: sqlite3.Connection, ngay: str, staff_id: int) -> None:
-    """Chỉ người lập bảng mới xoá được, và không xoá được ngày đã "Lưu bản
-    cuối" — cùng nguyên tắc với session_save() (xem docstring đó). Không có
-    ngoại lệ Admin ở đây (khác session_admin_unlock() — mở khoá để SỬA TIẾP,
-    không phải để xoá trắng số liệu đã chốt)."""
+    """Xoá bảng CỦA CHÍNH `staff_id` cho ngày `ngay` (không đụng bảng của
+    người khác cùng ngày, nếu có) — không xoá được bảng đã "Lưu bảng cuối"
+    (Admin mở khoá qua đường riêng, không phải xoá trắng)."""
     row = db.execute(
-        "SELECT status, created_by FROM doi_chieu_citad_sessions WHERE ngay=?", (ngay,)
+        "SELECT status FROM doi_chieu_citad_sessions WHERE ngay=? AND created_by=?", (ngay, staff_id)
     ).fetchone()
-    if row:
-        if row["status"] == "final":
-            raise SessionLockedError("Ngày này đã được chốt bản cuối — không thể xoá.")
-        if row["created_by"] and row["created_by"] != staff_id:
-            raise SessionForbiddenError("Chỉ người lập bảng mới được xoá bản ghi này.")
-    db.execute("DELETE FROM doi_chieu_citad_sessions WHERE ngay=?", (ngay,))
+    if row and row["status"] == "final":
+        raise SessionLockedError("Bảng này đã được chốt bản cuối — không thể xoá.")
+    db.execute("DELETE FROM doi_chieu_citad_sessions WHERE ngay=? AND created_by=?", (ngay, staff_id))
     db.commit()
 
 
