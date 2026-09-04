@@ -228,6 +228,47 @@ def _noi_dai_trich_yeu(ma: list[str], txt: list[str], i: int, ke_tiep) -> None:
         i = j
 
 
+# Tên đơn vị dài được phép trình bày trên NHIỀU DÒNG (Điều 8.2). Dòng nối tiếp
+# mở đầu bằng liên từ hoặc gạch nối — không tên cơ quan nào bắt đầu như vậy,
+# nên đây là dấu hiệu chắc chắn chứ không phải phỏng đoán.
+_NOI_TIEP_TEN_DV = ("VÀ ", "VÀ ", "- ", "– ", "— ")
+
+
+def _gom_ten_dv_nhieu_dong(khoi: list[int], txt: list[str]) -> list[list[int]]:
+    """Gộp các dòng in hoa đầu văn bản thành từng CỤM = từng tên đơn vị.
+
+    Trước đây quy tắc là "dòng cuối là đơn vị ban hành, các dòng trên là đơn vị
+    chủ quản". Quy tắc đó đọc mỗi dòng là một cấp đơn vị, nên gặp một tên dài
+    xuống dòng thì cắt đôi chính cái tên ấy:
+
+        NGÂN HÀNG NÔNG NGHIỆP              → tưởng là đơn vị chủ quản → BỎ đậm
+        VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM   → tưởng là đơn vị ban hành → in đậm
+
+    Bản gốc in đậm cả hai dòng vì đó là MỘT tên. Chuẩn hoá xong nửa trên hoá
+    chữ thường — sai ngay dòng đầu tiên của văn bản, và sai theo kiểu "phần mềm
+    tự tin làm đúng" nên người dùng dễ tin là đúng.
+
+    Ngược lại, khối HAI CẤP thật thì dòng sau là một tên độc lập:
+
+        NGÂN HÀNG NÔNG NGHIỆP VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM   → chủ quản
+        CHI NHÁNH HÀ NỘI                                          → ban hành
+
+    Phân biệt bằng chữ mở đầu: "CHI NHÁNH" bắt đầu một tên mới, "VÀ" thì không.
+    Cố ý chỉ nhận đúng liên từ và gạch nối — hẹp nhưng chắc. Chỗ xuống dòng
+    giữa cụm danh từ ("… VÀ PHÁT TRIỂN / NÔNG THÔN VIỆT NAM") không có dấu hiệu
+    nào đọc ra được, và đoán bừa ở đây là gộp nhầm hai cấp đơn vị thật thành
+    một — hỏng nặng hơn hẳn cái nó định chữa.
+    """
+    cum: list[list[int]] = []
+    for i in khoi:
+        t = _gon(txt[i]).upper()
+        if cum and t.startswith(_NOI_TIEP_TEN_DV):
+            cum[-1].append(i)
+        else:
+            cum.append([i])
+    return cum
+
+
 # ── Lượt 2: sửa theo ngữ cảnh ────────────────────────────────────────────────
 def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool]) -> None:
     n = len(ma)
@@ -277,16 +318,20 @@ def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool]) ->
             _noi_dai_trich_yeu(ma, txt, j, _ke_tiep)
 
     # ── Tên đơn vị: các dòng in hoa ở đầu văn bản, trước tên loại ──
-    # Dòng CUỐI của khối là tên đơn vị ban hành (in đậm, có gạch dưới), các
-    # dòng trên là tên đơn vị quản lý trực tiếp.
+    # CỤM cuối của khối là tên đơn vị ban hành (in đậm, có đường kẻ), các cụm
+    # trên là tên đơn vị quản lý trực tiếp. "Cụm" chứ không phải "dòng" — xem
+    # `_gom_ten_dv_nhieu_dong`.
     gioi_han = next((i for i in range(n) if ma[i] in ("ten_loai", "so_ky_hieu",
                                                       "dia_danh_ngay")), min(n, 12))
     khoi_dv = [i for i in range(gioi_han)
                if ma[i] in ("noi_dung", "bang") and la_in_hoa(txt[i]) and _gon(txt[i])]
     if khoi_dv:
-        for i in khoi_dv:
-            ma[i] = "ten_dv_chu_quan"
-        ma[khoi_dv[-1]] = "ten_dv_ban_hanh"
+        cum = _gom_ten_dv_nhieu_dong(khoi_dv, txt)
+        for nhom in cum:
+            for i in nhom:
+                ma[i] = "ten_dv_chu_quan"
+        for i in cum[-1]:
+            ma[i] = "ten_dv_ban_hanh"
 
     # ── Danh sách nơi nhận: mọi dòng sau "Nơi nhận:" tới hết khối ──
     for i in range(n):

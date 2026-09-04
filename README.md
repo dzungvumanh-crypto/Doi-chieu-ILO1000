@@ -711,6 +711,23 @@ Truy cập:
   phông sẽ in qua Pillow. "NGÂN HÀNG NÔNG NGHIỆP VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM" cỡ 12 đậm đo được
   238,0 pt / ô 241,2 pt. Tràn thì nén `w:spacing` tối đa **−24 twip** (đúng mức Phụ lục V dùng),
   **không hạ cỡ chữ**; hết trần vẫn tràn thì dừng và ghi cảnh báo
+- **Không vẽ chồng lên đường kẻ có sẵn**: Word neo hình vẽ tay vào *chính đoạn có chữ*
+  (`positionV relativeFrom="paragraph"`), không đặt ở đoạn riêng. Chỉ soi đoạn kế tiếp là vẽ thêm
+  vạch thứ hai. Ở chính đoạn chỉ nhận đúng hình đường thẳng (`<v:line>`, `prstGeom prst="line"`,
+  `straightConnector1`) — nhận mọi `<w:drawing>` thì đoạn tên đơn vị có logo sẽ không bao giờ được kẻ
+- **Số trang đếm lại từ 1**: `<w:pgNumType w:start="N"/>` theo chân văn bản khi người soạn cắt một
+  phần ra khỏi tài liệu dài. Chèn số trang đúng chỗ mà đếm từ 23 thì nhìn vẫn là sai — nay ép về 1
+  và ghi số cũ vào nhật ký
+- **Bỏ ngắt trang thủ công** (bật sẵn, tắt được ở tab Cấu hình): dấu ngắt tay đặt theo bố cục *cũ*;
+  chuẩn hoá làm chữ cao lên nên nó rơi vào giữa chừng và đẻ ra một trang gần như trống. Đoạn chỉ
+  chứa dấu ngắt thì bỏ cả đoạn, đoạn có chữ thì chỉ nhấc thẻ `<w:br>` — không mất chữ. Tắt khi văn
+  bản thật sự cần sang trang mới (Phụ lục ban hành kèm theo Quyết định)
+- **Tên đơn vị dài trình bày nhiều dòng** (Điều 8.2): khối in hoa đầu văn bản được gom thành từng
+  **cụm** trước khi lấy cụm cuối làm đơn vị ban hành. "NGÂN HÀNG NÔNG NGHIỆP / VÀ PHÁT TRIỂN NÔNG
+  THÔN VIỆT NAM" là MỘT tên xuống dòng — đọc mỗi dòng là một cấp đơn vị thì nửa trên bị bỏ in đậm.
+  Dấu hiệu nhận cụm cố ý để hẹp: chỉ dòng mở đầu bằng liên từ hoặc gạch nối (`VÀ`, `-`, `–`, `—`),
+  vì không tên cơ quan nào bắt đầu như vậy. Khối hai cấp thật ("… VIỆT NAM" / "CHI NHÁNH HÀ NỘI")
+  không đổi
 - **Trích yếu xuống dòng**: dòng nối tiếp cũng được nhận là trích yếu (tối đa 3 dòng, dừng khi gặp
   `Căn cứ` / `Điều` / `Kính gửi`…), nếu không thì dòng thứ hai bị căn đều hai bên và không in đậm
   trong khi dòng trên căn giữa

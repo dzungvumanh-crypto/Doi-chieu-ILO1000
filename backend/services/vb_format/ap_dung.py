@@ -474,6 +474,81 @@ def _them_so_trang(section, co_chu: float, phong: str) -> bool:
     return True
 
 
+def _dat_lai_so_trang_dau(section) -> int | None:
+    """Ép số trang đếm từ 1. Trả số cũ nếu có sửa, `None` nếu vốn đã đúng.
+
+    `<w:pgNumType w:start="N"/>` trong `sectPr` bắt Word đếm trang từ N chứ
+    không từ 1. Nó theo chân văn bản mỗi khi người soạn cắt một phần ra khỏi
+    tài liệu dài rồi lưu thành file riêng — thứ hay gặp nhất ở đây.
+
+    Đã xảy ra thật: "TB Swift code Quảng Ninh.docx" mang `w:start="23"`, nên
+    dù số trang được chèn đúng chỗ (canh giữa lề trên, bỏ trang đầu) thì trang
+    2 vẫn in ra "24". Chèn đúng mà đếm sai thì nhìn vẫn là sai.
+    """
+    pgnum = section._sectPr.find(qn("w:pgNumType"))
+    if pgnum is None:
+        return None
+    cu = pgnum.get(qn("w:start"))
+    if cu is None or cu == "1":
+        return None
+    pgnum.set(qn("w:start"), "1")
+    try:
+        return int(cu)
+    except ValueError:
+        return None
+
+
+def bo_ngat_trang_thu_cong(doc) -> int:
+    """Gỡ mọi ngắt trang do người soạn đặt tay. Trả số chỗ đã gỡ.
+
+    ## Vì sao phải gỡ
+
+    Ngắt trang tay được đặt theo BỐ CỤC CŨ của văn bản. Chuẩn hoá làm chữ cao
+    lên (giãn dòng 1,2 theo Điều 12.6, lề trên 20 mm theo Điều 4) nên chỗ
+    xuống trang dịch đi — dấu ngắt cũ rơi vào giữa chừng và đẻ ra một trang
+    gần như trống.
+
+    Đo trên "TB Swift code Quảng Ninh.docx": bản gốc 2 trang; chuẩn hoá xong
+    thành **3 trang**, trong đó trang 2 chỉ có đúng MỘT đoạn văn. Gỡ dấu ngắt
+    thì trở lại 2 trang, chữ chảy liền mạch. Đã kiểm riêng từng nguyên nhân:
+    trả lề trên về 15 mm vẫn 3 trang, đổi dấu ngắt thành `pageBreakBefore`
+    cũng vẫn 3 trang — chỉ gỡ hẳn mới hết.
+
+    ## Gỡ thế nào cho không mất chữ
+
+    Dấu ngắt nằm trong một `<w:r>`. Đoạn nào CHỈ chứa dấu ngắt thì bỏ cả đoạn
+    (nó không phải lời văn, chỉ là chỗ chêm); đoạn có chữ thì chỉ nhấc riêng
+    thẻ `<w:br>` ra, giữ nguyên chữ. `<w:pageBreakBefore/>` trong `pPr` cũng
+    là ngắt trang, gỡ cùng.
+
+    Việc này ghi vào nhật ký "Sửa chung" nên người dùng thấy được; tắt bằng ô
+    *Bỏ ngắt trang thủ công* trong tab Cấu hình khi văn bản thật sự cần sang
+    trang mới (Phụ lục ban hành kèm theo Quyết định chẳng hạn).
+    """
+    so = 0
+    for p in list(doc.paragraphs):
+        el = p._p
+        brs = [b for b in el.iter(qn("w:br")) if b.get(qn("w:type")) == "page"]
+        pbb = el.find(qn("w:pPr"))
+        pbb = pbb.find(qn("w:pageBreakBefore")) if pbb is not None else None
+        if not brs and pbb is None:
+            continue
+        so += 1
+        if pbb is not None:
+            pbb.getparent().remove(pbb)
+        # Đoạn rỗng có thể đang giữ dấu NGẮT SECTION (`sectPr` trong `pPr`) —
+        # xoá nó là gộp hai section làm một, mất luôn khổ giấy / lề / hướng
+        # trang riêng của phần sau. Chỉ nhấc thẻ ngắt trang ra, giữ lại đoạn.
+        giu_sect = (el.find(qn("w:pPr")) is not None
+                    and el.find(qn("w:pPr")).find(qn("w:sectPr")) is not None)
+        if brs and not p.text.strip() and not giu_sect:
+            el.getparent().remove(el)
+            continue
+        for b in brs:
+            b.getparent().remove(b)
+    return so
+
+
 def dat_trang(doc, cfg_trang: dict) -> list[str]:
     """Khổ giấy, định lề, số trang — áp cho MỌI section. Trả mô tả đã sửa."""
     if not cfg_trang.get("ap_dung"):
@@ -504,6 +579,11 @@ def dat_trang(doc, cfg_trang: dict) -> list[str]:
                                   "Times New Roman"):
                     if "đánh số trang (bỏ trang đầu)" not in ghi_nhan:
                         ghi_nhan.append("đánh số trang (bỏ trang đầu)")
+                cu = _dat_lai_so_trang_dau(section)
+                if cu is not None:
+                    mo_ta = f"đánh số trang lại từ 1 (văn bản gốc đánh từ {cu})"
+                    if mo_ta not in ghi_nhan:
+                        ghi_nhan.append(mo_ta)
             except Exception as e:                        # noqa: BLE001
                 _log.warning("Không chèn được số trang: %s", e)
     return ghi_nhan

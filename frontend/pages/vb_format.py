@@ -441,6 +441,24 @@ async def vb_format_page():
                                            cfg)
                                     _o_bat("chung", "bo_khoang_truoc_doan",
                                            "Bỏ khoảng trống trước đoạn (Spacing Before → 0)", cfg)
+                                with ui.row().classes("gap-4 flex-wrap items-center"):
+                                    _o_bat("chung", "nen_chu_cho_vua_dong",
+                                           "Nén chữ cho dòng thể thức vừa một dòng", cfg)
+                                    _o_so("chung", "nen_toi_da_twip",
+                                          "Nén tối đa", cfg, "twip", 1)
+                                    _o_bat("chung", "go_gach_chan_the_thuc",
+                                           "Bỏ gạch chân ở dòng thể thức", cfg)
+                                    _o_bat("chung", "ve_duong_ke_ngang",
+                                           "Vẽ đường kẻ ngang dưới Tiêu ngữ / tên đơn vị / trích yếu",
+                                           cfg)
+                                    _o_bat("chung", "bo_ngat_trang_thu_cong",
+                                           "Bỏ ngắt trang thủ công", cfg)
+                                ui.label(
+                                    "Ngắt trang tay được đặt theo bố cục CŨ. Chuẩn hoá làm chữ "
+                                    "cao lên nên chỗ xuống trang dịch đi, giữ lại thì hay đẻ ra "
+                                    "một trang gần như trống. Tắt ô này khi văn bản thật sự cần "
+                                    "sang trang mới — Phụ lục ban hành kèm theo Quyết định."
+                                ).classes("text-xs text-gray-500")
                                 ui.label(
                                     "Điều 12.6 cho một dải: giãn dòng tối thiểu dòng đơn (1), "
                                     "tối đa 1,5; cách đoạn tối thiểu 6 pt. Mặc định lấy 1,2 vì "

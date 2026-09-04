@@ -109,11 +109,28 @@ def chuan_hoa(du_lieu: bytes, cau_hinh: dict | None = None) -> tuple[bytes, dict
 
     sua_chung = ap_dung.dat_trang(doc, cfg["trang"])
 
+    # Gỡ ngắt trang TRƯỚC khi lấy danh sách đoạn: việc này xoá bớt đoạn, mà
+    # `ma_list` lại khớp với `khoi` theo đúng thứ tự chỉ số. Gỡ sau là hai
+    # danh sách lệch nhau một nhịp và mọi đoạn sau đó bị áp nhầm thể thức.
+    so_ngat = (ap_dung.bo_ngat_trang_thu_cong(doc)
+               if cfg["chung"].get("bo_ngat_trang_thu_cong") else 0)
+    if so_ngat:
+        sua_chung.append(f"bỏ {so_ngat} ngắt trang thủ công")
+
     khoi = ap_dung.duyet_doan(doc)
     ma_list = nhan_dien.phan_loai([(p.text, tb) for p, tb in khoi])
 
     nhat_ky: list[dict] = []
     luu_y: list[str] = []
+    if so_ngat:
+        luu_y.append(
+            f"Đã gỡ {so_ngat} chỗ ngắt trang do người soạn đặt tay. Chúng được "
+            "đặt theo bố cục cũ, mà chuẩn hoá làm chữ cao lên (giãn dòng 1,2, "
+            "lề trên 20 mm) nên giữ lại thì hay đẻ ra một trang gần như trống. "
+            "Văn bản thật sự cần sang trang mới — Phụ lục ban hành kèm theo "
+            "Quyết định chẳng hạn — thì tắt ô «Bỏ ngắt trang thủ công» trong "
+            "tab Cấu hình rồi chạy lại."
+        )
     so_doan_sua = 0
     da_canh_bao_so_tu_dong = False
     da_canh_bao_tran = False

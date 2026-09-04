@@ -4,6 +4,34 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 04/09/2026 Chuẩn hoá văn bản - **Sửa 4 lỗi phát hiện trên văn bản thật (TB Swift code Quảng Ninh)**
+    + **Số trang in ra sai — trang 2 ghi "24", trang 3 ghi "25".** Nguyên nhân: file gốc được cắt
+      ra từ một tài liệu dài nên vẫn mang lệnh *"đánh số bắt đầu từ trang 23"* ẩn bên trong. Người
+      soạn không nhìn thấy lệnh này ở đâu trên màn hình Word. Nay phần mềm đặt lại **đếm từ 1** và
+      ghi số cũ vào nhật ký sửa đổi
+    + **Tiêu ngữ đã có đường kẻ ngang rồi lại bị kẻ thêm vạch thứ hai.** Nguyên nhân: người soạn vẽ
+      vạch bằng công cụ Line của Word, vạch đó **dính vào chính dòng chữ** chứ không nằm ở dòng
+      riêng, nên phần mềm không thấy và vẽ đè thêm. Nay nhận ra được cả hai cách đặt vạch
+    + **Trang 2 chỉ có đúng một đoạn văn** (bản gốc 2 trang, chuẩn hoá xong thành 3). Nguyên nhân:
+      chuẩn hoá làm chữ cao lên (giãn dòng 1,2 theo quy định) nên đoạn cuối tràn sang trang sau,
+      rồi **dấu ngắt trang do người soạn đặt tay** lại đẩy phần tiếp theo sang trang thứ ba
+    + ⚠️ **Phần mềm nay tự bỏ ngắt trang thủ công.** Dấu ngắt tay được đặt theo bố cục **cũ** của
+      văn bản, giữ lại thì hay đẻ ra trang trống. Việc bỏ **hiện rõ trong nhật ký sửa đổi** cùng
+      một dòng lưu ý
+    + ⚠️ **Văn bản thật sự cần sang trang mới thì phải tắt ô này** — ví dụ Phụ lục ban hành kèm
+      theo Quyết định. Vào tab **Cấu hình quy chuẩn**, bỏ tick ô *"Bỏ ngắt trang thủ công"* rồi
+      chạy lại. Bản gốc không bao giờ bị sửa nên chạy lại bao nhiêu lần cũng được
+    + **Tên ngân hàng bị bỏ in đậm mất nửa trên.** Tên *"NGÂN HÀNG NÔNG NGHIỆP VÀ PHÁT TRIỂN
+      NÔNG THÔN VIỆT NAM"* dài nên viết thành 2 dòng. Phần mềm tưởng đó là **hai cấp đơn vị**
+      (dòng trên là đơn vị cấp trên, dòng dưới là đơn vị ban hành) nên bỏ in đậm dòng trên. Nay
+      nhận ra dòng bắt đầu bằng chữ *"VÀ"* là **phần nối tiếp của dòng trên**, không phải một tên
+      mới — cả hai dòng cùng in đậm, và vẫn chỉ có một đường kẻ dưới dòng cuối
+    + Khối **hai cấp thật** (ví dụ *"NGÂN HÀNG … VIỆT NAM"* rồi *"CHI NHÁNH HÀ NỘI"*) **không đổi
+      gì** — vẫn là đơn vị cấp trên không in đậm, đơn vị ban hành in đậm
+    + **Tab Cấu hình có thêm 5 ô tick** trước nay chưa hiện ra: nén chữ cho dòng thể thức vừa một
+      dòng, mức nén tối đa, bỏ gạch chân ở dòng thể thức, vẽ đường kẻ ngang, bỏ ngắt trang thủ công
+    + ✅ **Không phải làm gì sau khi cập nhật** — không đổi dữ liệu, không đổi quyền
+
 - 04/09/2026 Chứng từ - **Trả lại ngày giờ nộp thật cho ô chứng từ bị điền nhầm người (chạy tay trên máy chủ)**
     + Việc thật: GDV nộp chứng từ **ngày 27/08** nhưng điền vào **ô của người khác**, HKV đã xác
       nhận. Người vận hành xoá ô nhầm rồi nhập lại vào ô đúng — ô mới mang **ngày nhập lại (03/09)**
