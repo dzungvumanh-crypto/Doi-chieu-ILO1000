@@ -225,9 +225,13 @@ async def _open_sign_dialog(pv: dict, title: str, ok_label: str, ok_cls: str = "
         dlg.delete()
 
 
-def _leave_status_badge(status: str):
+def _leave_status_badge(status: str, label_override: str | None = None):
 
     label, cls = _LEAVE_STATUS.get(status, (status, "bg-gray-100 text-gray-500"))
+    # Đơn NPBB gốc đã bị đơn điều chỉnh thay thế — nhãn riêng thay nhãn chung
+    # chung, xem status_label ở backend (_leave_to_out).
+    if label_override:
+        label = label_override
 
     ui.label(label).classes(f"text-xs font-medium px-2 py-0.5 rounded border {cls}")
 
@@ -1194,10 +1198,14 @@ async def leaves_page():
         # ── Dialog nộp lại ────────────────────────────────────────────────────
 
         _rsub_id: list = [None]
+        # "resubmit" (đơn bị từ chối, sửa & nộp lại — PUT /resubmit, ghi đè
+        # đơn cũ) hoặc "npbb_adjust" (đơn bat_buoc đã duyệt, POST /npbb-adjust
+        # tạo đơn MỚI liên kết qua adjusts_leave_id — xem _open_npbb_adjust).
+        _rsub_mode: list = ["resubmit"]
 
         with ui.dialog() as resubmit_dialog, ui.card().classes("p-6 w-[420px]"):
 
-            ui.label("Chỉnh sửa & Nộp lại").classes("text-lg font-bold text-red-900 mb-4")
+            resubmit_title = ui.label("Chỉnh sửa & Nộp lại").classes("text-lg font-bold text-red-900 mb-4")
 
             r_dates    = ui.date(value=[]).props(f"multiple mask='YYYY-MM-DD' no-header first-day-of-week='1' {_OPT_FUTURE}").classes("w-full")
 
@@ -1286,15 +1294,19 @@ async def leaves_page():
                 if show_approver:
                     body["ksv_approver_id"] = r_approver.value
 
+                _is_npbb = _rsub_mode[0] == "npbb_adjust"
                 try:
-
-                    await asyncio.to_thread(api.put, f"/api/leaves/{lid}/resubmit", body)
+                    if _is_npbb:
+                        await asyncio.to_thread(api.post, f"/api/leaves/{lid}/npbb-adjust", body)
+                    else:
+                        await asyncio.to_thread(api.put, f"/api/leaves/{lid}/resubmit", body)
 
                     resubmit_dialog.close()
 
                     detail_drawer.hide()
 
-                    ui.notify("Đã nộp lại đơn!", type="positive")
+                    ui.notify("Đã tạo đơn điều chỉnh NPBB!" if _is_npbb else "Đã nộp lại đơn!",
+                              type="positive")
 
                     ui.navigate.to("/leaves")
 
@@ -1308,7 +1320,7 @@ async def leaves_page():
 
                 ui.button("Hủy", on_click=resubmit_dialog.close).classes("text-gray-500")
 
-                ui.button("Nộp lại", on_click=do_resubmit).classes("bg-orange-600 text-white")
+                resubmit_submit_btn = ui.button("Nộp lại", on_click=do_resubmit).classes("bg-orange-600 text-white")
 
 
 
@@ -1363,7 +1375,7 @@ async def leaves_page():
 
                         ui.label("Trạng thái:").classes("text-sm text-gray-600 font-medium")
 
-                        _leave_status_badge(status)
+                        _leave_status_badge(status, leave.get("status_label"))
 
 
 
@@ -1416,6 +1428,35 @@ async def leaves_page():
                     _info("Loại:", _LEAVE_TYPE.get(leave.get("leave_type", ""), leave.get("leave_type", "")))
 
                     _info("Lý do:", leave.get("reason") or "→")
+
+                    # NPBB — đơn NÀY là đơn điều chỉnh: hiện lại ngày ĐÃ ĐĂNG KÝ của đơn
+                    # gốc để đối chiếu (đơn gốc trỏ qua adjusts_leave, xem npbb_adjust_leave()
+                    # ở backend).
+                    _adjusts = leave.get("adjusts_leave")
+                    if _adjusts:
+                        with ui.column().classes("w-full gap-1 p-3 bg-orange-50 border border-orange-200 rounded"):
+                            ui.label("Điều chỉnh từ đơn nghỉ phép bắt buộc đã đăng ký").classes(
+                                "text-xs font-medium text-orange-700")
+                            ui.label(
+                                f"Ngày đã đăng ký: {_fmt_leave_dates(_adjusts.get('start_date') or '', _adjusts.get('end_date') or '', _adjusts.get('spread_dates'))}"
+                            ).classes("text-sm text-gray-700")
+
+                    # NPBB — đơn NÀY là đơn gốc: nếu đã có ai điều chỉnh, hiện trạng thái
+                    # đơn điều chỉnh liên kết (approved thì đơn gốc đã tự "Đã hủy - Đã điều
+                    # chỉnh", xem status_label ở backend).
+                    _npbb_adj = leave.get("npbb_adjustment")
+                    if _npbb_adj:
+                        _adj_status_vn = {
+                            "pending_ksv": "Chờ KSV duyệt", "pending_tong_hop": "Chờ Tổng hợp",
+                            "pending_gd": "Chờ Ban lãnh đạo duyệt", "approved": "Đã duyệt",
+                            "rejected": "Bị từ chối", "cancelled": "Đã hủy",
+                        }.get(_npbb_adj.get("status"), _npbb_adj.get("status"))
+                        with ui.column().classes("w-full gap-1 p-3 bg-orange-50 border border-orange-200 rounded"):
+                            ui.label(f"Có đơn điều chỉnh ngày NPBB ({_adj_status_vn})").classes(
+                                "text-xs font-medium text-orange-700")
+                            ui.label(
+                                f"Ngày đề nghị điều chỉnh: {_fmt_leave_dates(_npbb_adj.get('start_date') or '', _npbb_adj.get('end_date') or '', _npbb_adj.get('spread_dates'))}"
+                            ).classes("text-sm text-gray-700")
 
 
 
@@ -1802,60 +1843,83 @@ async def leaves_page():
 
 
 
-                        # Resubmit
+                        # Resubmit / Điều chỉnh NPBB — dùng chung 1 dialog, khác nhau ở
+                        # tiêu đề, khả năng đổi loại nghỉ phép và endpoint gọi lúc submit
+                        # (xem _rsub_mode, do_resubmit).
+                        async def _load_resubmit_fields(lv, title="Chỉnh sửa & Nộp lại",
+                                                        lock_type=False, mode="resubmit"):
+
+                            resubmit_title.set_text(title)
+                            _rsub_mode[0] = mode
+                            resubmit_submit_btn.set_text("Tạo đơn điều chỉnh" if mode == "npbb_adjust" else "Nộp lại")
+
+                            _spread = lv.get("spread_dates")
+
+                            if _spread:
+                                r_dates.value = _spread
+                            else:
+                                # Đơn cũ là khoảng liên tục (vd thai sản/bảo hiểm) — phải nạp
+                                # ĐỦ mọi ngày từ start_date đến end_date vào picker "multiple",
+                                # nếu không chỉ giữ lại ngày đầu, mất hết các ngày còn lại.
+                                _s = (lv.get("start_date") or "")[:10]
+                                _e = (lv.get("end_date") or "")[:10]
+                                try:
+                                    _sd = _dt_mod.date.fromisoformat(_s)
+                                    _ed = _dt_mod.date.fromisoformat(_e) if _e else _sd
+                                    _all_days, _d = [], _sd
+                                    while _d <= _ed:
+                                        _all_days.append(_d.isoformat())
+                                        _d += _dt_mod.timedelta(days=1)
+                                    r_dates.value = _all_days
+                                except ValueError:
+                                    r_dates.value = [_s] if _s else []
+
+                            r_type.value   = lv.get("leave_type", "annual")
+                            r_type.set_enabled(not lock_type)
+
+                            r_reason.value = lv.get("reason") or ""
+
+                            _rsub_id[0]    = lv["id"]
+
+                            if r_approver:
+                                r_approver.value = lv.get("ksv_approver_id")
+
+                            # Load danh sách GĐ/PGĐ mỗi lần mở dialog
+                            try:
+                                lst = await asyncio.to_thread(api.get, "/api/leaves/gd-list")
+                                r_gd_select.options = {
+                                    s["id"]: f"{s['full_name']} ({s.get('role_label', '')})"
+                                    for s in (lst or [])
+                                }
+                                r_gd_select.update()
+                            except Exception:
+                                pass
+
+                            r_gd_select.value = lv.get("gd_approver_id")
+
+                            resubmit_dialog.open()
 
                         if is_owner and status == "rejected" and api.has_feature("leaves.resubmit"):
 
                             async def _open_resubmit(lv=leave):
-
-                                _spread = lv.get("spread_dates")
-
-                                if _spread:
-                                    r_dates.value = _spread
-                                else:
-                                    # Đơn cũ là khoảng liên tục (vd thai sản/bảo hiểm) — phải nạp
-                                    # ĐỦ mọi ngày từ start_date đến end_date vào picker "multiple",
-                                    # nếu không chỉ giữ lại ngày đầu, mất hết các ngày còn lại.
-                                    _s = (lv.get("start_date") or "")[:10]
-                                    _e = (lv.get("end_date") or "")[:10]
-                                    try:
-                                        _sd = _dt_mod.date.fromisoformat(_s)
-                                        _ed = _dt_mod.date.fromisoformat(_e) if _e else _sd
-                                        _all_days, _d = [], _sd
-                                        while _d <= _ed:
-                                            _all_days.append(_d.isoformat())
-                                            _d += _dt_mod.timedelta(days=1)
-                                        r_dates.value = _all_days
-                                    except ValueError:
-                                        r_dates.value = [_s] if _s else []
-
-                                r_type.value   = lv.get("leave_type", "annual")
-
-                                r_reason.value = lv.get("reason") or ""
-
-                                _rsub_id[0]    = lv["id"]
-
-                                if r_approver:
-                                    r_approver.value = lv.get("ksv_approver_id")
-
-                                # Load danh sách GĐ/PGĐ mỗi lần mở dialog
-                                try:
-                                    lst = await asyncio.to_thread(api.get, "/api/leaves/gd-list")
-                                    r_gd_select.options = {
-                                        s["id"]: f"{s['full_name']} ({s.get('role_label', '')})"
-                                        for s in (lst or [])
-                                    }
-                                    r_gd_select.update()
-                                except Exception:
-                                    pass
-
-                                r_gd_select.value = lv.get("gd_approver_id")
-
-                                resubmit_dialog.open()
-
-
+                                await _load_resubmit_fields(lv, "Chỉnh sửa & Nộp lại")
 
                             ui.button("Sửa & Nộp lại", icon="refresh", on_click=_open_resubmit).classes("bg-orange-500 text-white text-sm")
+
+                        # Điều chỉnh ngày NPBB — chỉ đơn bat_buoc đã "Hoàn thành", tạo
+                        # đơn MỚI liên kết qua adjusts_leave_id (POST /npbb-adjust), KHÔNG
+                        # ghi đè đơn gốc — xem npbb_adjust_leave() ở backend. Ẩn nếu đã có
+                        # đơn điều chỉnh đang xử lý (chưa bị từ chối/hủy).
+                        _pending_adj = leave.get("npbb_adjustment")
+                        _has_active_adj = bool(_pending_adj) and _pending_adj.get("status") not in ("rejected", "cancelled")
+                        if (is_owner and status == "approved" and leave.get("leave_type") == "bat_buoc"
+                                and not _has_active_adj and api.has_feature("leaves.create")):
+
+                            async def _open_npbb_adjust(lv=leave):
+                                await _load_resubmit_fields(lv, "Điều chỉnh ngày nghỉ phép bắt buộc",
+                                                            lock_type=True, mode="npbb_adjust")
+
+                            ui.button("Điều chỉnh ngày NPBB", icon="edit_calendar", on_click=_open_npbb_adjust).classes("bg-orange-500 text-white text-sm")
 
                         # Hủy đơn bị từ chối (không resubmit nữa)
                         if is_owner and status == "rejected":
@@ -2653,6 +2717,10 @@ async def leaves_page():
                 for _row_idx, lv in enumerate(leaves, _row_offset + 1):
 
                     sg_lbl, sg_cls = _STATUS_GROUP.get(lv["status"], (lv["status"], "bg-gray-100 text-gray-500"))
+                    # Đơn NPBB gốc đã bị đơn điều chỉnh thay thế — nhãn riêng thay nhãn
+                    # chung chung, xem status_label ở backend (_leave_to_out).
+                    if lv.get("status_label"):
+                        sg_lbl = lv["status_label"]
 
                     # Highlight đỏ nhạt nếu dòng này cần user hiện tại xử lý
                     _needs_action = (
@@ -4870,6 +4938,24 @@ async def leaves_page():
 
 
                         ui.button("Tải báo cáo Excel", icon="download", on_click=_download_stats).classes("bg-blue-700 text-white")
+
+                        # Báo cáo NPBB — Phòng Tổng hợp chốt tổng gửi báo cáo (không phải
+                        # từng cá nhân tự làm), quét dữ liệu đơn nghỉ phép bắt buộc trong
+                        # năm đã chọn ở trên — xem export_npbb_batch() ở backend.
+                        async def _download_npbb(mau: str):
+                            try:
+                                content = await asyncio.to_thread(
+                                    api.download, "/api/leaves/export/npbb-batch",
+                                    params={"year": s_year_sel.value, "mau": mau},
+                                )
+                                ui.download(content, f"bao_cao_npbb_mau{mau}_{s_year_sel.value}.docx")
+                            except Exception as e:
+                                _handle_api_error(e)
+
+                        with ui.button("Báo cáo NPBB", icon="assignment").classes("bg-orange-700 text-white"):
+                            with ui.menu():
+                                ui.menu_item("Mẫu đăng ký (Mẫu 19 — gửi TCNS)", on_click=lambda: _download_npbb("19"))
+                                ui.menu_item("Mẫu điều chỉnh (Mẫu 18 — nội bộ)", on_click=lambda: _download_npbb("18"))
 
 
 

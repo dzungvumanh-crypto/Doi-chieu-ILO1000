@@ -1436,6 +1436,16 @@ def _ensure_indexes():
         # mẫu số nên không tái tạo được nếu thiếu cột này. Kỳ lưu trước bản vá có
         # giá trị mặc định 0 — FE nhận biết 0 để ẩn hẳn cột thay vì hiện số sai.
         "ALTER TABLE dtbb_reports ADD COLUMN rate_usd_to_vnd REAL NOT NULL DEFAULT 0",
+
+        # ── Người 3 — Nghỉ phép bắt buộc: điều chỉnh ngày sau khi đã duyệt —
+        # 2026-09-03 ────────────────────────────────────────────────────────
+        # Nút "Điều chỉnh ngày NPBB" (chỉ đơn bat_buoc đã approved) tạo 1 ĐƠN
+        # MỚI riêng (không ghi đè đơn gốc) — cột này trỏ ngược về đơn gốc. Đơn
+        # gốc vẫn "Hoàn thành" cho tới khi đơn điều chỉnh duyệt xong đủ 3 bước
+        # thì mới tự chuyển "Đã hủy" (xem npbb_adjust_leave, gd_review trong
+        # backend/api/leaves.py). Báo cáo NPBB (mẫu 18/19 TCNS) so sánh ngày
+        # "đã đăng ký" (đơn gốc) vs "điều chỉnh" (đơn này) qua liên kết đó.
+        "ALTER TABLE leave_records ADD COLUMN adjusts_leave_id INTEGER REFERENCES leave_records(id)",
     ]
     _mig_log = logging.getLogger(__name__)
 
