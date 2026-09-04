@@ -13399,6 +13399,59 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">118</span>
+      <span class="card-title">Chấm ILO1000 — <code>detect_huy()</code> gom nhầm REFERENCE dùng chung giữa nhiều chi nhánh, lây "Đã hủy" sang giao dịch bình thường (2026-09-03)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Báo cáo người chấm</span> Dữ liệu ngày 26/8/2026, comment trực tiếp trong file kết quả</div>
+      <p>"Đề nghị kiểm tra lại món này sheet hub trạng thái hoàn thành mà trạng thái của hệ thống
+        chấm là đã hủy" — 24 dòng Core (REFERENCE dạng <code>1000OTT...</code>, các đợt chi trả trợ
+        cấp xã hội hàng loạt BTXH) bị hệ thống gán TT = "Đã hủy" trong khi sheet Hub cho đúng cùng
+        Trace/số tiền lại ghi "Hoàn thành".</p>
+
+      <div class="label"><span class="pill pill-blue">Nguyên nhân gốc</span> REFERENCE không duy nhất giữa các chi nhánh trong 1 batch</div>
+      <p><code>detect_huy()</code> (<code>backend/services/ilo1000/process.py</code>) gom Core theo
+        <b>REFERENCE một mình</b> để tính net-zero Nợ/Có. Xác nhận bằng CSV GL02 gốc
+        (<code>1000_gl02_2026082620260826.csv</code>): REFERENCE <code>1000OTT261006174</code> xuất
+        hiện ở <b>3 chi nhánh khác nhau</b> — 1410 (CR +14.015.000, giao dịch thật), 5708 (CR
+        +746.700, giao dịch thật) và 2008 (CR +128.000 / -128.000, cặp hủy net-zero thật sự). Gom
+        theo REFERENCE một mình khiến tổng CR toàn nhóm ≠ 0 nhưng có dòng CR&lt;0 (tín hiệu (2), xem
+        card cũ về P1) → toàn bộ REFERENCE bị đánh dấu "Đã hủy", <b>lây nhầm sang cả 1410 và 5708</b>
+        dù 2 chi nhánh đó không liên quan gì tới cặp hủy của 2008. Trong <code>process_core()</code>,
+        bước gán Hủy/Đã hủy chạy <i>trước</i> bước khớp Hub (thứ tự ưu tiên TT) nên đè mất kết quả
+        khớp Hub đúng ("Hoàn thành") trước khi kịp tra tới.</p>
+
+      <div class="note"><b>Vì sao REFERENCE trùng giữa các chi nhánh:</b> các đợt chi trả trợ cấp xã
+        hội hàng loạt (BTXH) dùng chung một số hiệu đợt (OTT) cho nhiều chi nhánh tham gia cùng đợt
+        — REFERENCE không phải khóa giao dịch duy nhất trong toàn hệ thống, chỉ duy nhất trong phạm
+        vi 1 chi nhánh. <code>Trace</code> (tính sau, ở dòng dưới) đã tự cộng thêm TRBRCD cho đúng
+        lý do này (<code>brcd + REFERENCE[4:16]</code>) — <code>detect_huy()</code> lại tính SỚM HƠN,
+        trên REFERENCE thô, nên bỏ sót bài học đó.</div>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Gom theo khóa ghép (REFERENCE, TRBRCD)</div>
+      <p><code>detect_huy()</code> nhóm theo <code>(REFERENCE, TRBRCD)</code> thay vì REFERENCE đơn —
+        trả về <code>dict[(REFERENCE, TRBRCD), 'Hủy'|'Đã hủy']</code>. <code>process_core()</code> tra
+        cứu bằng khóa ghép tương ứng (<code>zip(ref, brcd)</code>) thay vì REFERENCE đơn. Verify trên
+        đúng batch GL02 thật (26/8): sau fix, <code>detect_huy()</code> không còn nhóm 1410/5708 vào
+        "Đã hủy"; chạy lại toàn bộ pipeline (<code>main_from_dir</code>) trên dữ liệu thật cho ra cả
+        5 dòng flagged đúng lại "citad 26.8" (khớp Citad), 5 dòng của chi nhánh 2008/3600 (cặp hủy
+        thật) vẫn đúng "Hủy" — không mất tín hiệu hủy thật, chỉ hết lây lan sai chi nhánh.</p>
+
+      <p>2 test mới: <code>test_huy_at_one_branch_does_not_leak_to_other_branches</code> +
+        <code>test_process_core_leaves_other_branches_unmarked</code>
+        (<code>TestDetectHuyRefSharedAcrossBranches</code>, <code>test_ilo1000_algorithm.py</code>) —
+        tái hiện đúng kịch bản 3 chi nhánh dùng chung REFERENCE, chỉ 1 chi nhánh có cặp net-zero.
+        6 test cũ đổi key literal từ REFERENCE đơn sang tuple <code>(REFERENCE, TRBRCD)</code> —
+        hành vi không đổi vì mọi test cũ đều dùng 1 TRBRCD cố định cho mỗi REFERENCE. 118/118 test
+        module ILO1000 pass.</p>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-04</footer>
 </div>
 </body>
