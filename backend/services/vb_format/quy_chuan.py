@@ -146,6 +146,11 @@ QUY_CHUAN_MAC_DINH: dict = {
         # bằng 7 thẻ <v:line>, không dùng gạch chân chỗ nào.
         "go_gach_chan_the_thuc": True,
         "ve_duong_ke_ngang": True,
+        # Ngắt trang tay được đặt theo bố cục CŨ. Chuẩn hoá làm chữ cao lên
+        # (giãn dòng 1,2, lề trên 20 mm) nên chỗ xuống trang dịch đi và dấu
+        # ngắt cũ đẻ ra một trang gần như trống. Tắt ô này khi văn bản thật sự
+        # cần sang trang mới — Phụ lục ban hành kèm theo Quyết định chẳng hạn.
+        "bo_ngat_trang_thu_cong": True,
     },
     "thanh_phan": {
         # Cỡ chữ khối đầu lấy theo con số ĐẾM ĐƯỢC trên cả 18 mẫu của Phụ lục V

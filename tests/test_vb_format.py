@@ -12,7 +12,9 @@ import pytest
 from docx import Document
 from docx.shared import Mm, Pt
 
-from backend.services.vb_format import ap_dung, bien_doi, do_chu, nhan_dien, quy_chuan
+from backend.services.vb_format import (
+    ap_dung, bien_doi, do_chu, duong_ke, nhan_dien, quy_chuan,
+)
 from backend.services.vb_format.chuan_hoa import chuan_hoa
 
 
@@ -792,3 +794,281 @@ def test_bang_khai_fixed_thi_khong_co():
         tcPr.append(w)
     p = t.rows[0].cells[0].paragraphs[0]
     assert do_chu._ty_le_co_bang(do_chu._o_bang_cua(p), doc) == 1.0
+
+
+# ── Ba lỗi trên "TB Swift code Quảng Ninh.docx" ──────────────────────────────
+_NS_VE = (
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+    'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+    'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"'
+)
+
+# Đúng thứ Word sinh ra khi người dùng vẽ tay Insert → Shapes → Line: hình được
+# NEO vào đoạn có chữ, không nằm ở đoạn riêng.
+_DUONG_KE_NEO = f'''<w:r {_NS_VE}><w:drawing>
+  <wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0"
+             relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+    <wp:simplePos x="0" y="0"/>
+    <wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>
+    <wp:positionV relativeFrom="paragraph"><wp:posOffset>180000</wp:posOffset></wp:positionV>
+    <wp:extent cx="1714500" cy="0"/><wp:effectExtent l="0" t="0" r="0" b="0"/>
+    <wp:wrapNone/><wp:docPr id="1" name="Straight Connector 1"/>
+    <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+      <wps:wsp><wps:cNvCnPr/><wps:spPr>
+        <a:xfrm><a:off x="0" y="0"/><a:ext cx="1714500" cy="0"/></a:xfrm>
+        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+      </wps:spPr></wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:anchor>
+</w:drawing></w:r>'''
+
+
+def _van_ban_co_san_duong_ke() -> bytes:
+    """Khối đầu văn bản mà người soạn đã tự vẽ đường kẻ, neo trong đoạn có chữ."""
+    from docx.oxml import parse_xml
+
+    doc = Document()
+    doc.add_paragraph("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM")
+    p = doc.add_paragraph("Độc lập - Tự do - Hạnh phúc")
+    p._p.append(parse_xml(_DUONG_KE_NEO))
+    doc.add_paragraph("BÁO CÁO")
+    doc.add_paragraph("Về kết quả kiểm tra quý III.")
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def test_khong_ve_chong_len_duong_ke_da_neo_trong_doan():
+    """Word neo hình vào ĐOẠN CÓ CHỮ, không đặt ở đoạn riêng.
+
+    Chỉ soi đoạn kế tiếp thì không thấy gì và vẽ thêm vạch thứ hai — đúng lỗi
+    gặp trên "TB Swift code Quảng Ninh.docx".
+    """
+    du_lieu, _ = chuan_hoa(_van_ban_co_san_duong_ke())
+    doc = Document(io.BytesIO(du_lieu))
+    tieu_ngu = _tim([p for p, _ in ap_dung.duyet_doan(doc)], "Độc lập")
+    assert duong_ke.da_co_duong_ke(tieu_ngu)
+    ke = tieu_ngu._p.getnext()
+    assert ke is None or "<v:line" not in ke.xml, "đã có vạch rồi mà còn vẽ thêm"
+
+
+def test_logo_trong_doan_khong_bi_coi_la_duong_ke():
+    """Hình trong đoạn chỉ tính là vạch khi nó ĐÚNG là đường thẳng.
+
+    Nhận mọi <w:drawing> thì đoạn tên đơn vị có logo sẽ không bao giờ được kẻ.
+    """
+    from docx.oxml import parse_xml
+
+    doc = Document()
+    p = doc.add_paragraph("Độc lập - Tự do - Hạnh phúc")
+    p._p.append(parse_xml(_DUONG_KE_NEO.replace('prst="line"', 'prst="rect"')))
+    assert not duong_ke.da_co_duong_ke(p)
+
+
+def _sect_pr(du_lieu: bytes):
+    from docx.oxml.ns import qn
+    doc = Document(io.BytesIO(du_lieu))
+    return doc.sections[0]._sectPr.find(qn("w:pgNumType")), qn
+
+
+def test_so_trang_dem_lai_tu_1():
+    """`pgNumType w:start` theo chân văn bản khi cắt một phần ra khỏi tài liệu
+    dài. Chèn số trang đúng chỗ mà đếm từ 23 thì nhìn vẫn là sai."""
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    doc.add_paragraph("Kính gửi: Giám đốc")
+    doc.sections[0]._sectPr.append(parse_xml(
+        '<w:pgNumType xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' w:start="23"/>'))
+    ra = io.BytesIO()
+    doc.save(ra)
+
+    du_lieu, bc = chuan_hoa(ra.getvalue())
+    pgnum, _ = _sect_pr(du_lieu)
+    assert pgnum is not None and pgnum.get(qn("w:start")) == "1"
+    assert any("đánh số trang lại từ 1" in x for x in bc["sua_chung"])
+
+
+def test_khong_dung_den_pgnumtype_khi_von_da_dung():
+    doc = Document()
+    doc.add_paragraph("Kính gửi: Giám đốc")
+    ra = io.BytesIO()
+    doc.save(ra)
+    _, bc = chuan_hoa(ra.getvalue())
+    assert not any("đánh số trang lại" in x for x in bc["sua_chung"])
+
+
+def _van_ban_co_ngat_trang() -> bytes:
+    from docx.oxml import parse_xml
+
+    doc = Document()
+    doc.add_paragraph("1. Nội dung thứ nhất.")
+    doc.add_paragraph()._p.append(parse_xml(
+        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:br w:type="page"/></w:r>'))
+    p = doc.add_paragraph("2. Nội dung thứ hai.")
+    p._p.insert(0, parse_xml(
+        '<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:pageBreakBefore/></w:pPr>'))
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _so_ngat_trang(du_lieu: bytes) -> int:
+    from docx.oxml.ns import qn
+    doc = Document(io.BytesIO(du_lieu))
+    n = sum(1 for p in doc.paragraphs for b in p._p.iter(qn("w:br"))
+            if b.get(qn("w:type")) == "page")
+    n += sum(1 for p in doc.paragraphs
+             if p._p.find(qn("w:pPr")) is not None
+             and p._p.find(qn("w:pPr")).find(qn("w:pageBreakBefore")) is not None)
+    return n
+
+
+def test_bo_ngat_trang_thu_cong_ma_khong_mat_chu():
+    """Ngắt trang tay đặt theo bố cục CŨ; chuẩn hoá làm chữ cao lên nên nó rơi
+    vào giữa chừng và đẻ ra một trang gần như trống."""
+    du_lieu, bc = chuan_hoa(_van_ban_co_ngat_trang())
+    assert _so_ngat_trang(du_lieu) == 0
+    doc = Document(io.BytesIO(du_lieu))
+    chu = "\n".join(p.text for p in doc.paragraphs)
+    assert "1. Nội dung thứ nhất." in chu and "2. Nội dung thứ hai." in chu
+    assert any("ngắt trang thủ công" in x for x in bc["sua_chung"])
+    assert any("ngắt trang" in x for x in bc["luu_y"])
+
+
+def test_tat_cong_tac_thi_giu_nguyen_ngat_trang():
+    """Phụ lục ban hành kèm theo Quyết định thật sự cần sang trang mới."""
+    du_lieu, bc = chuan_hoa(_van_ban_co_ngat_trang(),
+                            {"chung": {"bo_ngat_trang_thu_cong": False}})
+    assert _so_ngat_trang(du_lieu) == 2
+    assert not any("ngắt trang thủ công" in x for x in bc["sua_chung"])
+
+
+def test_doan_co_chu_kem_ngat_trang_chi_mat_dau_ngat():
+    from docx.oxml import parse_xml
+
+    doc = Document()
+    p = doc.add_paragraph("Nội dung quan trọng.")
+    p._p.append(parse_xml(
+        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:br w:type="page"/></w:r>'))
+    ra = io.BytesIO()
+    doc.save(ra)
+
+    du_lieu, _ = chuan_hoa(ra.getvalue())
+    doc2 = Document(io.BytesIO(du_lieu))
+    assert _so_ngat_trang(du_lieu) == 0
+    assert "Nội dung quan trọng." in "\n".join(p.text for p in doc2.paragraphs)
+
+
+def test_khong_xoa_doan_dang_giu_dau_ngat_section():
+    """Đoạn rỗng có `sectPr` là dấu ngắt SECTION — xoá là mất khổ giấy / lề
+    riêng của phần sau, mà không lỗi nào báo."""
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    doc.add_paragraph("Phần một.")
+    p = doc.add_paragraph()
+    p._p.append(parse_xml(
+        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:br w:type="page"/></w:r>'))
+    p._p.insert(0, parse_xml(
+        '<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/></w:sectPr></w:pPr>'))
+    doc.add_paragraph("Phần hai.")
+    ra = io.BytesIO()
+    doc.save(ra)
+
+    du_lieu, _ = chuan_hoa(ra.getvalue())
+    doc2 = Document(io.BytesIO(du_lieu))
+    assert _so_ngat_trang(du_lieu) == 0, "vẫn phải gỡ dấu ngắt trang"
+    assert len(doc2.sections) == 2, "không được nuốt mất dấu ngắt section"
+
+
+# ── Tên đơn vị dài trình bày nhiều dòng (Điều 8.2) ───────────────────────────
+def _khoi_dau(*dong: str) -> bytes:
+    doc = Document()
+    for t in dong:
+        doc.add_paragraph(t)
+    doc.add_paragraph("QUYẾT ĐỊNH")
+    doc.add_paragraph("Về việc điều động cán bộ")
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _ma_cua(du_lieu: bytes) -> list[tuple[str, str]]:
+    """Cụm từ liền dòng được ghép bằng dấu cách KHÔNG NGẮT (U+00A0) — trả về
+    dấu cách thường để tra bằng chuỗi gõ tay trong test."""
+    doc = Document(io.BytesIO(du_lieu))
+    khoi = ap_dung.duyet_doan(doc)
+    ma = nhan_dien.phan_loai([(p.text, tb) for p, tb in khoi])
+    return [(p.text.replace(" ", " ").strip(), m)
+            for (p, _), m in zip(khoi, ma) if p.text.strip()]
+
+
+def _dam(du_lieu: bytes, chua: str) -> bool:
+    doc = Document(io.BytesIO(du_lieu))
+    p = _tim([q for q, _ in ap_dung.duyet_doan(doc)], chua)
+    return bool(ap_dung._hieu_luc_run(p.runs[0], p, "bold"))
+
+
+def test_ten_don_vi_dai_xuong_dong_van_la_mot_ten():
+    """"NGÂN HÀNG NÔNG NGHIỆP / VÀ PHÁT TRIỂN…" là MỘT tên xuống dòng.
+
+    Cắt đôi thành chủ quản + ban hành là bỏ in đậm nửa trên — sai ngay dòng đầu
+    tiên của văn bản, đúng lỗi người dùng chỉ ra trên "TB Swift code Quảng Ninh".
+    """
+    du_lieu, _ = chuan_hoa(_khoi_dau("NGÂN HÀNG NÔNG NGHIỆP",
+                                     "VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM"))
+    ma = dict(_ma_cua(du_lieu))
+    assert ma["NGÂN HÀNG NÔNG NGHIỆP"] == "ten_dv_ban_hanh"
+    assert ma["VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM"] == "ten_dv_ban_hanh"
+    assert _dam(du_lieu, "NGÂN HÀNG NÔNG NGHIỆP"), "cả hai dòng phải in đậm"
+    assert _dam(du_lieu, "VÀ PHÁT TRIỂN")
+
+
+def test_khoi_hai_cap_that_khong_bi_gop():
+    """Dòng sau bắt đầu một tên MỚI thì vẫn là hai cấp đơn vị như cũ."""
+    du_lieu, _ = chuan_hoa(_khoi_dau("NGÂN HÀNG NÔNG NGHIỆP VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM",
+                                     "CHI NHÁNH HÀ NỘI"))
+    ma = dict(_ma_cua(du_lieu))
+    assert ma["NGÂN HÀNG NÔNG NGHIỆP VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM"] == "ten_dv_chu_quan"
+    assert ma["CHI NHÁNH HÀ NỘI"] == "ten_dv_ban_hanh"
+    assert not _dam(du_lieu, "NGÂN HÀNG NÔNG NGHIỆP VÀ"), "chủ quản không in đậm"
+    assert _dam(du_lieu, "CHI NHÁNH HÀ NỘI")
+
+
+def test_ten_chu_quan_dai_xuong_dong_van_la_chu_quan():
+    """Ba dòng: hai dòng đầu là MỘT tên chủ quản, dòng ba mới là đơn vị ban hành."""
+    du_lieu, _ = chuan_hoa(_khoi_dau("NGÂN HÀNG NÔNG NGHIỆP",
+                                     "VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM",
+                                     "CHI NHÁNH QUẢNG NINH"))
+    ma = dict(_ma_cua(du_lieu))
+    assert ma["NGÂN HÀNG NÔNG NGHIỆP"] == "ten_dv_chu_quan"
+    assert ma["VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM"] == "ten_dv_chu_quan"
+    assert ma["CHI NHÁNH QUẢNG NINH"] == "ten_dv_ban_hanh"
+
+
+def test_cum_ten_don_vi_nhieu_dong_chi_mot_duong_ke():
+    """Vạch nằm dưới dòng CUỐI của cụm, không chen vào giữa hai dòng."""
+    du_lieu, _ = chuan_hoa(_khoi_dau("NGÂN HÀNG NÔNG NGHIỆP",
+                                     "VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM"))
+    doc = Document(io.BytesIO(du_lieu))
+    thu_tu = []
+    for p, _ in ap_dung.duyet_doan(doc):
+        if "<v:line" in p._p.xml:
+            thu_tu.append("KE")
+        elif p.text.strip():
+            thu_tu.append(p.text.replace(" ", " ").strip())
+    i = thu_tu.index("NGÂN HÀNG NÔNG NGHIỆP")
+    assert thu_tu[i + 1] == "VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM", "không chen vạch vào giữa"
+    assert thu_tu[i + 2] == "KE", "cụm hai dòng chỉ được MỘT vạch, ở dưới dòng cuối"
+    # Vạch thứ hai là của trích yếu (Điều 11.2) — đúng, không phải vạch thừa.
+    assert thu_tu.count("KE") == 2
