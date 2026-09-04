@@ -1135,6 +1135,20 @@ async def leaves_page():
 
                         ui.timer(2.5, lambda: ui.navigate.to("/leaves"), once=True)
 
+                    except api.QuotaExceededBorrowError as e:
+                        # Vượt hạn mức năm nay nhưng năm sau còn đủ chỗ ứng — hỏi xác
+                        # nhận thay vì chặn cứng, xem _check_quota_or_borrow ở backend.
+                        async def _retry_with_borrow(_body2=_body):
+                            _body2["confirm_borrow_next_year"] = True
+                            await _send(_body2)
+                        _ask_confirm(
+                            "Vượt hạn mức phép",
+                            f"Đơn nghỉ phép đã vượt quá hạn mức ngày nghỉ phép năm {e.year} "
+                            f"(còn lại {e.remaining:.0f} ngày). Bạn có muốn tiếp tục ứng trước "
+                            f"{e.borrow_days:.0f} ngày phép của năm {e.next_year} không?",
+                            _retry_with_borrow, "Đồng ý ứng phép", "bg-orange-600",
+                        )
+
                     except Exception as e:
 
                         if not _handle_api_error(e):
@@ -5356,29 +5370,13 @@ async def leaves_page():
 
                                     ui.button("Hủy", on_click=_dlg.close).props("flat").classes("text-gray-500")
 
-                                    async def _on_confirm(_b=body, _d=_dlg, _rng=is_rng):
-
-                                        _d.close()
-
-                                        try:
-
-                                            await asyncio.to_thread(api.post, "/api/leaves/direct", _b)
-
-                                        except Exception as e:
-
-                                            if not _handle_api_error(e):
-
-                                                ui.notify(f"Khai báo thất bại: {e}", type="negative", timeout=5000)
-
-                                            return
-
-                                        ui.notify("✅ Khai báo hộ thành công!", type="positive", timeout=4000)
-
+                                    def _on_direct_created(_rng=is_rng):
                                         # Đơn mới tạo phải phản ánh vào Dashboard/5 ô KPI/"Đơn của tôi"...
                                         # nhưng các dữ liệu đó chỉ fetch 1 lần lúc mở trang, không tự refetch
                                         # khi đổi tab nữa (xem _on_leave_tab_change) — phải reload thật qua
                                         # _nav_pending() giống hệt cơ chế duyệt/từ chối, quay lại đúng tab
                                         # Khai báo hộ sau khi reload xong.
+                                        ui.notify("✅ Khai báo hộ thành công!", type="positive", timeout=4000)
 
                                         d_staff.value = None
                                         if _rng:
@@ -5396,6 +5394,34 @@ async def leaves_page():
                                         d_reason.set_visibility(False)
 
                                         _nav_pending()
+
+                                    async def _send_direct(_b):
+                                        try:
+                                            await asyncio.to_thread(api.post, "/api/leaves/direct", _b)
+                                        except api.QuotaExceededBorrowError as e:
+                                            # Vượt hạn mức năm nay nhưng năm sau còn đủ chỗ ứng — hỏi
+                                            # xác nhận thay vì chặn cứng, xem _check_quota_or_borrow.
+                                            async def _retry_with_borrow(_b2=_b):
+                                                _b2["confirm_borrow_next_year"] = True
+                                                await _send_direct(_b2)
+                                            _ask_confirm(
+                                                "Vượt hạn mức phép",
+                                                f"Đơn khai báo hộ đã vượt quá hạn mức ngày nghỉ phép năm "
+                                                f"{e.year} (còn lại {e.remaining:.0f} ngày). Bạn có muốn "
+                                                f"tiếp tục ứng trước {e.borrow_days:.0f} ngày phép của năm "
+                                                f"{e.next_year} không?",
+                                                _retry_with_borrow, "Đồng ý ứng phép", "bg-orange-600",
+                                            )
+                                            return
+                                        except Exception as e:
+                                            if not _handle_api_error(e):
+                                                ui.notify(f"Khai báo thất bại: {e}", type="negative", timeout=5000)
+                                            return
+                                        _on_direct_created()
+
+                                    async def _on_confirm(_b=body, _d=_dlg):
+                                        _d.close()
+                                        await _send_direct(_b)
 
                                     ui.button("Khai báo", icon="check",
 

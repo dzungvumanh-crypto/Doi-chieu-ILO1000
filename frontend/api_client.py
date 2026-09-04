@@ -25,6 +25,20 @@ class ApiFileError(Exception):
         self.filenames = filenames or []
 
 
+class QuotaExceededBorrowError(Exception):
+    """Lỗi 409 khi tạo/nộp lại/khai báo hộ đơn nghỉ phép vượt hạn mức năm nay —
+    backend trả detail dạng dict {"code":"quota_exceeded_borrow", "year", "next_year",
+    "remaining", "borrow_days"} (xem _check_quota_or_borrow ở backend/api/leaves.py).
+    FE dùng để hỏi xác nhận "ứng phép năm sau" thay vì chặn cứng."""
+
+    def __init__(self, detail: dict):
+        super().__init__("Vượt quá số ngày phép còn lại")
+        self.year = detail.get("year")
+        self.next_year = detail.get("next_year")
+        self.remaining = detail.get("remaining")
+        self.borrow_days = detail.get("borrow_days")
+
+
 class SessionExpiredError(Exception):
     """Raised khi backend trả 401 — session đã hết hạn hoặc đã logout."""
     pass
@@ -200,6 +214,9 @@ def _raise_http_error(e: httpx.HTTPStatusError):
         raw_detail = None
     if isinstance(raw_detail, dict) and "filenames" in raw_detail:
         raise ApiFileError(raw_detail.get("message") or str(raw_detail), raw_detail.get("filenames"))
+    if (e.response.status_code == 409 and isinstance(raw_detail, dict)
+            and raw_detail.get("code") == "quota_exceeded_borrow"):
+        raise QuotaExceededBorrowError(raw_detail)
     raise Exception(_parse_error(e))
 
 
