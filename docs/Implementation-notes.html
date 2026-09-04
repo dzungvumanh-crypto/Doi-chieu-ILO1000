@@ -51,7 +51,156 @@
 <div class="page">
 
   <h1>⚙ Implementation Notes — PAYMENT CENTER</h1>
-  <p class="subtitle">Ghi chú kỹ thuật, quyết định thiết kế, đánh đổi. Cập nhật liên tục. | 2026-09-03</p>
+  <p class="subtitle">Ghi chú kỹ thuật, quyết định thiết kế, đánh đổi. Cập nhật liên tục. | 2026-09-04</p>
+
+  <!-- VB3 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">VB3</span>
+      <span class="card-title">Chuẩn hoá văn bản — bốn lỗi trên văn bản thật "TB Swift code Quảng Ninh"</span>
+      <span class="badge badge-done">Đã sửa — 1533 test pass (12 test mới)</span>
+    </div>
+    <div class="card-body">
+
+      <p>Người dùng đưa một cặp file gốc/đã chuẩn hoá và chỉ ra bốn chỗ sai. Cả bốn tái hiện được,
+        nguyên nhân xác định bằng XML và bằng bản PDF dựng lại qua Word.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 1</span> Số trang in ra "24", "25" thay vì "2", "3"</div>
+      <p>Số trang được chèn <b>đúng chỗ</b> (canh giữa lề trên, bỏ trang đầu) — phần đó không sai.
+        Sai ở chỗ <code>sectPr</code> của bản gốc mang <code>&lt;w:pgNumType w:start="23"/&gt;</code>,
+        bắt Word đếm trang từ 23.</p>
+      <div class="note">Thẻ này theo chân văn bản mỗi khi người soạn <b>cắt một phần ra khỏi tài
+        liệu dài rồi lưu thành file riêng</b> — tình huống phổ biến nhất ở đây. Người soạn không
+        nhìn thấy nó ở đâu trên màn hình Word, nên không có cách nào tự phát hiện.
+        <code>_dat_lai_so_trang_dau()</code> ép về 1 và ghi vào nhật ký kèm số cũ, để người dùng
+        biết mà phản đối nếu văn bản thật sự là phần tiếp của tài liệu khác.</div>
+
+      <div class="label"><span class="pill pill-red">Lỗi 2</span> Tiêu ngữ có sẵn đường kẻ, phần mềm vẽ thêm vạch thứ hai</div>
+      <p><code>da_co_duong_ke()</code> chỉ soi <b>đoạn kế tiếp</b>. Nhưng có hai cách đặt vạch, và
+        văn bản thật dùng cách thứ hai:</p>
+      <table>
+        <tr><th>Cách đặt</th><th>Nằm ở đâu</th><th>Cũ có thấy không</th></tr>
+        <tr><td>Phần mềm này tự vẽ</td><td>Một đoạn riêng ngay dưới, chỉ chứa vạch</td>
+            <td><span class="pill pill-green">Có</span></td></tr>
+        <tr><td>Người dùng vẽ tay (Insert → Shapes → Line)</td>
+            <td><b>Neo trong chính đoạn có chữ</b>, <code>positionV relativeFrom="paragraph"</code>
+                đẩy xuống dưới dòng</td>
+            <td><span class="pill pill-red">Không</span></td></tr>
+      </table>
+      <p>Nhìn trên màn hình hai cách y hệt nhau. Nay soi cả chính đoạn <code>p</code>.</p>
+      <div class="caution"><b>Hai vế soi bằng hai mức chặt khác nhau — cố ý.</b>
+        Ở <b>chính đoạn</b> chỉ nhận đúng hình đường thẳng
+        (<code>&lt;v:line&gt;</code>, <code>prstGeom prst="line"</code>,
+        <code>prst="straightConnector1"</code>). Nhận mọi <code>&lt;w:drawing&gt;</code> thì
+        <b>đoạn tên đơn vị có logo sẽ không bao giờ được kẻ</b> — mất vạch mà không lỗi nào báo.
+        Ở <b>đoạn kế tiếp</b> vẫn nới tay như cũ: một đoạn rỗng chỉ chứa hình thì hình đó gần như
+        chắc chắn là vạch.</div>
+      <div class="note"><b>Bẫy khi đếm vạch để kiểm tra:</b> Word ghi hình vẽ hai lần trong cùng
+        một <code>&lt;mc:AlternateContent&gt;</code> — bản DrawingML ở <code>mc:Choice</code> và
+        bản VML dự phòng ở <code>mc:Fallback</code>. Đếm <code>&lt;v:line</code> cộng
+        <code>prstGeom prst="line"</code> ra <b>2</b> cho <b>một</b> vạch duy nhất. Kiểm bằng cách
+        đếm <b>số đoạn</b> chứa vạch, hoặc dựng ảnh trang ra nhìn.</div>
+
+      <div class="label"><span class="pill pill-red">Lỗi 3</span> Trang 2 chỉ có một đoạn văn</div>
+      <p>Bản gốc 2 trang, chuẩn hoá xong thành <b>3 trang</b> — trang 2 chỉ chứa đúng một đoạn.
+        Tách từng nguyên nhân bằng cách dựng PDF cho từng biến thể:</p>
+      <table>
+        <tr><th>Biến thể</th><th>Số trang</th><th>Kết luận</th></tr>
+        <tr><td>Nguyên bản đã chuẩn hoá</td><td><span class="pill pill-red">3</span></td><td>—</td></tr>
+        <tr><td>Trả lề trên về 15 mm</td><td><span class="pill pill-red">3</span></td>
+            <td>Lề trang <b>không</b> phải nguyên nhân</td></tr>
+        <tr><td>Đổi ngắt trang thành <code>pageBreakBefore</code></td><td><span class="pill pill-red">3</span></td>
+            <td>Cách ghi dấu ngắt <b>không</b> đổi được gì</td></tr>
+        <tr><td>Trả giãn dòng về 1,0</td><td><span class="pill pill-green">2</span></td>
+            <td>Chữ cao lên là thứ đẩy đoạn cuối sang trang sau</td></tr>
+        <tr><td><b>Gỡ hẳn dấu ngắt trang</b></td><td><span class="pill pill-green">2</span></td>
+            <td>Cách đã chọn</td></tr>
+      </table>
+      <p>Cơ chế: giãn dòng 1,2 (Điều 12.6) làm đoạn cuối của mục 1 tràn sang trang 2, rồi dấu ngắt
+        trang <b>của tác giả</b> đẩy mục 2 sang trang 3. Không có lỗi lập trình nào ở đây — chuẩn
+        hoá làm đúng việc của nó, còn dấu ngắt thì được đặt theo <b>bố cục cũ</b>.</p>
+
+      <div class="label"><span class="pill pill-blue">Quyết định</span> Gỡ ngắt trang thủ công, mặc định BẬT</div>
+      <table>
+        <tr><th>Phương án</th><th>Vì sao chọn / bỏ</th></tr>
+        <tr><td><b>Gỡ, mặc định bật, có công tắc tắt</b> (đã chọn)</td>
+            <td>Người dùng gọi đây là lỗi cần khắc phục. Việc gỡ <b>hiện trong nhật ký</b> và có
+                một dòng Lưu ý nói rõ cách tắt, nên không phải thay đổi âm thầm. Bản gốc không bao
+                giờ bị sửa — kết quả là file mới, người dùng đọc nhật ký rồi mới tải.</td></tr>
+        <tr><td>Chỉ cảnh báo, không gỡ</td>
+            <td>Trung thực nhưng bỏ nguyên việc cho người dùng làm tay trên từng văn bản.</td></tr>
+        <tr><td>Gỡ, không cho tắt</td>
+            <td>Phụ lục ban hành kèm theo Quyết định <b>thật sự</b> cần sang trang mới. Không có
+                đường lui là hỏng đúng nhóm văn bản đó.</td></tr>
+      </table>
+      <div class="caution"><b>Không mất chữ:</b> đoạn CHỈ chứa dấu ngắt thì bỏ cả đoạn; đoạn có
+        chữ thì chỉ nhấc riêng thẻ <code>&lt;w:br&gt;</code>, giữ nguyên chữ.
+        <code>&lt;w:pageBreakBefore/&gt;</code> trong <code>pPr</code> gỡ cùng.
+        <b>Phải gỡ TRƯỚC <code>duyet_doan()</code></b> — việc này xoá bớt đoạn, mà
+        <code>ma_list</code> khớp với <code>khoi</code> theo chỉ số; gỡ sau là hai danh sách lệch
+        một nhịp và mọi đoạn phía sau bị áp nhầm thể thức.</div>
+      <div class="caution"><b>Đoạn rỗng có thể đang giữ dấu ngắt SECTION.</b> Word lưu
+        <code>sectPr</code> của section trước trong <code>pPr</code> của một đoạn — đoạn đó
+        thường rỗng và rất hay kèm luôn dấu ngắt trang. Xoá nó là <b>gộp hai section làm một</b>,
+        mất khổ giấy / lề / hướng trang riêng của phần sau, và không có lỗi nào báo. Gặp đoạn như
+        vậy thì chỉ nhấc thẻ <code>&lt;w:br&gt;</code> ra, giữ lại đoạn.</div>
+      <p>Chỉ gỡ dấu ngắt đặt <b>thẳng trên đoạn</b>. <code>pageBreakBefore</code> khai ở
+        <b>style</b> (Heading 1 chẳng hạn) không đụng tới — đó là quyết định về bố cục của cả văn
+        bản, không phải chỗ chêm tay.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 4</span> Nửa trên của tên ngân hàng bị bỏ in đậm</div>
+      <p>Khối đầu văn bản có hai dòng in hoa. Bản gốc in đậm <b>cả hai</b> — vì đó là MỘT tên, dài
+        nên xuống dòng (Điều 8.2 cho phép). Chuẩn hoá xong dòng trên hoá chữ thường:</p>
+      <table>
+        <tr><th>Dòng</th><th>Bị nhận là</th><th>Hậu quả</th></tr>
+        <tr><td>NGÂN HÀNG NÔNG NGHIỆP</td><td><code>ten_dv_chu_quan</code></td>
+            <td><span class="pill pill-red">bỏ in đậm</span></td></tr>
+        <tr><td>VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM</td><td><code>ten_dv_ban_hanh</code></td>
+            <td>in đậm + đường kẻ</td></tr>
+      </table>
+      <p>Quy tắc cũ đọc <b>mỗi dòng là một cấp đơn vị</b>: dòng cuối là đơn vị ban hành, các dòng
+        trên là đơn vị chủ quản. Gặp một tên dài xuống dòng thì nó cắt đôi chính cái tên ấy — sai
+        ngay dòng đầu tiên của văn bản, và sai theo kiểu "phần mềm tự tin làm đúng" nên người dùng
+        dễ tin là đúng.</p>
+      <p><code>_gom_ten_dv_nhieu_dong()</code> gom khối thành từng <b>CỤM</b> trước, rồi mới lấy cụm
+        cuối làm đơn vị ban hành. Đây là đối xứng của <code>_noi_dai_trich_yeu()</code> đã có —
+        cùng một loại lỗi (thành phần thể thức trải nhiều dòng), khác chiều nối.</p>
+      <table>
+        <tr><th>Khối đầu văn bản</th><th>Kết quả</th></tr>
+        <tr><td>NGÂN HÀNG NÔNG NGHIỆP<br>VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM</td>
+            <td>1 cụm → cả hai dòng là <b>ban hành</b>, đậm cả hai</td></tr>
+        <tr><td>NGÂN HÀNG … VIỆT NAM<br>CHI NHÁNH HÀ NỘI</td>
+            <td>2 cụm → chủ quản / ban hành, <b>y như cũ</b></td></tr>
+        <tr><td>NGÂN HÀNG NÔNG NGHIỆP<br>VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM<br>CHI NHÁNH QUẢNG NINH</td>
+            <td>2 cụm → hai dòng đầu là <b>chủ quản</b>, dòng ba là ban hành</td></tr>
+      </table>
+      <div class="caution"><b>Dấu hiệu nhận cụm cố ý để HẸP:</b> chỉ nhận dòng mở đầu bằng liên từ
+        hoặc gạch nối (<code>VÀ</code>, <code>-</code>, <code>–</code>, <code>—</code>) — không tên
+        cơ quan nào bắt đầu như vậy, nên đây là dấu hiệu chắc chắn chứ không phải phỏng đoán.
+        <br><br>Chỗ xuống dòng giữa cụm danh từ (<i>"… VÀ PHÁT TRIỂN / NÔNG THÔN VIỆT NAM"</i>)
+        <b>không</b> bắt được, và cố ý không cố bắt: không có dấu hiệu nào đọc ra được, mà đoán bừa
+        ở đây là <b>gộp nhầm hai cấp đơn vị thật thành một</b> — hỏng nặng hơn hẳn cái nó định chữa.</div>
+      <p>Vạch vẫn chỉ có <b>một</b>, nằm dưới dòng cuối của cụm: <code>chuan_hoa</code> đã sẵn quy
+        tắc "chỉ vẽ khi đoạn kế tiếp mang mã khác", mà nay hai dòng cùng mang
+        <code>ten_dv_ban_hanh</code> nên dòng đầu tự động không được vẽ.</p>
+
+      <div class="label"><span class="pill pill-gray">Đi kèm</span> Năm công tắc trước nay không có trên màn hình</div>
+      <p><code>nen_chu_cho_vua_dong</code>, <code>nen_toi_da_twip</code>,
+        <code>go_gach_chan_the_thuc</code>, <code>ve_duong_ke_ngang</code> được thêm vào
+        <code>quy_chuan.py</code> ở đợt trước nhưng <b>chưa bao giờ được vẽ ra tab Cấu hình</b> —
+        đúng thứ mà chính docstring của <code>frontend/pages/vb_format.py</code> cảnh báo: luật vẫn
+        chạy nhưng người dùng không thấy nó ở đâu để hiểu vì sao văn bản bị sửa. Nay cả bốn cộng
+        <code>bo_ngat_trang_thu_cong</code> đều có ô tick.</p>
+
+      <div class="label"><span class="pill pill-gray">Thấy nhưng không sửa</span> "Bao cao nghiem thu NPA.docx" gần như không được đụng tới</div>
+      <p>Chạy thử file thứ hai trong cùng thư mục test: nhật ký chỉ ghi <i>"phông chữ → Times New
+        Roman"</i>, 11/73 đoạn được sửa, không có dòng lề trang hay giãn dòng nào. Có thể văn bản
+        đó vốn đã đúng, cũng có thể nhận diện thể thức trượt trên bố cục của nó. <b>Chưa điều
+        tra</b> — nằm ngoài ba lỗi được yêu cầu, và chưa có mô tả "đúng ra phải thế nào" để đối
+        chiếu.</p>
+
+    </div>
+  </div>
 
   <!-- NK1 -->
   <div class="card">

@@ -46,13 +46,45 @@ TY_LE = {
 _DAI_TOI_THIEU_PT = 20.0
 
 
+# Dấu hiệu của một đối tượng ĐƯỜNG THẲNG. Word cũ ghi bằng VML (`<v:line>`),
+# Word từ 2007 ghi bằng DrawingML: một shape có hình dựng sẵn là "line" (menu
+# Insert → Shapes → Line, Word gọi là "Straight Connector").
+_HINH_DUONG_KE = ('<v:line', 'prstGeom prst="line"', 'prst="straightConnector1"')
+
+
+def _co_hinh_duong_ke(xml: str) -> bool:
+    return any(dau in xml for dau in _HINH_DUONG_KE)
+
+
 def da_co_duong_ke(p) -> bool:
-    """Đoạn ngay sau `p` đã là một đường kẻ rồi hay chưa."""
+    """Đã có sẵn một đường kẻ cho đoạn `p` rồi hay chưa.
+
+    Phải soi HAI chỗ, vì có hai cách người soạn đặt vạch:
+
+    * **Đoạn kế tiếp** — cách phần mềm này vẽ: một đoạn riêng chỉ chứa vạch.
+    * **Chính đoạn `p`** — cách Word đặt khi người dùng vẽ tay: hình được
+      *neo* vào đoạn có chữ, `positionV relativeFrom="paragraph"` đẩy nó
+      xuống dưới dòng chữ. Nhìn trên màn hình y hệt, nhưng nằm trong cùng một
+      `<w:p>` với chữ.
+
+    Bỏ sót vế thứ hai là **vẽ chồng vạch thứ hai lên văn bản vốn đã đúng** —
+    đã xảy ra thật với "TB Swift code Quảng Ninh.docx": cả Tiêu ngữ lẫn tên
+    đơn vị ban hành đều có sẵn một Straight Connector neo trong đoạn, chuẩn
+    hoá xong thành hai vạch chồng nhau.
+
+    Ở chính đoạn `p` chỉ nhận đúng hình ĐƯỜNG THẲNG, không nhận mọi
+    `<w:drawing>`: đoạn tên đơn vị hay có logo kèm theo, coi logo là vạch thì
+    văn bản thiếu hẳn đường kẻ mà không có lỗi nào báo.
+    """
+    if _co_hinh_duong_ke(p._p.xml):
+        return True
     ke = p._p.getnext()
     if ke is None or ke.tag != qn("w:p"):
         return False
     xml = ke.xml
-    return "<v:line" in xml or "<w:drawing" in xml or "<v:rect" in xml
+    # Đoạn kế tiếp: nới tay hơn — một đoạn RỖNG chỉ chứa hình thì hình đó gần
+    # như chắc chắn là vạch, và đó cũng đúng thứ phần mềm này tự vẽ ra.
+    return _co_hinh_duong_ke(xml) or "<w:drawing" in xml or "<v:rect" in xml
 
 
 def go_gach_chan(p) -> bool:
