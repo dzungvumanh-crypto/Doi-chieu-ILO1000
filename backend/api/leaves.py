@@ -3221,19 +3221,27 @@ def export_npbb_batch(
     if not os.path.exists(tpl_path):
         raise HTTPException(500, "Chưa có template báo cáo NPBB")
 
+    # feature leaves.stats_export chỉ gate theo group_features, không tự ràng buộc
+    # phòng ban — nếu admin lỡ gán quyền này cho nhóm không phải Tổng hợp/lãnh đạo,
+    # phải tự lọc ở đây để không lộ dữ liệu toàn trung tâm (khớp export_all_leaves_annual).
+    _scope_required = (current["role"] not in ("admin", "giam_doc", "pho_giam_doc")
+                       and not _is_tong_hop_staff(current, db))
+    _dept_sql    = " AND s.department_id = ?" if _scope_required else ""
+    _dept_params = [current.get("department_id")] if _scope_required else []
+
     roots = db.execute(
-        """SELECT lr.*, s.full_name AS staff_name, s.role AS staff_role,
+        f"""SELECT lr.*, s.full_name AS staff_name, s.role AS staff_role,
                   s.join_industry_date, d.name AS dept_name
            FROM leave_records lr
            LEFT JOIN user_tttt s   ON lr.staff_id = s.id
            LEFT JOIN departments d ON s.department_id = d.id
            WHERE lr.leave_type='bat_buoc' AND lr.adjusts_leave_id IS NULL
-             AND strftime('%Y', lr.start_date) = ?
+             AND strftime('%Y', lr.start_date) = ?{_dept_sql}
              AND (lr.status='approved' OR EXISTS(
                     SELECT 1 FROM leave_records adj
                     WHERE adj.adjusts_leave_id = lr.id AND adj.status='approved'))
            ORDER BY d.name, s.full_name""",
-        (str(year),),
+        [str(year)] + _dept_params,
     ).fetchall()
 
     def _fmt_range(s: str, e: str) -> str:
