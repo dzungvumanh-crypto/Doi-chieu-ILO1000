@@ -7,11 +7,16 @@ reach vào hàm `_private` của gói khác.
 """
 
 import fnmatch
+import re
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterator
+
+import pandas as pd
+
+_TOAN_CHU_SO = re.compile(r"[0-9]+")
 
 
 def thu_muc_ngay_ung_vien(goc_dir: Path, ngay: str) -> list[Path]:
@@ -69,6 +74,23 @@ def tim_file_glob(goc_dir: Path, ngay: str, pattern: str) -> list[Path]:
         if matches:
             return matches
     return []
+
+
+def bao_ve_khoa_so_khoi_excel(s: pd.Series) -> pd.Series:
+    """Bọc `="..."` quanh các giá trị TOÀN CHỮ SỐ trước khi ghi CSV chi tiết — phát hiện từ bug
+    báo cáo 2026-09-04: khoá SPT (`TXID` phía hub, `MtId/MsgId` phía kênh) là chuỗi 16 chữ số
+    thuần, còn khoá SPRT (`MSGREF`, `MtId/MsgId` 34 ký tự) là chữ+số nên Excel tự nhận đúng là
+    text. Excel mở CSV trực tiếp tự suy luận cột toàn chữ số là kiểu Số — vượt giới hạn 15 chữ số
+    có nghĩa (giới hạn công bố chính thức của Excel) thì làm tròn chữ số cuối về 0, và số 0 đứng
+    đầu bị rụng mất. `="..."` buộc Excel hiểu ô là công thức trả về chuỗi, hiển thị đúng nguyên
+    văn — không đổi giá trị dòng lệnh mà tool khác (không phải Excel) đọc CSV này.
+
+    Chỉ bọc giá trị KHỚP TOÀN BỘ chuỗi chữ số (`fullmatch`) — giá trị có `-` (VD "GD chuyển
+    tiếp") hay bất kỳ ký tự nào khác giữ nguyên, nên không có `=`/`+`/`-`/`@`/dấu nháy kép nào từ
+    dữ liệu lọt được vào trong công thức tự tạo — không phát sinh rủi ro command/formula injection
+    dù `MtId/MsgId` đến từ file ngân hàng đối tác (nguồn ít tin cậy hơn dữ liệu nội bộ)."""
+    la_so = s.str.fullmatch(_TOAN_CHU_SO) == True  # noqa: E712 — NaN == True là False, tránh warning downcast của .fillna
+    return s.where(~la_so, '="' + s + '"')
 
 
 def kiem_tra_du_lieu(ten_file_list: list[str], ngay: str, ma_nh: str) -> dict[str, str]:

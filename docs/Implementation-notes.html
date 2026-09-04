@@ -13399,6 +13399,61 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">118</span>
+      <span class="card-title">Đối chiếu Song phương chiều ĐẾN — khoá SPT (16 chữ số thuần) bị Excel làm sai khi mở CSV chi tiết trực tiếp (2026-09-04)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Báo cáo người dùng</span> Cột khoá SP THƯỜNG sai sau khi xuất file kết quả</div>
+      <p>Kênh↔Hub: file <code>..._kenh_chi_tiet.csv</code>, cột <code>MtId/MsgId</code> của SP
+        THƯỜNG sai. Hub↔Core: file <code>..._hub_chi_tiet.csv</code>, cột <code>TXID</code> của SP
+        THƯỜNG sai. Cả hai chỉ xảy ra với SP THƯỜNG (SPT), không phải SP REALTIME (SPRT).</p>
+
+      <div class="label"><span class="pill pill-blue">Nguyên nhân gốc</span> Excel tự suy luận cột toàn chữ số là kiểu Số khi mở CSV trực tiếp</div>
+      <p>Khoá SPT (<code>TXID</code> phía hub, <code>MtId/MsgId</code> phía kênh) là chuỗi
+        <b>16 chữ số thuần</b> (xác nhận trong docstring test có sẵn:
+        <code>test_doi_chieu_song_phuong_kenh_algorithm.py</code> dòng 5). Khoá SPRT
+        (<code>MSGREF</code>, <code>MtId/MsgId</code> 34 ký tự) là <b>chữ+số</b> nên Excel tự nhận
+        đúng kiểu văn bản — đây chính xác là lý do chỉ SPT bị sai, SPRT thì không.</p>
+      <p>Cả 2 file chi tiết đã đổi từ Excel sang CSV thuần (2026-08-31, card 98, vì lý do hiệu
+        năng) — CSV không mang theo định dạng cột như file .xlsx. Excel mở CSV trực tiếp (double-
+        click) tự suy luận mỗi cột toàn chữ số là kiểu Số theo "General": số 0 đứng đầu bị rụng,
+        và số vượt quá <b>15 chữ số có nghĩa</b> (giới hạn công bố chính thức của Excel — xem
+        "Excel specifications and limits") bị làm tròn chữ số cuối về 0. Chuỗi 16 chữ số của SPT
+        vượt đúng giới hạn này ở MỌI giá trị, không phải trường hợp hiếm.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Bọc <code>="..."</code> quanh giá trị TOÀN CHỮ SỐ trước khi ghi CSV</div>
+      <p><code>doi_chieu_song_phuong_common.py::bao_ve_khoa_so_khoi_excel()</code> — hàm dùng
+        chung cho cả 2 module. Chỉ bọc giá trị <b>khớp toàn bộ</b> (<code>fullmatch</code>) chuỗi
+        chữ số bằng <code>="&lt;giá trị&gt;"</code>: Excel hiểu ô là công thức trả về chuỗi, hiển
+        thị đúng nguyên văn (giữ số 0 đứng đầu, giữ đủ chữ số). Áp dụng cho đúng 2 cột khoá HUB
+        (<code>MSGREF</code>, <code>TXID</code>) ở cả 2 file hub chi tiết, và cột khoá kênh
+        (<code>MtId/MsgId</code>) ở file kênh chi tiết — SPRT không đổi gì (giá trị có chữ cái nên
+        không khớp <code>fullmatch</code>, giữ nguyên).</p>
+      <div class="note">Guard bằng <code>fullmatch</code> loại hoàn toàn rủi ro command/formula
+        injection dù <code>MtId/MsgId</code> đến từ file ngân hàng đối tác (nguồn kém tin cậy hơn
+        dữ liệu nội bộ): giá trị bọc chỉ có thể là chữ số thuần, không có ký tự
+        <code>=</code>/<code>+</code>/<code>-</code>/<code>@</code>/dấu nháy kép nào từ dữ liệu lọt
+        được vào công thức tự tạo.</div>
+      <div class="note">pandas <code>to_csv</code> tự nhân đôi dấu nháy kép và bọc field trong dấu
+        nháy kép khi field chứa ký tự <code>"</code> (đúng chuẩn CSV/RFC 4180) — file trên đĩa có
+        dạng <code>"=""1234567890123456"""</code>, đọc lại bằng <code>pd.read_csv</code> hay mở
+        bằng Excel đều ra đúng nội dung field <code>="1234567890123456"</code>. Test verify bằng
+        đọc lại CSV thật qua <code>pd.read_csv</code>, không so khớp chuỗi thô trên file.</div>
+
+      <p>4 test mới (<code>bao_ve_khoa_so_khoi_excel</code> trong
+        <code>test_doi_chieu_song_phuong_common.py</code>: khoá SPT 16 số, khoá SPRT chữ+số, TXID
+        có dấu gạch ngang, chuỗi rỗng/NaN, số 0 đứng đầu) + 2 test tích hợp ghi CSV thật ra đĩa rồi
+        đọc lại (<code>test_doi_chieu_song_phuong_kenh_algorithm.py</code>,
+        <code>test_doi_chieu_song_phuong_core_algorithm.py</code>). Toàn bộ test module Đối chiếu
+        Song phương (112 test) pass.</p>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-04</footer>
 </div>
 </body>

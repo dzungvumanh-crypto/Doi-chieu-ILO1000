@@ -9,8 +9,11 @@ from pathlib import Path
 import pandas as pd
 
 from backend.services.ach.so_tien import doc_so_tien
+from backend.services.doi_chieu_song_phuong_common import bao_ve_khoa_so_khoi_excel
 
 from .match import KEY_COL
+
+_COT_KHOA_HUB_CAN_BAO_VE = ("MSGREF", "TXID")
 
 _TONG_HOP_COLS = ["Nhãn (KETQUADOICHIEU)", "Số dòng CORE", "Số tiền CORE", "Số dòng HUB", "Số tiền HUB"]
 
@@ -69,6 +72,10 @@ def export_excel(ket_qua: dict, out_dir: str | Path, base_name: str) -> list[Pat
     core_df.drop(columns=[KEY_COL], errors="ignore").to_csv(core_csv_path, index=False, encoding="utf-8-sig")
 
     hub_csv_path = out_dir / f"{base_name}_hub_chi_tiet.csv"
-    hub_df.drop(columns=[KEY_COL], errors="ignore").to_csv(hub_csv_path, index=False, encoding="utf-8-sig")
+    hub_out = hub_df.drop(columns=[KEY_COL], errors="ignore").copy()
+    for c in _COT_KHOA_HUB_CAN_BAO_VE:
+        if c in hub_out.columns:
+            hub_out[c] = bao_ve_khoa_so_khoi_excel(hub_out[c])
+    hub_out.to_csv(hub_csv_path, index=False, encoding="utf-8-sig")
 
     return [tonghop_path, core_csv_path, hub_csv_path]

@@ -22,7 +22,7 @@ from backend.services.doi_chieu_song_phuong_kenh.load_hub import (
 from backend.services.doi_chieu_song_phuong_kenh.load_kenh import (
     find_kenh_path, kenh_filename, load_kenh_file,
 )
-from backend.services.doi_chieu_song_phuong_kenh.export import build_bang1_rows
+from backend.services.doi_chieu_song_phuong_kenh.export import build_bang1_rows, export_bao_cao
 from backend.services.doi_chieu_song_phuong_kenh.process import (
     check_unexpected_one_sided, classify_kenh_hub_den, dem_lech_tien_tren_khop,
     match_unit, summarize_unit,
@@ -345,6 +345,31 @@ class TestBuildBang1Rows:
         assert ("311", "SPT") not in cap
         assert ("311", "SPT") not in cap
         assert not df["Nguyên nhân"].str.contains("N/A", na=False).any()
+
+
+# ── export.export_bao_cao — bọc khoá MtId/MsgId toàn chữ số khi ghi CSV chi tiết ──────────────
+
+class TestExportBaoCaoBaoVeKhoaExcel:
+    def test_mtid_spt_toan_chu_so_duoc_boc_trong_csv_that(self, tmp_path):
+        """Bug báo bởi người dùng 2026-09-04: MtId/MsgId của SP THƯỜNG (16 chữ số thuần) sai khi
+        mở file kenh_chi_tiet.csv bằng Excel — verify bằng file CSV thật ghi ra đĩa."""
+        hub = _hub_df([_hub_row("2620210308078343", "TXID_SPT", ktt="SP THUONG", trang_thai="PYED")])
+        kenh = _kenh_df([_kenh_row("2620210308078343")])
+        ct = classify_kenh_hub_den(hub, kenh, "SPT")
+
+        day = {"ngay": "20260904", "don_vi": [
+            {"ma_nh": "202", "loai": "SPT", "trang_thai": "ok", "chi_tiet": ct, "summary": _SUMMARY_MAU},
+        ]}
+        paths = export_bao_cao([day], tmp_path)
+        kenh_csv_path, hub_csv_path = paths[2], paths[1]
+
+        # Đọc lại bằng pandas (đúng cách Excel sẽ hiểu field có dấu ngoặc kép), không so khớp
+        # chuỗi thô — CSV tự nhân đôi dấu " khi ghi field chứa formula.
+        kenh_out = pd.read_csv(kenh_csv_path, dtype=str, encoding="utf-8-sig")
+        assert kenh_out.loc[0, "MtId/MsgId"] == '="2620210308078343"'
+
+        hub_out = pd.read_csv(hub_csv_path, dtype=str, encoding="utf-8-sig")
+        assert hub_out.loc[0, "TXID"] == "TXID_SPT"  # chữ+số giữ nguyên, không bọc
 
 
 # ── classify_kenh_hub_den — Bước 1/2 chi tiết chiều ĐẾN (thay "Bảng 3", tài liệu v3) ────────
