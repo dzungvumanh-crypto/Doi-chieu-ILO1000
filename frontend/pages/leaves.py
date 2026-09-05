@@ -5053,39 +5053,9 @@ async def leaves_page():
 
                         ui.button("Tải báo cáo Excel", icon="download", on_click=_download_stats).classes("bg-blue-700 text-white")
 
-                        # Mẫu đơn gốc (.docx) — Phòng Tổng hợp tải để in/phát cho ai cần
-                        # điền tay, không qua bước điền dữ liệu (xem export_mau_don ở BE).
-                        async def _download_mau_don(loai: str, fname: str):
-                            try:
-                                content = await asyncio.to_thread(
-                                    api.download, "/api/leaves/export/mau-don",
-                                    params={"loai": loai},
-                                )
-                                ui.download(content, fname)
-                            except Exception as e:
-                                _handle_api_error(e)
-
-                        with ui.button("Mẫu đơn", icon="description").classes("bg-gray-600 text-white"):
-                            with ui.menu():
-                                ui.menu_item("Đơn xin nghỉ phép — Nhân viên",
-                                             on_click=lambda: _download_mau_don("nv", "mau_don_nghi_phep_nhan_vien.docx"))
-                                ui.menu_item("Đơn xin nghỉ phép — Trưởng/Phó phòng",
-                                             on_click=lambda: _download_mau_don("tp", "mau_don_nghi_phep_truong_pho_phong.docx"))
-                                ui.menu_item("Đơn xin nghỉ phép — Phó Giám đốc",
-                                             on_click=lambda: _download_mau_don("pgd", "mau_don_nghi_phep_pho_giam_doc.docx"))
-                                ui.menu_item("Đơn xin nghỉ phép — Giám đốc",
-                                             on_click=lambda: _download_mau_don("gd", "mau_don_nghi_phep_giam_doc.docx"))
-                                ui.separator()
-                                ui.menu_item("Đăng ký nghỉ phép bắt buộc (NPBB)",
-                                             on_click=lambda: _download_mau_don("npbb_dangky", "mau_don_dang_ky_npbb.docx"))
-                                ui.menu_item("Điều chỉnh nghỉ phép bắt buộc (NPBB)",
-                                             on_click=lambda: _download_mau_don("npbb_dieuchinh", "mau_don_dieu_chinh_npbb.docx"))
 
 
-
-                    ui.label("Chọn năm và nhấn 'Tải báo cáo Excel' để xuất file tổng hợp phép. "
-                             "Mục 'Mẫu đơn' tải file gốc dùng để dựng đơn thật, chỉ để tham khảo/in phát tay, "
-                             "không tự điền dữ liệu.").classes("text-sm text-gray-500")
+                    ui.label("Chọn năm và nhấn 'Tải báo cáo Excel' để xuất file tổng hợp phép.").classes("text-sm text-gray-500")
 
                     ui.separator().classes("my-4")
 
