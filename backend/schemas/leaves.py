@@ -43,6 +43,10 @@ class LeaveOut(BaseModel):
     leave_type: str
     reason: Optional[str]
     status: str
+    status_label: Optional[str] = None
+    adjusts_leave_id: Optional[int] = None
+    adjusts_leave: Optional[dict] = None
+    npbb_adjustment: Optional[dict] = None
     ksv_approver_id: Optional[int] = None
     ksv_approver_name: Optional[str] = None
     ksv_approved_at: Optional[datetime] = None

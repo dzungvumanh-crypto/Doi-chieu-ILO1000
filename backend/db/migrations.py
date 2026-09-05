@@ -1436,6 +1436,16 @@ def _ensure_indexes():
         # mẫu số nên không tái tạo được nếu thiếu cột này. Kỳ lưu trước bản vá có
         # giá trị mặc định 0 — FE nhận biết 0 để ẩn hẳn cột thay vì hiện số sai.
         "ALTER TABLE dtbb_reports ADD COLUMN rate_usd_to_vnd REAL NOT NULL DEFAULT 0",
+
+        # ── Người 3 — Nghỉ phép bắt buộc: điều chỉnh ngày sau khi đã duyệt —
+        # 2026-09-03 ────────────────────────────────────────────────────────
+        # Nút "Điều chỉnh ngày NPBB" (chỉ đơn bat_buoc đã approved) tạo 1 ĐƠN
+        # MỚI riêng (không ghi đè đơn gốc) — cột này trỏ ngược về đơn gốc. Đơn
+        # gốc vẫn "Hoàn thành" cho tới khi đơn điều chỉnh duyệt xong đủ 3 bước
+        # thì mới tự chuyển "Đã hủy" (xem npbb_adjust_leave, gd_review trong
+        # backend/api/leaves.py). Báo cáo NPBB (mẫu 18/19 TCNS) so sánh ngày
+        # "đã đăng ký" (đơn gốc) vs "điều chỉnh" (đơn này) qua liên kết đó.
+        "ALTER TABLE leave_records ADD COLUMN adjusts_leave_id INTEGER REFERENCES leave_records(id)",
     ]
     _mig_log = logging.getLogger(__name__)
 
@@ -1808,6 +1818,12 @@ def _ensure_indexes():
         "CREATE INDEX IF NOT EXISTS ix_hr_trainings_staff    ON hr_trainings(staff_id)",
         "CREATE INDEX IF NOT EXISTS ix_hr_tools_staff        ON hr_tools(staff_id)",
         "CREATE INDEX IF NOT EXISTS ix_hr_attachments_owner  ON hr_attachments(section, item_id)",
+        # ── Nghỉ phép bắt buộc — 2026-09-05 ────────────────────────────────────
+        # _leave_to_out tra adjusts_leave_id cho mỗi đơn bat_buoc (tìm đơn điều
+        # chỉnh) — list_leaves gọi hàm này cho TỪNG dòng nên thiếu index này
+        # khiến mỗi đơn bat_buoc quét lại toàn bộ leave_records, chi phí tăng
+        # theo bình phương số dòng thay vì tuyến tính.
+        "CREATE INDEX IF NOT EXISTS ix_leave_records_adj ON leave_records(adjusts_leave_id)",
     ]
     conn = sqlite3.connect(DB_PATH, timeout=30)
     try:
