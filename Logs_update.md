@@ -4,6 +4,33 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 05/09/2026 Nghỉ phép - **Nghỉ phép bắt buộc: đăng ký, điều chỉnh ngày, và mẫu đơn riêng theo chức danh**
+    + **Điều chỉnh ngày nghỉ phép bắt buộc sau khi đơn đã duyệt xong.** Đơn đã "Hoàn thành" nay có
+      nút *"Điều chỉnh ngày NPBB"*. Bấm vào sẽ tạo **một đơn mới**, đi lại đủ ba bước duyệt như đơn
+      thường. **Đơn cũ không bị xoá và không bị sửa** — nó vẫn nằm nguyên đó cho tới khi đơn mới
+      duyệt xong mới chuyển thành *"Đã hủy - Đã điều chỉnh"*. Mở đơn nào cũng thấy đường dẫn sang
+      đơn kia, nên lúc nào cũng đối chiếu được ngày đã đăng ký với ngày xin đổi
+    + **Mẫu đơn xin nghỉ phép năm nay in đúng theo chức danh.** Trước đây nhân viên, trưởng/phó
+      phòng, Giám đốc, Phó Giám đốc **in ra cùng một tờ giấy** — phần mềm có sẵn danh sách 4 mẫu
+      riêng nhưng 4 file mẫu đó **chưa từng được đặt vào máy**, nên nó lặng lẽ quay về dùng mẫu
+      chung. Không báo lỗi, không ai biết. Nay đã có đủ 4 mẫu thật
+    + **Đơn của Giám đốc trước đây "kính gửi Giám đốc Trung tâm Thanh toán"** — tức là gửi cho
+      chính mình. Đối chiếu mẫu giấy thật, nay sửa thành **Tổng Giám đốc Agribank**
+    + **Thêm 2 mẫu đơn cá nhân** (đăng ký / điều chỉnh nghỉ phép bắt buộc, "Mẫu 1 TCNS") và
+      **báo cáo tổng hợp Mẫu 18 (nội bộ) / Mẫu 19 (gửi TCNS)** cho phòng Tổng hợp
+    + ⚠️ **CHƯA DÙNG ĐƯỢC "Báo cáo NPBB" (Mẫu 18/19).** Báo cáo này đang **liệt kê nhầm gần như
+      toàn bộ nhân sự** kèm khoảng ngày không có thật. Nguyên nhân: mỗi lần nhập hạn mức phép bằng
+      file Excel, phần mềm ghi lại một dòng tổng hợp *"đã nghỉ bao nhiêu ngày"* mang cùng nhãn với
+      đơn nghỉ phép bắt buộc — mọi màn hình khác đều bỏ qua các dòng này, riêng báo cáo mới thì
+      chưa. **Đừng gửi file đó đi**, đang sửa ở đợt tới
+    + ⚠️ **Số "Đã nghỉ" hiển thị có thể lớn hơn thực tế** với người đã điều chỉnh ngày NPBB — đơn
+      cũ bị thay chưa được trả lại ngày phép. Số trên **tab Hạn mức phép vẫn đúng** (chỗ đó đếm
+      lại từ đầu chứ không lấy số đã cộng sẵn). Cũng đang sửa ở đợt tới
+    + ✅ **Màn hình danh sách đơn nghỉ phép nhanh hơn** — trước đây mỗi đơn hiện ra tốn 4 lượt hỏi
+      cơ sở dữ liệu riêng, danh sách 1.000 đơn là hơn 4.000 lượt. Nay gộp lại còn 6 lượt cho cả
+      danh sách, bất kể bao nhiêu đơn (đo được: 118 ms → 33 ms cho 991 đơn)
+    + ✅ **Không phải làm gì sau khi cập nhật** — không đổi quyền, không đổi thao tác cũ
+
 - 05/09/2026 Chấm ILO1000 - **Sửa lỗi giao dịch bình thường bị gán nhầm "Đã hủy"**
     + Người chấm phản ánh ngay trên file kết quả ngày **26/08**: nhiều món **sheet Hub ghi "Hoàn
       thành"** nhưng hệ thống chấm lại ghi **"Đã hủy"** — 24 dòng, đều thuộc các đợt chi trả
