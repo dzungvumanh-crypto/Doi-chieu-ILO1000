@@ -227,6 +227,13 @@ class SessionForbiddenError(Exception):
     trường ngoài Napas/PSS-MDP, và không được "Lưu bản cuối"."""
 
 
+class SessionNotFoundError(Exception):
+    """Không có bảng nào khớp (ngay, created_by) — vd `created_by` sai, hoặc
+    bảng đã bị xoá trước đó. Dùng ở session_admin_unlock() (review Người 1
+    PR#76: trước đây UPDATE không khớp dòng nào vẫn lặng lẽ trả `{"ok": True}`,
+    Admin thấy "Đã mở khoá" dù thực ra không đổi gì)."""
+
+
 # Đúng 4 field người KHÔNG PHẢI người lập bảng được phép sửa trên 1 bản tạm
 # — khớp SessionIn (napas_m/t, pssmdp_m/t). Mọi field khác (gD, phD, lap_bang,
 # kiem_soat, ebank_m/t — ebank giữ nguyên không ai sửa được nữa, xem
@@ -350,11 +357,19 @@ def session_admin_unlock(db: sqlite3.Connection, ngay: str, created_by: int) -> 
     bắt buộc — 1 ngày giờ có thể có nhiều bảng đã final của nhiều người khác
     nhau, không còn suy được "bảng nào" nếu chỉ có `ngay`. Không đổi
     created_by (người lập bảng vẫn là người cũ, vẫn là người duy nhất sửa
-    được đủ mọi field sau khi mở khoá — chỉ status đổi)."""
-    db.execute(
+    được đủ mọi field sau khi mở khoá — chỉ status đổi).
+
+    Kiểm `rowcount` (review Người 1 PR#76) — trước đây UPDATE không khớp dòng
+    nào (vd `created_by` sai) vẫn lặng lẽ trả thành công, Admin thấy "Đã mở
+    khoá" dù thực ra không có gì đổi."""
+    cur = db.execute(
         "UPDATE doi_chieu_citad_sessions SET status='draft' WHERE ngay=? AND created_by=?",
         (ngay, created_by),
     )
+    if cur.rowcount == 0:
+        raise SessionNotFoundError(
+            f"Không tìm thấy bảng của người này cho ngày {ngay} để mở khoá."
+        )
     db.commit()
 
 

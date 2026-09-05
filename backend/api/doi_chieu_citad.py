@@ -305,7 +305,10 @@ def unlock_session(
     đã "Lưu bản cuối" về lại bản tạm để người lập bảng sửa tiếp.
     `created_by` bắt buộc: 1 ngày có thể có nhiều bảng đã chốt của nhiều
     người khác nhau. Không phải xoá số liệu, chỉ đổi status."""
-    svc.session_admin_unlock(db, ngay, created_by)
+    try:
+        svc.session_admin_unlock(db, ngay, created_by)
+    except svc.SessionNotFoundError as e:
+        raise HTTPException(404, str(e))
     return {"ok": True}
 
 

@@ -11,7 +11,7 @@ CREATE TABLE doi_chieu_citad_sessions (
     data       TEXT    NOT NULL,
     updated_at DATETIME,
     updated_by INTEGER,
-    status     TEXT    NOT NULL DEFAULT 'draft',
+    status     TEXT    NOT NULL DEFAULT 'final',
     created_by INTEGER,
     UNIQUE(ngay, created_by)
 );
@@ -42,6 +42,24 @@ def _db():
     db = sqlite3.connect(":memory:", check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.executescript(_SCHEMA)
+    return db
+
+
+# Bản có khai FK thật (ON DELETE SET NULL) — khớp đúng
+# backend/db/migrations.py, dùng riêng cho test xoá bảng không mất lịch sử
+# (review Người 1 PR#76: bug thật CASCADE xoá theo lịch sử). `_SCHEMA` ở
+# trên không khai FK nên không bắt được lỗi loại này.
+_SCHEMA_FK = _SCHEMA.replace(
+    "session_id INTEGER,",
+    "session_id INTEGER REFERENCES doi_chieu_citad_sessions(id) ON DELETE SET NULL,",
+)
+
+
+def _db_fk():
+    db = sqlite3.connect(":memory:", check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys = ON")
+    db.executescript(_SCHEMA_FK)
     return db
 
 
@@ -160,5 +178,49 @@ def test_reconciliation_status_tinh_theo_bat_ky_bang_nao_final_va_khop():
 
     status = svc.get_reconciliation_status(db, ngay)
     assert status == {"exists": True, "matched": True}
+
+    db.close()
+
+
+def test_xoa_bang_tam_khong_lam_mat_lich_su():
+    """Bug thật (review Người 1 PR#76, đo trực tiếp trên DB): session_id
+    từng khai ON DELETE CASCADE — xoá 1 bảng TẠM (session_delete(), chỉ xoá
+    được bảng chưa chốt) xoá theo LUÔN toàn bộ dòng lịch sử của bảng đó,
+    mất dấu vết "ai đã chấm gì lúc nào" mà dialog Xoá không hề cảnh báo. Đã
+    đổi sang ON DELETE SET NULL — lịch sử phải còn nguyên sau khi xoá."""
+    db = _db_fk()
+    db.executescript("INSERT INTO user_tttt (id, username, full_name) VALUES (1, 'a', 'Nguyen A')")
+    ngay = "20/08/2026"
+    svc.session_save(db, ngay, 1, {"napas_m": 1, "napas_t": 1}, "draft")
+
+    hist_before = svc.get_reconciliation_history(db, ngay, created_by=1)
+    assert len(hist_before) == 1
+
+    svc.session_delete(db, ngay, 1)
+
+    row = db.execute(
+        "SELECT ngay, staff_id, session_id FROM doi_chieu_citad_history WHERE id=?",
+        (hist_before[0]["id"],),
+    ).fetchone()
+    assert row is not None  # dòng lịch sử KHÔNG bị xoá theo
+    assert row["ngay"] == ngay and row["staff_id"] == 1
+    assert row["session_id"] is None  # chỉ rời khỏi bảng đã xoá (SET NULL)
+
+    db.close()
+
+
+def test_unlock_khong_khop_created_by_bao_loi_ro_rang():
+    """Bug thật (review Người 1 PR#76): UPDATE không khớp dòng nào (vd
+    created_by sai, hoặc bảng đã bị xoá) từng lặng lẽ trả thành công — Admin
+    thấy "Đã mở khoá" dù thực ra không có gì đổi. Nay phải báo lỗi rõ."""
+    db = _db()
+    ngay = "20/08/2026"
+    svc.session_save(db, ngay, 1, {"napas_m": 1, "napas_t": 1}, "final")
+
+    with pytest.raises(svc.SessionNotFoundError):
+        svc.session_admin_unlock(db, ngay, created_by=999)
+
+    # Bảng thật của người 1 vẫn nguyên trạng thái final, không bị đổi nhầm.
+    assert svc.session_get(db, ngay, created_by=1)["_meta_status"] == "final"
 
     db.close()

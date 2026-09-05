@@ -1452,7 +1452,17 @@ def _ensure_indexes():
         # không còn suy được 1-1 từ `ngay` một khi 1 ngày có thể có nhiều bảng.
         # Backfill `session_id` cho dữ liệu cũ nằm ở khối rebuild bên dưới (SAU
         # khi bảng sessions có cột `id`) — đặt ở đây thì cột `id` chưa tồn tại.
-        "ALTER TABLE doi_chieu_citad_history ADD COLUMN session_id INTEGER REFERENCES doi_chieu_citad_sessions(id) ON DELETE CASCADE",
+        #
+        # ON DELETE **SET NULL** — KHÔNG phải CASCADE (bug thật, review Người 1
+        # PR#76): doi_chieu_citad_history là NHẬT KÝ KIỂM SOÁT NỘI BỘ ("ai đã
+        # chấm gì lúc nào"), phải sống sót qua việc xoá 1 bảng tạm. CASCADE
+        # từng khiến nút "Xoá" (session_delete(), chỉ xoá được bảng tạm CHƯA
+        # chốt) xoá theo LUÔN toàn bộ lịch sử của bảng đó — mất dấu vết kiểm
+        # soát mà dialog "Xoá" không hề cảnh báo. SET NULL giữ nguyên dòng
+        # lịch sử (vẫn tra được qua `ngay`/`staff_id`), chỉ rời khỏi bảng đã
+        # xoá — đúng tinh thần "audit trail không tính lại từ file gốc" đã ghi
+        # ở đầu file này.
+        "ALTER TABLE doi_chieu_citad_history ADD COLUMN session_id INTEGER REFERENCES doi_chieu_citad_sessions(id) ON DELETE SET NULL",
     ]
     _mig_log = logging.getLogger(__name__)
 

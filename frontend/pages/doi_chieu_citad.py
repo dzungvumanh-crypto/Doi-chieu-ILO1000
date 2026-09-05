@@ -171,7 +171,7 @@ def _dec(v) -> Decimal:
     `Decimal(516.6)` ra `Decimal('516.59999999999999...')`) — phải đi qua
     `str(v)` trước: `str()` của float là chuỗi thập phân NGẮN NHẤT vẫn ra
     đúng float đó (thuật toán repr của Python), nên `Decimal(str(516.6))`
-    ra đúng `Decimal('516.6')`. Dùng cho MỌI phép cộng dồn tiền (`_compute_totals()`,
+    ra đúng `Decimal('516.6')`. Dùng cho MỌI phép cộng dồn tiền (`_compute_totals_group()`,
     `cur_mismatch()`) — cộng nhiều số thực rồi so sánh trực tiếp có thể sinh
     dư nhị phân (bug thật 25/08/2026: 0,0078125 dù CITAD gốc cộng đúng khớp
     PaymentHub, khiến màn hình báo "+0,01" giả); cộng bằng Decimal thì không
@@ -186,8 +186,8 @@ def _dec(v) -> Decimal:
 
 def diff_exact(ci_val: Decimal, ph_val: Decimal) -> Decimal:
     """Chênh lệch CITAD-PaymentHub cho 1 cột — `ci_val`/`ph_val` phải là
-    Decimal đã cộng dồn qua `_dec()` (xem `_compute_totals()`), nên phép trừ
-    này chính xác tuyệt đối, không cần và không được làm tròn gì thêm."""
+    Decimal đã cộng dồn qua `_dec()` (xem `_compute_totals_group()`), nên phép
+    trừ này chính xác tuyệt đối, không cần và không được làm tròn gì thêm."""
     return ci_val - ph_val
 
 
@@ -336,42 +336,23 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
             "border-b border-blue-900 py-1 ml-2 rounded-t-lg"
         )
 
-    def _compute_totals():
-        """Tổng CITAD (5 cổng + Napas IH Đến, KHÔNG cộng Ebanking) và tổng
-        PaymentHub — đúng công thức `_calc()` gốc, xem ghi chú chi tiết
-        trong `doi_chieu_citad_service.py::build_xlsx`. Dùng chung cho cả
-        `recalc()` (hiện trên trang) và preview trước khi xuất Excel — luôn
-        khớp nhau, tính 1 nơi duy nhất."""
+    def _compute_totals_group(curs: list) -> tuple:
+        """Tổng CITAD (5 cổng + Napas/PSS-MDP IH Đến — CHỈ khi VNĐ nằm trong
+        `curs`, kênh trong nước — KHÔNG cộng Ebanking) và tổng PaymentHub,
+        CHỈ cộng các loại tiền trong `curs` — đúng công thức `_calc()` gốc,
+        xem ghi chú chi tiết trong `doi_chieu_citad_service.py::build_xlsx`.
+        Dùng cho CẢ 3 bảng chênh lệch trên màn hình (Gộp gọi với `curs=CURS`,
+        VNĐ/Ngoại tệ gọi với tập con — xem recalc()/_fill_diff_table()) lẫn
+        preview trước khi xuất Excel (`do_export()`, cũng gọi với `curs=CURS`)
+        — luôn khớp nhau, tính 1 nơi duy nhất (trước đây có 2 hàm riêng cùng
+        công thức — review Người 1 PR#76: 2 bản song song dễ lệch nhau khi
+        sau này chỉ sửa 1 bản, gộp lại còn 1 nguồn duy nhất)."""
         # Cộng dồn bằng Decimal (qua _dec()) — KHÔNG cộng bằng float trực
         # tiếp. Cộng nhiều số thực (5 Cổng × 3 loại tiền + Napas + PSS-MDP)
         # có thể sinh dư nhị phân dù về bản chất đã khớp tuyệt đối (bug thật
         # 25/08/2026: 0,0078125 dù CITAD gốc cộng đúng khớp PaymentHub) —
         # Decimal cộng đúng tuyệt đối với số liệu gốc, không có dư nào phải
         # làm tròn/che đi, nên lệch thật dù chỉ 1 xu vẫn hiện đúng.
-        ci = {f: Decimal(0) for f in FK}
-        for c in CONGS:
-            for u in CURS:
-                for f in FK:
-                    ci[f] += _dec(data["gD"][c][u][f])
-        ci["den_ih_m"] += _dec(data["napas"]["den_ih_m"])
-        ci["den_ih_t"] += _dec(data["napas"]["den_ih_t"])
-        # PSS - MDP: kênh mới, cùng nguyên lý Napas (cộng vào tổng CITAD).
-        ci["den_ih_m"] += _dec(data["pssmdp"]["den_ih_m"])
-        ci["den_ih_t"] += _dec(data["pssmdp"]["den_ih_t"])
-
-        ph = {f: Decimal(0) for f in FK}
-        for u in CURS:
-            for f in FK:
-                ph[f] += _dec(data["phD"][u][f])
-        return ci, ph
-
-    def _compute_totals_group(curs: list) -> tuple:
-        """Như _compute_totals() nhưng CHỈ cộng các loại tiền trong `curs` —
-        dùng riêng cho 2 bảng chênh lệch tách VNĐ/Ngoại tệ trên màn hình (xem
-        recalc()). KHÔNG đụng _compute_totals() gốc — hàm đó vẫn tính đủ cả
-        3 loại tiền, dùng cho preview xuất Excel (do_export()), độc lập với
-        2 bảng tách này. Napas/PSS-MDP là kênh trong nước, CHỈ cộng vào nhóm
-        có VNĐ — khớp đúng nguyên tắc ở _compute_totals()."""
         ci = {f: Decimal(0) for f in FK}
         for c in CONGS:
             for u in curs:
@@ -413,10 +394,10 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                 labels["diff"][f].classes(remove='text-green-700', add='text-red-600')
 
     def recalc():
-        # 3 bảng chênh lệch (04/09/2026): Gộp cả 3 loại tiền (như cũ, dùng
-        # _compute_totals_group(CURS) — CURS đủ cả 3 loại tiền nên ra ĐÚNG
-        # kết quả giống hệt _compute_totals(), không phải công thức khác) +
-        # tách riêng VNĐ / Ngoại tệ (USD+EUR gộp chung).
+        # 3 bảng chênh lệch (04/09/2026): Gộp cả 3 loại tiền (như cũ, gọi
+        # _compute_totals_group(CURS) — cùng 1 hàm duy nhất với 2 bảng tách,
+        # không phải công thức riêng) + tách riêng VNĐ / Ngoại tệ (USD+EUR
+        # gộp chung).
         _fill_diff_table(diff_labels, CURS)
         _fill_diff_table(diff_labels_vnd, ['VNĐ'])
         _fill_diff_table(diff_labels_fx, ['USD', 'EUR'])
@@ -939,6 +920,15 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         _apply_view_mode(mode, created_by, created_by_name)
 
     async def _save_session_now(status: str):
+        # Chốt CHỦ BẢNG đang lưu TRƯỚC khi gọi API — napas_only đang góp vào
+        # bảng NGƯỜI KHÁC (view_state["created_by"]), không phải bảng của
+        # chính mình. Bug thật (review Người 1, PR#76): tải lại sau lưu từng
+        # gọi _load_ngay_hien_hanh() KHÔNG truyền created_by → luôn lấy bảng
+        # của người gọi; với B đang góp Napas vào bảng A (B chưa có bảng riêng
+        # ngày đó), API trả rỗng → rơi vào mode='edit' trong khi số liệu CŨ
+        # của A vẫn còn nguyên trên màn hình (apply_session_data không chạy) —
+        # B bấm Lưu lần nữa sẽ tạo bảng MỚI của B chứa toàn bộ số liệu của A.
+        owner = view_state["created_by"] if view_state["mode"] == "napas_only" else None
         payload = get_session_payload()
         payload["status"] = status
         try:
@@ -953,9 +943,10 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         )
         if history_refresh.get("fn"):
             await history_refresh["fn"]()
-        # Tải lại đúng mode hiện hành — người lập bảng lưu tạm vẫn ở 'edit',
-        # người khác lưu tạm Napas vẫn ở 'napas_only', lưu bản cuối -> 'locked'.
-        await _load_ngay_hien_hanh(ngay_input.value)
+        # Tải lại ĐÚNG bảng vừa lưu — người lập bảng lưu tạm vẫn ở 'edit',
+        # người khác lưu tạm Napas vẫn ở 'napas_only' (đúng bảng của owner),
+        # lưu bản cuối -> 'locked'.
+        await _load_ngay_hien_hanh(ngay_input.value, created_by=owner)
 
     def do_save_session(status: str):
         # Phòng vệ thêm — nút tương ứng đã ẩn theo mode (_apply_view_mode),
@@ -1262,7 +1253,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         # "LỆNH ĐI/LỆNH ĐẾN" như Excel — tên cột ĐI/ĐẾN IH/IL Món/Tiền đã
         # chứa đủ thông tin, và đồng bộ đúng kiểu header các bảng khác trên
         # trang này).
-        ci, ph = _compute_totals()
+        ci, ph = _compute_totals_group(CURS)
         cols = [
             {"name": "label", "label": "", "field": "label", "align": "left"},
             {"name": "cur", "label": "Loại tiền", "field": "cur", "align": "center"},
