@@ -53,6 +53,92 @@
   <h1>⚙ Implementation Notes — PAYMENT CENTER</h1>
   <p class="subtitle">Ghi chú kỹ thuật, quyết định thiết kế, đánh đổi. Cập nhật liên tục. | 2026-09-05</p>
 
+  <!-- DC1 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">DC1</span>
+      <span class="card-title">Đối chiếu CITAD — mỗi người 1 bảng riêng/ngày, khoá nguồn Napas/PSS-MDP (PR #76)</span>
+      <span class="badge badge-warn">Đã merge — 1 điểm migration chưa tự lành</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label">Đảo ngược đúng quyết định của lần rebuild trước — và vì sao không phải là đi lùi</div>
+      <p>Bảng <code>doi_chieu_citad_sessions</code> nay có <b>hai</b> khối rebuild nối tiếp nhau trong
+        <code>_ensure_indexes()</code>, hướng ngược nhau: khối cũ gộp <code>(ngay, staff_id)</code> về
+        <b>một bảng chung/ngày</b>, khối mới tách trở lại thành <code>id</code> + <code>UNIQUE(ngay,
+        created_by)</code>. Nhìn qua tưởng quay về schema cũ, <b>không phải</b>: bản gốc khoá theo
+        <code>staff_id</code> là <i>người lưu sau cùng</i>, còn bản này khoá theo <code>created_by</code> là
+        <i>người lập bảng</i>, cố định suốt đời bảng đó. Chính chỗ đó mới cho phép người khác góp
+        Napas/PSS-MDP vào bảng của mình mà không cướp mất quyền sở hữu.</p>
+      <p>Khối rebuild mới <b>không dedup</b> (khác khối cũ) — dữ liệu vào nó vốn đã 1 dòng/ngày, chỉ
+        thiếu cột <code>id</code>. Backfill <code>doi_chieu_citad_history.session_id</code> phải nằm
+        <b>trong</b> khối này chứ không đặt cạnh câu <code>ALTER</code> ở <code>schema_migrations</code>:
+        lúc câu ALTER chạy, cột <code>id</code> chưa tồn tại.</p>
+
+      <div class="label">Vấn đề phát hiện nhưng CHƯA sửa — và vì sao chấp nhận được</div>
+      <div class="caution"><b>Câu ALTER đã chạy một lần rồi thì sửa lại chữ trong nó là vô tác dụng.</b>
+        Bản đầu của PR khai <code>session_id ... ON DELETE CASCADE</code>; review chỉ ra CASCADE xoá
+        theo cả lịch sử khi xoá một bảng tạm, tác giả sửa thành <code>SET NULL</code>. Nhưng
+        <code>schema_migrations</code> <b>nuốt lỗi <code>duplicate column</code> có chủ đích</b> — DB nào
+        đã khởi động với bản trước đó thì cột đã tồn tại, câu ALTER mới bị bỏ qua lặng lẽ, và
+        <b>FK cũ CASCADE ở lại vĩnh viễn</b>. Đo trực tiếp: DB đã chạy bản cũ vẫn mất sạch lịch sử khi
+        xoá bảng; DB mới tinh thì đúng.
+      </div>
+      <p><b>Không sửa, vì:</b> máy chính chưa bao giờ chạy bản đó (PR chưa merge lúc phát hiện), nên
+        sau khi merge nó chạy câu ALTER lần đầu và ra đúng <code>SET NULL</code>. Chỉ DB máy dev nào
+        đã checkout nhánh ở bản cũ mới dính — sửa bằng cách dựng lại cột <code>session_id</code>, rẻ
+        hơn viết thêm một khối rebuild bảng <code>doi_chieu_citad_history</code> chỉ để phục vụ máy dev.</p>
+      <p><b>Nhưng nếu lần sau đổi FK/khoá của một cột đã phát hành</b> thì bắt buộc phải rebuild bảng —
+        SQLite không ALTER được FK, và test <code>_db_fk()</code> trong
+        <code>tests/test_doi_chieu_citad_multi_session.py</code> <b>không bắt được lỗi loại này</b> vì nó
+        dựng schema từ chuỗi viết tay chứ không đi qua <code>_ensure_indexes()</code>.</p>
+
+      <div class="label">Không rollback được bằng cách revert code</div>
+      <p>Sau khi DB đã migrate, code cũ gọi <code>INSERT ... ON CONFLICT(<b>ngay</b>)</code> sẽ chết —
+        <code>ngay</code> không còn là khoá duy nhất, ràng buộc giờ là <code>UNIQUE(ngay, created_by)</code>
+        và SQLite đòi mệnh đề ON CONFLICT khớp đúng một unique index. Muốn lui phải khôi phục DB kèm code.</p>
+
+      <div class="label">Đánh đổi đã chấp nhận</div>
+      <table>
+        <tr><th>Quyết định</th><th>Được</th><th>Mất</th></tr>
+        <tr>
+          <td>Sổ trực coi ngày là "đã khớp" nếu <b>bất kỳ</b> bảng nào final và khớp</td>
+          <td>Không phải chỉ định một bảng "chính thức" — không đẻ thêm thao tác cho người dùng</td>
+          <td>A chốt bảng khớp, B chốt bảng lệch cùng ngày <b>→ không cảnh báo gì</b>. Chấp nhận được
+            vì đây vốn là nhắc phụ trợ, không chặn xác nhận sổ trực</td>
+        </tr>
+        <tr>
+          <td>Web app tự bỏ qua item Napas/PSS-MDP quét từ PaymentHub, <b>không sửa Extension</b></td>
+          <td>Không phải ra bản Extension mới rồi cài lại từng máy trạm</td>
+          <td>Extension vẫn quét và gửi dữ liệu chết lên buffer; hai bên lệch nhau về "cái gì còn dùng"</td>
+        </tr>
+        <tr>
+          <td>Vẫn hiện nút "Nạp PaymentHub" ở chế độ góp Napas dù nó không còn nạp được gì</td>
+          <td>Người quét nhầm cổng đọc được thông báo nói rõ phải quét ở CITAD</td>
+          <td>Một nút không làm gì trong ngữ cảnh đó — cố ý, đừng "dọn cho gọn"</td>
+        </tr>
+      </table>
+
+      <div class="note"><b>Bảng mồ côi.</b> <code>created_by</code> khai
+        <code>ON DELETE SET NULL</code>: xoá tài khoản người lập bảng thì bảng đó thành NULL —
+        không xoá được, không mở khoá được, và tab Lịch sử gọi <code>/history?created_by=None</code>
+        ăn 422. Rất hiếm nên chưa chặn; nếu gặp thì cấm xoá user còn bảng chưa chốt là đường rẻ nhất.</div>
+
+      <div class="label">Hai lỗi review bắt được, đáng nhớ vì cùng một kiểu "hỏng mà không báo gì"</div>
+      <p><code>_save_session_now()</code> tải lại bảng sau khi lưu mà <b>không truyền</b>
+        <code>created_by</code> → luôn lấy bảng của chính người gọi. Người đang góp Napas vào bảng
+        người khác chưa có bảng riêng ngày đó → API trả rỗng → UI rơi về mode <code>edit</code> trong khi
+        <b>số liệu của người kia vẫn nằm nguyên trên màn hình</b> (<code>apply_session_data</code> không
+        chạy vì return sớm). Bấm Lưu lần nữa là đẻ ra bảng mới của mình chứa số liệu người khác.
+        Bài học: mọi chỗ "tải lại sau khi ghi" phải tải lại <b>đúng đối tượng vừa ghi</b>, không phải
+        đối tượng mặc định của người đang đăng nhập.</p>
+      <p><code>session_admin_unlock()</code> không kiểm <code>rowcount</code> → UPDATE không khớp dòng nào
+        vẫn trả <code>{"ok": true}</code>, Admin thấy "Đã mở khoá" mà chẳng có gì đổi. Nay ném
+        <code>SessionNotFoundError</code> → 404.</p>
+
+    </div>
+  </div>
+
   <!-- NP1 -->
   <div class="card">
     <div class="card-header">
@@ -154,6 +240,127 @@
       <div class="caution"><b>Đừng dùng Báo cáo NPBB (Mẫu 18/19) cho tới khi lỗi 1 được sửa.</b>
         Tờ trình gửi Ban Tổ chức Nhân sự sẽ liệt kê gần như toàn bộ nhân sự kèm khoảng ngày bịa.
         Cảnh báo tương ứng đã ghi trong <code>Logs_update.md</code> và README.</div>
+
+    </div>
+  </div>
+
+  <!-- NP2 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">NP2</span>
+      <span class="card-title">Ứng phép năm sau khi vượt hạn mức, KSV thay thế cùng phòng (PR #73)</span>
+      <span class="badge badge-warn">Đã merge — còn 3 lỗi quỹ phép chưa sửa</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label">Vì sao "vượt hạn mức" trả 409 chứ không phải 400</div>
+      <p>Ba chỗ tạo đơn (<code>create_leave</code>, <code>resubmit_leave</code>,
+        <code>create_direct_leave</code>) trước đây chép gần như y hệt nhau một khối kiểm hạn mức,
+        kết thúc bằng <code>HTTPException(400)</code> — <b>ngõ cụt</b>. Nay gộp thành
+        <code>_check_quota_or_borrow()</code> và đổi thành <b>hai bước</b>: 409 kèm
+        <code>code = quota_exceeded_borrow</code> để frontend hỏi "có ứng phép năm sau không",
+        rồi gọi lại với <code>confirm_borrow_next_year=True</code>.</p>
+      <p>Chọn 409 (không phải 400) vì đây <b>không phải lỗi của yêu cầu</b> — yêu cầu hợp lệ,
+        chỉ xung đột với trạng thái quỹ phép hiện tại và người dùng có quyền quyết định tiếp.
+        <code>api_client._raise_http_error()</code> nhận diện đúng cặp <i>409 + code</i> này để
+        ném <code>QuotaExceededBorrowError</code>, nên một mã 409 khác của cùng module
+        (vd trùng ngày nghỉ) không bị hiểu nhầm thành lời mời ứng phép.</p>
+
+      <div class="label">Vì sao <code>borrow_next_year_days</code> phải là một CỘT, không tính lại được</div>
+      <p>Số ngày ứng <b>không suy ra được</b> từ đơn: nó phụ thuộc hạn mức còn lại <i>tại thời
+        điểm tạo đơn</i>. Admin sửa <code>leave_quotas</code>, hoặc một đơn khác được duyệt sau đó,
+        là con số tính lại ra khác — và khác thì hai năm cộng lại không còn bằng số ngày đã nghỉ
+        thật. Cột này là <b>bản chốt của một quyết định</b>, cùng loại với
+        <code>leave_signatures.image</code> (chụp ảnh chữ ký lúc ký, không phải khoá ngoại sang
+        ảnh cá nhân).</p>
+      <div class="note">Hệ quả: mọi đường đọc "đã dùng bao nhiêu ngày" phải trừ phần đã ứng ở năm
+        gốc và cộng lại ở năm sau. Có <b>bốn</b> đường như vậy —
+        <code>_calc_used_days</code>, <code>_calc_used_days_bulk</code>,
+        <code>compute_carry_over</code>, <code>_carry_over_bulk</code> — và đó chính là chỗ ba lỗi
+        dưới đây nằm.</div>
+
+      <div class="label">Mốc thâm niên 4 → 5 năm — sửa một dòng, đổi số ngày phép của tất cả</div>
+      <p><code>compute_annual_leave()</code> tính <code>12 + years // 4</code>, sai so với Điều 114
+        Bộ luật Lao động (mốc đúng là <b>5 năm</b>). Đối chiếu báo cáo thật 2026: công thức 5 năm
+        khớp <b>67/72</b> người, công thức 4 năm cũ khớp <b>12/72</b>.</p>
+      <div class="caution"><b>Không có bước rà người bị hụt.</b> Ai vào ngành 2018, năm 2026: cũ 14
+        ngày, nay 13. Người đã được duyệt đủ 14 ngày thì sau khi cập nhật là <b>âm hạn mức</b> —
+        không lỗi, không log, chỉ là lần xin nghỉ tiếp theo bị chặn với con số họ không hiểu.
+        <code>annual_leave_days</code> luôn được tính lại nên không cần migrate dữ liệu, nhưng
+        <b>cần một lần rà</b> <code>_calc_used_days &gt; hạn mức mới</code> rồi ghi
+        <code>leave_quotas</code> override cho những người đó. Chưa làm.</div>
+
+      <div class="label">KSV thay thế cùng phòng — vì sao KHÔNG khai thành mã quyền</div>
+      <p><code>_is_alt_ksv()</code> cho Trưởng/Phó phòng <b>cùng phòng</b> duyệt bước KSV thay
+        người được chỉ định vắng mặt. Điều kiện khớp đúng tập ứng viên hợp lệ lúc <i>chọn</i> KSV
+        (<code>_validate_ksv</code>), nên không mở rộng quyền cho ai ngoài tập đó.</p>
+      <p>Đây <b>không</b> vi phạm quy tắc "không hard-code quyền" trong DESIGN.md: mục
+        <i>"Không phải quyền: bước duyệt trong quy trình"</i> đã tách sẵn nhóm này —
+        <code>ksv_approver_id</code> là <b>dữ liệu của từng hồ sơ</b>, không phải thứ admin gán
+        được ở màn Phân quyền. Gate việc "ai được duyệt đơn NÀY" bằng mã quyền thì người có mã sẽ
+        duyệt được đơn của mọi phòng.</p>
+
+      <div class="label">Gỡ xung đột với refactor N+1 của PR #72</div>
+      <p>Hai PR sửa cùng vùng: #72 (commit <code>a533732</code>) tách câu SELECT của
+        <code>_leave_to_out</code> thành hằng số dùng chung <code>_LEAVE_JOIN_SQL</code> +
+        <code>_leave_row_to_dict</code>; #73 chèn <code>_is_alt_ksv</code> ngay trên
+        <code>_leave_to_out</code> và thêm trường <code>borrow_next_year_days</code> vào dict trả
+        về. Gỡ bằng cách <b>giữ trọn refactor của #72</b> và chỉ giữ lại <code>_is_alt_ksv</code>
+        từ #73 — trường <code>borrow_next_year_days</code> đã tự nằm đúng chỗ trong
+        <code>_leave_row_to_dict</code> sau auto-merge, không phải chèn tay.</p>
+
+      <div class="label">Báo cáo chấm công tháng — cố ý để trống một nửa</div>
+      <p><code>export_attendance_monthly()</code> chỉ suy được <b>X</b> (đi làm) và <b>P</b> (nghỉ
+        phép) từ đơn đã duyệt. Các buổi họp / tập huấn / công tác và cột xếp loại thi đua
+        <b>không có nguồn dữ liệu nào</b> trong phần mềm. Chọn để trống + ghi chú cuối bảng, thay
+        vì đoán — bảng chấm công là căn cứ tính lương, một ô đoán sai tệ hơn một ô trống.</p>
+
+      <div class="label">Ba lỗi phát hiện khi review, CỐ Ý chưa sửa trước khi merge</div>
+      <p>Người dùng chốt merge để không chặn phần việc còn lại. <b>Cả ba đều làm sai số ngày phép</b>,
+        xử lý ở PR riêng.</p>
+      <table>
+        <tr><th>Lỗi</th><th>Vì sao xảy ra</th><th>Sửa thế nào</th></tr>
+        <tr>
+          <td><b>Ngày phép chuyển năm không còn hết hạn 31/03</b><br>
+              <span class="pill pill-red">Nặng nhất</span> Ảnh hưởng <b>mọi</b> đơn nghỉ phép,
+              không riêng ca ứng phép</td>
+          <td><code>_check_quota_or_borrow()</code> nhận <code>ref_year: int</code> nên mất ngày bắt
+              đầu thật của đơn, phải truyền <code>ref_date=date(ref_year, 1, 1)</code>.
+              <code>compute_carry_over(effective=True)</code> trả 0 khi
+              <code>ref_date &gt; 31/03</code> — ngày 1/1 thì điều kiện đó <b>không bao giờ đúng</b>,
+              thành ra <code>effective=True</code> vô nghĩa. Code cũ truyền
+              <code>ref_date=eff_start</code>.</td>
+          <td>Cho hàm nhận <code>eff_start: date</code> thay cho <code>ref_year</code>, tự lấy
+              <code>eff_start.year</code>.</td>
+        </tr>
+        <tr>
+          <td><b>Đơn vắt qua giao thừa + ứng phép làm mất trắng số ngày đã ứng</b><br>
+              Đo được: đơn 28/12/2026 → 06/01/2027, 8 ngày làm việc, ứng 3 → hệ thống chỉ ghi nhận
+              <b>5</b></td>
+          <td><code>_calc_used_days()</code> gồm hai câu SELECT: câu 1 lấy đơn <b>chồng lên</b> năm
+              đang tính rồi <b>trừ</b> <code>borrow</code>, câu 2 lấy đơn có
+              <code>start_date</code> thuộc <b>năm trước</b> rồi <b>cộng</b> lại. Đơn vắt năm khớp
+              <b>cả hai</b> → triệt tiêu, đồng thời năm gốc đã bị trừ một lần nữa.</td>
+          <td>Câu 1 chỉ trừ <code>borrow</code> khi <code>start_date</code> thuộc đúng năm đang
+              tính; câu 2 thêm điều kiện <code>end_date</code> nằm hẳn trước 01/01 của năm đang
+              tính, để không đếm lại đơn đã có ở câu 1. Y hệt ở
+              <code>_calc_used_days_bulk</code>.</td>
+        </tr>
+        <tr>
+          <td><b>Ứng phép rồi được tha, không phải trả</b></td>
+          <td><code>compute_carry_over()</code> có vế "cho vay" (trừ <code>borrow</code> khỏi năm
+              gốc) nhưng <b>thiếu vế "đi vay"</b> — không cộng phần đã ứng <i>từ</i> năm trước vào
+              số đã dùng của năm nay, trong khi <code>_calc_used_days</code> thì có. Ứng 3 ngày của
+              2027 trong đơn 2026: lúc tính chuyển năm 2027 → 2028, 3 ngày đó biến mất, mang sang
+              2028 <b>12 thay vì 9</b>.</td>
+          <td>Thêm câu đối ứng đúng như câu 2 của <code>_calc_used_days</code>. Cùng lỗi ở
+              <code>_carry_over_bulk</code>.</td>
+        </tr>
+      </table>
+      <div class="caution"><b>Không có test nào cho <code>_check_quota_or_borrow()</code>.</b>
+        Đây là phần đụng vào quỹ phép của toàn bộ nhân sự, và cả ba lỗi trên đều là loại một test
+        bắt được ngay. PR chỉ sửa fixture ba file test cho khỏi vỡ vì cột mới. Việc cần làm cùng
+        lúc với ba sửa trên.</div>
 
     </div>
   </div>

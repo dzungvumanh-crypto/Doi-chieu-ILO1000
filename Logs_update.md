@@ -4,7 +4,7 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
-- 05/09/2026 Nghỉ phép - **Sửa 2 cảnh báo còn treo của đợt trước + thêm loạt báo cáo/phiếu in + rà soát tìm thêm 5 lỗi liên quan hạn mức phép**
+- 05/09/2026 Nghỉ phép - **Sửa 3 cảnh báo còn treo của 2 đợt trước + thêm loạt báo cáo/phiếu in + rà soát tìm thêm 2 lỗi quyền/khoá**
     + ✅ **Đã sửa "Báo cáo NPBB liệt kê nhầm gần như toàn bộ nhân sự"** (cảnh báo ở mục dưới) — nguyên
       nhân là 1 lỗi SQL rộng hơn nhiều so với tưởng ban đầu: mọi danh sách/báo cáo đơn nghỉ phép đều
       **âm thầm bỏ sót đơn thật không nhập lý do** (không riêng gì báo cáo NPBB). Xem chi tiết ở
@@ -12,11 +12,13 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
     + ✅ **Đã sửa "Số Đã nghỉ hiển thị lớn hơn thực tế"** (cảnh báo ở mục dưới) — tab Hạn mức phép/số
       "Phép còn lại"/xuất Excel hạn mức trước đây đếm trùng đơn gốc **và** đơn điều chỉnh NPBB cùng
       lúc trong thời gian đơn điều chỉnh còn chờ duyệt. Xem #119
-    + **Rà soát thêm phát hiện 3 lỗi tính hạn mức khác chưa ai báo**: đơn nghỉ vắt qua đêm giao thừa
-      (29/12→02/01) có ứng phép năm sau bị trừ hụt đúng số ngày đã ứng; nút "Hủy đơn" bị ẩn nhầm cho
-      đơn đang chờ duyệt ở tài khoản chưa được cấp quyền riêng; nút Phê duyệt/Từ chối của Phó Giám đốc
-      vẫn hiện dù giấy uỷ quyền đã hết hạn. Cả 5 lỗi đã sửa, verify bằng dữ liệu thật trước/sau —
-      xem #119, #120
+    + ✅ **Đã sửa "Đơn nghỉ vắt qua Tết dương lịch có ứng phép bị đếm thiếu ngày"** (cảnh báo ở đợt
+      "Ứng phép năm sau" bên dưới) — trừ nhầm số ngày đã ứng ở cả 2 năm thay vì đúng 1 năm gốc. Xem #119
+    + **Rà soát thêm phát hiện 2 lỗi quyền/khoá không liên quan tới hạn mức**: nút "Hủy đơn" bị ẩn
+      nhầm cho đơn đang chờ duyệt ở tài khoản chưa được cấp quyền riêng; nút Phê duyệt/Từ chối của
+      Phó Giám đốc vẫn hiện dù giấy uỷ quyền đã hết hạn. Cả 5 lỗi (3 ở trên + 2 lỗi này) đã sửa,
+      verify bằng dữ liệu thật trước/sau — xem #119, #120. **Còn 2 cảnh báo ở đợt "Ứng phép năm
+      sau" chưa sửa** (chuyển kỳ chưa hết hạn 31/03, nộp lại đơn bị từ chối chưa hỏi ứng phép)
     + **Thêm 2 loại nghỉ mới**: *Nghỉ không lương* và *Họp/Công tác* — đi qua đúng quy trình duyệt
       (KSV → Tổng hợp → Giám đốc) như đơn thường, nhưng **không trừ vào hạn mức phép năm** (vẫn hiện
       trong chấm công/báo cáo để theo dõi). Họp/Công tác cho chọn lẻ từng ngày (giống phép năm) thay
@@ -44,6 +46,71 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       phép"/"Rút đơn nhiều cấp" — đã cấp bổ sung; nếu nhóm quyền khác của đơn vị cũng thiếu 2 quyền
       này thì cấp thêm tương tự qua màn Quản lý nhóm quyền
 
+- 05/09/2026 Đối chiếu CITAD - **Nhiều người cùng chấm một ngày, khoá nguồn Napas/PSS-MDP, tách bảng chênh lệch VNĐ / Ngoại tệ**
+    + **Hết cảnh "một ngày chỉ một người chấm được".** Trước đây một ngày chỉ có đúng một bảng
+      dùng chung cả phòng: người thứ hai vào chấm cùng ngày thì bị chặn, hoặc phải sửa đè lên
+      bảng người thứ nhất đã lập. Nay **mỗi người tự lập bảng riêng của mình** cho cùng một ngày,
+      không ai đụng vào bảng ai
+    + Tab **Lịch sử** vì thế có thể hiện **nhiều dòng cho cùng một ngày** — mỗi dòng là bảng của
+      một người, kèm nhãn **Chính thức** (đã Lưu bảng cuối) hay **Tạm**
+    + **Vào bảng tạm của người khác vẫn chỉ bổ sung được Napas/PSS-MDP** như trước, không sửa
+      được ô nào khác và không chốt bản cuối hộ được
+    + **Hai ô Napas / PSS - MDP không gõ tay được nữa** — chỉ nạp bằng nút *"Nạp CITAD"*, giống
+      hệt 5 cổng CITAD và PaymentHub. Nếu quét ở trang PaymentHub, phần mềm sẽ **bỏ qua** hai mục
+      này và báo *"Lệnh quyết toán lô bắt buộc phải quét dữ liệu từ cổng Citad"* — **đây không
+      phải lỗi phần mềm**, chỉ là quét nhầm trang. **Không cần cài lại Extension**, Extension
+      không thay đổi gì
+    + **Ba bảng chênh lệch thay vì một:** bảng *Gộp* cả 3 loại tiền như cũ, thêm bảng **VNĐ**
+      riêng và bảng **Ngoại tệ** (USD + EUR chung một bảng). Nhìn là biết ngay lệch nằm ở nhóm
+      tiền nào, không phải đọc dòng ghi chú nhỏ cuối trang. **File Excel xuất ra không đổi**
+    + ⚠️ **Sổ trực cuối ngày đọc "đã khớp" theo bất kỳ bảng nào của ngày đó.** Một ngày giờ có
+      nhiều bảng, nên nếu người A chốt bảng khớp mà người B chốt bảng còn lệch thì Sổ trực
+      **vẫn báo đã khớp**, không cảnh báo gì. Cảnh báo này xưa nay chỉ là nhắc phụ trợ và không
+      chặn ai bấm xác nhận — nhưng cần biết để đừng tin nó thay cho việc tự kiểm
+    + Sửa lỗi phát hiện lúc soát: bấm **Xoá** một bảng tạm từng xoá theo luôn toàn bộ lịch sử của
+      bảng đó (mất dấu vết ai đã chấm gì lúc nào); và người đang bổ sung Napas vào bảng người
+      khác, sau khi bấm Lưu thì màn hình lặng lẽ chuyển sang chế độ "làm bảng mới" trong khi số
+      liệu của người kia vẫn còn trên màn hình — bấm Lưu lần nữa sẽ đẻ ra một bảng thừa
+
+- 05/09/2026 Nghỉ phép - **Ứng phép năm sau khi hết hạn mức, trưởng/phó phòng duyệt thay nhau, báo cáo chấm công tháng**
+    + **Hết ngày phép vẫn xin nghỉ được — bằng cách ứng trước của năm sau.** Trước đây xin quá số
+      ngày còn lại là bị chặn thẳng, không còn đường nào khác. Nay phần mềm hỏi lại *"Đơn đã vượt
+      hạn mức năm nay, có ứng trước N ngày của năm sau không?"*. Đồng ý thì đơn được tạo, và số
+      ngày ứng đó **bị trừ thật vào quỹ phép năm sau** — không phải lời nhắc suông. Ứng vượt cả
+      quỹ năm sau thì vẫn bị chặn
+    + **Người duyệt thấy rõ đơn nào có ứng phép.** Cả ba bước duyệt (KSV, Tổng hợp, Ban lãnh đạo)
+      và cả nút duyệt hàng loạt đều hiện cảnh báo nêu tên người xin nghỉ và năm bị ứng trước khi
+      duyệt thật
+    + **Trưởng / phó phòng cùng phòng nay duyệt thay nhau được ở bước KSV.** Trước đây chỉ đúng
+      người được chọn lúc nộp đơn mới bấm được — người đó đi công tác hay nghỉ phép thì đơn nằm
+      đó vô thời hạn, chỉ quản trị viên gỡ được. Nay bất kỳ trưởng / phó phòng nào **cùng phòng
+      với người xin nghỉ** đều duyệt được (vẫn không ai tự duyệt đơn của mình)
+    + **Tab "Báo cáo năm" đổi tên thành "Báo cáo tổng hợp"**, thêm mục *Báo cáo hàng tháng* chọn
+      riêng năm / tháng
+    + **Báo cáo chấm công tháng (file Excel)** dựng theo mẫu giấy "Tổng hợp chấm công TTTT" —
+      nhóm theo phòng, **X** = đi làm, **P** = nghỉ phép, ô để trống tô màu = T7/CN/ngày lễ.
+      ⚠️ **Chỉ điền được hai cột đó.** Các buổi họp / tập huấn / công tác và cột xếp loại thi đua
+      **không có trong phần mềm** nên để trống, phòng Tổng hợp điền tay sau khi tải về — đã ghi
+      chú ngay cuối bảng trong file
+    + **Rê chuột trên bảng đơn nghỉ phép nay sáng cả dòng lẫn cột** như Excel, đỡ dóng nhầm hàng
+    + **Nút "Tải phiếu" hết bị rớt về bản chưa ký.** Lần in đầu tiên sau khi máy chủ khởi động,
+      Word cần tới hơn một phút để sẵn sàng; phần mềm chỉ chờ 60 giây rồi bỏ cuộc và đưa bản
+      `.docx` chưa có chữ ký. Nay chờ đủ 160 giây
+    + ⚠️ **QUAN TRỌNG — số ngày phép năm của một số người sẽ thay đổi sau lần cập nhật này.**
+      Công thức thâm niên trước đây cộng thêm 1 ngày **mỗi 4 năm** vào ngành; đúng luật phải là
+      **mỗi 5 năm**. Đối chiếu báo cáo thật năm 2026: mốc 5 năm khớp **67/72** người, mốc 4 năm cũ
+      chỉ khớp **12/72**. Ai vào ngành đủ 4, 8, 12… năm sẽ **giảm 1 ngày** so với con số phần mềm
+      hiển thị trước đây. Người nào đã nghỉ hết số cũ thì lần xin nghỉ tới sẽ báo hết phép —
+      **báo lại cho phòng Tổng hợp chỉnh tay ở tab Hạn mức phép**, đừng tự đoán
+    + ⚠️ **Ngày phép chuyển từ năm trước hiện chưa hết hạn 31/03 như quy định** — đơn nghỉ vào
+      tháng 6, tháng 10 vẫn được cộng thêm số ngày chuyển năm. Đang sửa ở đợt tới
+    + ⚠️ **Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép**, vẫn báo lỗi và dừng.
+      Tạo đơn mới và khai báo hộ thì đã có. Đang sửa ở đợt tới
+    + ⚠️→✅ **~~Đơn nghỉ vắt qua Tết dương lịch mà có ứng phép sẽ bị đếm thiếu ngày~~ — đã sửa,
+      xem entry mới nhất ở trên cùng.** Trước đây chỉ ảnh hưởng đơn bắt đầu năm này kết thúc năm
+      sau và đồng thời vượt hạn mức
+    + ⚠️ **Còn 2 cảnh báo trên chưa sửa** (chuyển kỳ chưa hết hạn 31/03, nộp lại đơn bị từ chối
+      chưa hỏi ứng phép) — chưa nằm trong đợt rà soát vừa rồi, để đợt sau
 - 05/09/2026 Nghỉ phép - **Nghỉ phép bắt buộc: đăng ký, điều chỉnh ngày, và mẫu đơn riêng theo chức danh**
     + **Điều chỉnh ngày nghỉ phép bắt buộc sau khi đơn đã duyệt xong.** Đơn đã "Hoàn thành" nay có
       nút *"Điều chỉnh ngày NPBB"*. Bấm vào sẽ tạo **một đơn mới**, đi lại đủ ba bước duyệt như đơn
