@@ -53,6 +53,92 @@
   <h1>⚙ Implementation Notes — PAYMENT CENTER</h1>
   <p class="subtitle">Ghi chú kỹ thuật, quyết định thiết kế, đánh đổi. Cập nhật liên tục. | 2026-09-05</p>
 
+  <!-- DC1 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">DC1</span>
+      <span class="card-title">Đối chiếu CITAD — mỗi người 1 bảng riêng/ngày, khoá nguồn Napas/PSS-MDP (PR #76)</span>
+      <span class="badge badge-warn">Đã merge — 1 điểm migration chưa tự lành</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label">Đảo ngược đúng quyết định của lần rebuild trước — và vì sao không phải là đi lùi</div>
+      <p>Bảng <code>doi_chieu_citad_sessions</code> nay có <b>hai</b> khối rebuild nối tiếp nhau trong
+        <code>_ensure_indexes()</code>, hướng ngược nhau: khối cũ gộp <code>(ngay, staff_id)</code> về
+        <b>một bảng chung/ngày</b>, khối mới tách trở lại thành <code>id</code> + <code>UNIQUE(ngay,
+        created_by)</code>. Nhìn qua tưởng quay về schema cũ, <b>không phải</b>: bản gốc khoá theo
+        <code>staff_id</code> là <i>người lưu sau cùng</i>, còn bản này khoá theo <code>created_by</code> là
+        <i>người lập bảng</i>, cố định suốt đời bảng đó. Chính chỗ đó mới cho phép người khác góp
+        Napas/PSS-MDP vào bảng của mình mà không cướp mất quyền sở hữu.</p>
+      <p>Khối rebuild mới <b>không dedup</b> (khác khối cũ) — dữ liệu vào nó vốn đã 1 dòng/ngày, chỉ
+        thiếu cột <code>id</code>. Backfill <code>doi_chieu_citad_history.session_id</code> phải nằm
+        <b>trong</b> khối này chứ không đặt cạnh câu <code>ALTER</code> ở <code>schema_migrations</code>:
+        lúc câu ALTER chạy, cột <code>id</code> chưa tồn tại.</p>
+
+      <div class="label">Vấn đề phát hiện nhưng CHƯA sửa — và vì sao chấp nhận được</div>
+      <div class="caution"><b>Câu ALTER đã chạy một lần rồi thì sửa lại chữ trong nó là vô tác dụng.</b>
+        Bản đầu của PR khai <code>session_id ... ON DELETE CASCADE</code>; review chỉ ra CASCADE xoá
+        theo cả lịch sử khi xoá một bảng tạm, tác giả sửa thành <code>SET NULL</code>. Nhưng
+        <code>schema_migrations</code> <b>nuốt lỗi <code>duplicate column</code> có chủ đích</b> — DB nào
+        đã khởi động với bản trước đó thì cột đã tồn tại, câu ALTER mới bị bỏ qua lặng lẽ, và
+        <b>FK cũ CASCADE ở lại vĩnh viễn</b>. Đo trực tiếp: DB đã chạy bản cũ vẫn mất sạch lịch sử khi
+        xoá bảng; DB mới tinh thì đúng.
+      </div>
+      <p><b>Không sửa, vì:</b> máy chính chưa bao giờ chạy bản đó (PR chưa merge lúc phát hiện), nên
+        sau khi merge nó chạy câu ALTER lần đầu và ra đúng <code>SET NULL</code>. Chỉ DB máy dev nào
+        đã checkout nhánh ở bản cũ mới dính — sửa bằng cách dựng lại cột <code>session_id</code>, rẻ
+        hơn viết thêm một khối rebuild bảng <code>doi_chieu_citad_history</code> chỉ để phục vụ máy dev.</p>
+      <p><b>Nhưng nếu lần sau đổi FK/khoá của một cột đã phát hành</b> thì bắt buộc phải rebuild bảng —
+        SQLite không ALTER được FK, và test <code>_db_fk()</code> trong
+        <code>tests/test_doi_chieu_citad_multi_session.py</code> <b>không bắt được lỗi loại này</b> vì nó
+        dựng schema từ chuỗi viết tay chứ không đi qua <code>_ensure_indexes()</code>.</p>
+
+      <div class="label">Không rollback được bằng cách revert code</div>
+      <p>Sau khi DB đã migrate, code cũ gọi <code>INSERT ... ON CONFLICT(<b>ngay</b>)</code> sẽ chết —
+        <code>ngay</code> không còn là khoá duy nhất, ràng buộc giờ là <code>UNIQUE(ngay, created_by)</code>
+        và SQLite đòi mệnh đề ON CONFLICT khớp đúng một unique index. Muốn lui phải khôi phục DB kèm code.</p>
+
+      <div class="label">Đánh đổi đã chấp nhận</div>
+      <table>
+        <tr><th>Quyết định</th><th>Được</th><th>Mất</th></tr>
+        <tr>
+          <td>Sổ trực coi ngày là "đã khớp" nếu <b>bất kỳ</b> bảng nào final và khớp</td>
+          <td>Không phải chỉ định một bảng "chính thức" — không đẻ thêm thao tác cho người dùng</td>
+          <td>A chốt bảng khớp, B chốt bảng lệch cùng ngày <b>→ không cảnh báo gì</b>. Chấp nhận được
+            vì đây vốn là nhắc phụ trợ, không chặn xác nhận sổ trực</td>
+        </tr>
+        <tr>
+          <td>Web app tự bỏ qua item Napas/PSS-MDP quét từ PaymentHub, <b>không sửa Extension</b></td>
+          <td>Không phải ra bản Extension mới rồi cài lại từng máy trạm</td>
+          <td>Extension vẫn quét và gửi dữ liệu chết lên buffer; hai bên lệch nhau về "cái gì còn dùng"</td>
+        </tr>
+        <tr>
+          <td>Vẫn hiện nút "Nạp PaymentHub" ở chế độ góp Napas dù nó không còn nạp được gì</td>
+          <td>Người quét nhầm cổng đọc được thông báo nói rõ phải quét ở CITAD</td>
+          <td>Một nút không làm gì trong ngữ cảnh đó — cố ý, đừng "dọn cho gọn"</td>
+        </tr>
+      </table>
+
+      <div class="note"><b>Bảng mồ côi.</b> <code>created_by</code> khai
+        <code>ON DELETE SET NULL</code>: xoá tài khoản người lập bảng thì bảng đó thành NULL —
+        không xoá được, không mở khoá được, và tab Lịch sử gọi <code>/history?created_by=None</code>
+        ăn 422. Rất hiếm nên chưa chặn; nếu gặp thì cấm xoá user còn bảng chưa chốt là đường rẻ nhất.</div>
+
+      <div class="label">Hai lỗi review bắt được, đáng nhớ vì cùng một kiểu "hỏng mà không báo gì"</div>
+      <p><code>_save_session_now()</code> tải lại bảng sau khi lưu mà <b>không truyền</b>
+        <code>created_by</code> → luôn lấy bảng của chính người gọi. Người đang góp Napas vào bảng
+        người khác chưa có bảng riêng ngày đó → API trả rỗng → UI rơi về mode <code>edit</code> trong khi
+        <b>số liệu của người kia vẫn nằm nguyên trên màn hình</b> (<code>apply_session_data</code> không
+        chạy vì return sớm). Bấm Lưu lần nữa là đẻ ra bảng mới của mình chứa số liệu người khác.
+        Bài học: mọi chỗ "tải lại sau khi ghi" phải tải lại <b>đúng đối tượng vừa ghi</b>, không phải
+        đối tượng mặc định của người đang đăng nhập.</p>
+      <p><code>session_admin_unlock()</code> không kiểm <code>rowcount</code> → UPDATE không khớp dòng nào
+        vẫn trả <code>{"ok": true}</code>, Admin thấy "Đã mở khoá" mà chẳng có gì đổi. Nay ném
+        <code>SessionNotFoundError</code> → 404.</p>
+
+    </div>
+  </div>
+
   <!-- NP1 -->
   <div class="card">
     <div class="card-header">

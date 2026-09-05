@@ -568,9 +568,23 @@ Truy cập:
 - Ngoài 5 cổng còn 2 kênh cộng vào tổng CITAD: **Napas** và **PSS - MDP** (chỉ 2 ô *IH Đến —
   Món/Tiền*). Kênh **Ebanking** đã ngừng: bỏ khỏi màn hình 14/08/2026, bỏ nốt khỏi file Excel
   20/08/2026 — số liệu các ngày đã chấm vẫn nằm nguyên trong DB, chỉ không hiện/in ra nữa
-- Mỗi ngày là **một bản ghi chung cả phòng** (`doi_chieu_citad_sessions`, khoá theo `ngay`) —
-  ai lưu sau cùng là bản hiện hành; mỗi lần bấm Lưu ghi thêm 1 dòng vào
-  `doi_chieu_citad_history` để xem/tải lại từng bản cũ
+- **Mỗi người một bảng riêng cho cùng một ngày** (từ 05/09/2026 — `doi_chieu_citad_sessions`
+  khoá theo `(ngay, created_by)`). Trước đây một ngày chỉ một bảng chung cả phòng nên người thứ
+  hai chấm cùng ngày bị chặn, hoặc phải sửa đè lên bảng người thứ nhất. Nay ai cũng tự lập được
+  bảng của mình; mỗi lần bấm Lưu ghi thêm 1 dòng vào `doi_chieu_citad_history` gắn đúng bảng đó
+  để xem/tải lại từng bản cũ
+- Vào bảng **tạm** của người khác (qua tab *Lịch sử*) vẫn chỉ bổ sung được Napas/PSS-MDP như cũ,
+  không sửa được ô nào khác và không chốt bản cuối hộ được
+- **Sổ trực cuối ngày** coi một ngày là *đã đối chiếu, đã khớp* nếu **bất kỳ** bảng nào của ngày
+  đó đã "Lưu bảng cuối" và khớp. ⚠️ Nghĩa là nếu người A chốt bảng khớp còn người B chốt bảng
+  lệch cho cùng ngày, Sổ trực **không** cảnh báo — cảnh báo này chỉ là nhắc phụ trợ, không chặn
+- Hai ô **Napas** / **PSS - MDP** **không gõ tay được nữa** (từ 05/09/2026), chỉ nạp qua nút
+  *"Nạp CITAD"*. Extension quét ở trang PaymentHub vẫn gửi hai mục này lên nhưng phần mềm chủ
+  động bỏ qua và báo *"Lệnh quyết toán lô bắt buộc phải quét dữ liệu từ cổng Citad"* —
+  **không phải lỗi**, và **không cần cài lại Extension** (Extension không đổi gì)
+- **Ba bảng chênh lệch** thay vì một (từ 05/09/2026): bảng *Gộp* cả 3 loại tiền như cũ, thêm
+  bảng **VNĐ** riêng và bảng **Ngoại tệ** (USD + EUR gộp chung) — nhìn ra ngay lệch nằm ở nhóm
+  tiền nào, không phải đọc dòng ghi chú cuối trang. Công thức và file Excel xuất ra không đổi
 - Xuất Excel theo mẫu *"Báo cáo đối chiếu giao dịch hệ thống thanh toán điện tử liên ngân hàng"*
   đã duyệt (`build_xlsx` — không đổi format/công thức khi sửa)
 - Kèm **Extension trình duyệt** (`extension_citad/`) tự lấy số liệu từ trang CITAD/PaymentHub:

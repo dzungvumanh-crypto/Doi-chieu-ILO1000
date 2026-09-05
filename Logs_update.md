@@ -4,6 +4,32 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 05/09/2026 Đối chiếu CITAD - **Nhiều người cùng chấm một ngày, khoá nguồn Napas/PSS-MDP, tách bảng chênh lệch VNĐ / Ngoại tệ**
+    + **Hết cảnh "một ngày chỉ một người chấm được".** Trước đây một ngày chỉ có đúng một bảng
+      dùng chung cả phòng: người thứ hai vào chấm cùng ngày thì bị chặn, hoặc phải sửa đè lên
+      bảng người thứ nhất đã lập. Nay **mỗi người tự lập bảng riêng của mình** cho cùng một ngày,
+      không ai đụng vào bảng ai
+    + Tab **Lịch sử** vì thế có thể hiện **nhiều dòng cho cùng một ngày** — mỗi dòng là bảng của
+      một người, kèm nhãn **Chính thức** (đã Lưu bảng cuối) hay **Tạm**
+    + **Vào bảng tạm của người khác vẫn chỉ bổ sung được Napas/PSS-MDP** như trước, không sửa
+      được ô nào khác và không chốt bản cuối hộ được
+    + **Hai ô Napas / PSS - MDP không gõ tay được nữa** — chỉ nạp bằng nút *"Nạp CITAD"*, giống
+      hệt 5 cổng CITAD và PaymentHub. Nếu quét ở trang PaymentHub, phần mềm sẽ **bỏ qua** hai mục
+      này và báo *"Lệnh quyết toán lô bắt buộc phải quét dữ liệu từ cổng Citad"* — **đây không
+      phải lỗi phần mềm**, chỉ là quét nhầm trang. **Không cần cài lại Extension**, Extension
+      không thay đổi gì
+    + **Ba bảng chênh lệch thay vì một:** bảng *Gộp* cả 3 loại tiền như cũ, thêm bảng **VNĐ**
+      riêng và bảng **Ngoại tệ** (USD + EUR chung một bảng). Nhìn là biết ngay lệch nằm ở nhóm
+      tiền nào, không phải đọc dòng ghi chú nhỏ cuối trang. **File Excel xuất ra không đổi**
+    + ⚠️ **Sổ trực cuối ngày đọc "đã khớp" theo bất kỳ bảng nào của ngày đó.** Một ngày giờ có
+      nhiều bảng, nên nếu người A chốt bảng khớp mà người B chốt bảng còn lệch thì Sổ trực
+      **vẫn báo đã khớp**, không cảnh báo gì. Cảnh báo này xưa nay chỉ là nhắc phụ trợ và không
+      chặn ai bấm xác nhận — nhưng cần biết để đừng tin nó thay cho việc tự kiểm
+    + Sửa lỗi phát hiện lúc soát: bấm **Xoá** một bảng tạm từng xoá theo luôn toàn bộ lịch sử của
+      bảng đó (mất dấu vết ai đã chấm gì lúc nào); và người đang bổ sung Napas vào bảng người
+      khác, sau khi bấm Lưu thì màn hình lặng lẽ chuyển sang chế độ "làm bảng mới" trong khi số
+      liệu của người kia vẫn còn trên màn hình — bấm Lưu lần nữa sẽ đẻ ra một bảng thừa
+
 - 05/09/2026 Nghỉ phép - **Ứng phép năm sau khi hết hạn mức, trưởng/phó phòng duyệt thay nhau, báo cáo chấm công tháng**
     + **Hết ngày phép vẫn xin nghỉ được — bằng cách ứng trước của năm sau.** Trước đây xin quá số
       ngày còn lại là bị chặn thẳng, không còn đường nào khác. Nay phần mềm hỏi lại *"Đơn đã vượt
