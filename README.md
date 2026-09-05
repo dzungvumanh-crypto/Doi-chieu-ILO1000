@@ -334,6 +334,18 @@ Truy cập:
 - Bảng nghỉ phép hôm nay trên Trang chủ theo từng phòng — **chỉ đếm đơn đã duyệt** (lịch tháng trong menu thì hiện cả đơn đang chờ, kèm nhãn trạng thái)
 - Chống duyệt trùng: hai người (hoặc hai tab) bấm duyệt cùng lúc thì chỉ lần đầu có hiệu lực, lần sau báo đơn đã được xử lý
 - Resubmit đơn bị từ chối; huỷ đơn đang chờ hoặc đã duyệt
+- **Nghỉ phép bắt buộc (NPBB)**: đơn đã "Hoàn thành" có nút *Điều chỉnh ngày NPBB* — tạo **đơn mới**
+  liên kết qua `leave_records.adjusts_leave_id`, đi lại đủ 3 bước duyệt; đơn gốc chỉ chuyển
+  *"Đã hủy - Đã điều chỉnh"* khi đơn mới duyệt xong. Màn chi tiết hiện cả hai chiều liên kết
+- Mẫu đơn xin nghỉ phép năm **riêng theo chức danh** (nhân viên / trưởng - phó phòng / GĐ / PGĐ).
+  Đơn của GĐ kính gửi **Tổng Giám đốc Agribank**, không phải Giám đốc TTTT; mẫu NPBB của diện HĐTV
+  gửi **Ban Tổ chức Nhân sự**
+- Mẫu đơn cá nhân NPBB (đăng ký / điều chỉnh — "Mẫu 1 TCNS") và báo cáo tổng hợp
+  **Mẫu 18** (nội bộ) / **Mẫu 19** (gửi TCNS): `GET /api/leaves/export/npbb-batch?year=&mau=18|19`
+  > ⚠️ **Báo cáo Mẫu 18/19 chưa dùng được**: truy vấn chưa lọc bản ghi tổng hợp `[Import]` /
+  > `[Điều chỉnh]` của màn *Nhập hạn mức phép* — vốn cũng mang `leave_type='bat_buoc'` — nên in ra
+  > gần như toàn bộ nhân sự kèm ngày giả lập. Xem card **NP1** trong
+  > [`docs/Implementation-notes.html`](docs/Implementation-notes.html)
 
 ### Module Chứng từ Hậu kiểm
 - **Bàn giao**: GDV nhập số tờ theo ngày, HKV/KSV xác nhận từng ô

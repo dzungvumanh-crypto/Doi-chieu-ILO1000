@@ -51,7 +51,112 @@
 <div class="page">
 
   <h1>⚙ Implementation Notes — PAYMENT CENTER</h1>
-  <p class="subtitle">Ghi chú kỹ thuật, quyết định thiết kế, đánh đổi. Cập nhật liên tục. | 2026-09-04</p>
+  <p class="subtitle">Ghi chú kỹ thuật, quyết định thiết kế, đánh đổi. Cập nhật liên tục. | 2026-09-05</p>
+
+  <!-- NP1 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">NP1</span>
+      <span class="card-title">Nghỉ phép bắt buộc — điều chỉnh ngày sau khi đã duyệt, mẫu đơn theo cấp bậc (PR #72)</span>
+      <span class="badge badge-warn">Đã merge — còn 3 lỗi số liệu chưa sửa</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label">Vì sao "điều chỉnh ngày" đẻ ra đơn MỚI thay vì sửa đơn cũ</div>
+      <p>Đơn nghỉ phép bắt buộc đã "Hoàn thành" là <b>chứng từ đã ký đủ ba bước</b> và đã nằm trong
+        tờ trình gửi Ban Tổ chức Nhân sự. Ghi đè ngày lên nó thì bản đã ký biến mất, không còn gì
+        đối chiếu. Nên nút "Điều chỉnh ngày NPBB" sinh một đơn riêng, <code>adjusts_leave_id</code>
+        trỏ ngược về đơn gốc, đi lại đủ ba bước duyệt. Đơn gốc chỉ chuyển "Đã hủy - Đã điều chỉnh"
+        <b>khi đơn mới duyệt xong</b> — trước đó hai đơn cùng tồn tại và màn chi tiết hiện cả hai
+        chiều liên kết.</p>
+      <p>Hệ quả phải chấp nhận: bước kiểm trùng ngày phải <b>cố ý bỏ qua</b> đơn gốc
+        (<code>_excl_sql</code> trong <code>_create_leave_core</code>), nếu không đơn điều chỉnh sẽ
+        tự báo trùng với đúng cái nó thay thế.</p>
+
+      <div class="label">Mẫu đơn theo cấp bậc — bản đồ có sẵn nhưng trỏ vào hư không</div>
+      <p><code>_pick_template()</code> vốn đã map role sang 4 tên file, nhưng <b>chưa file nào tồn
+        tại trên đĩa</b>. Nhánh <code>return path if os.path.exists(path) else _TPL_PATH</code> nên
+        luôn rơi về mẫu chung — không lỗi, không log, mọi cấp bậc in ra cùng một tờ. PR bổ sung đủ
+        4 file thật.</p>
+      <div class="note">Cùng loại hỏng với vụ hai thư mục "Phòng Tổng hợp" NFD/NFC (xem DESIGN.md):
+        <b>fallback im lặng che mất việc cấu hình chưa xong</b>. Ở đây fallback là đúng (không có
+        mẫu riêng thì vẫn phải in được), nhưng đáng lẽ phải kèm một dòng log WARNING.</div>
+      <p>Đơn của Giám đốc trước đây "kính gửi Giám đốc Trung tâm Thanh toán" — tức gửi cho chính
+        mình. Đối chiếu mẫu giấy thật ("GIẤY NGHỈ PHÉP GIÁM ĐỐC") sửa thành <b>Tổng Giám đốc
+        Agribank</b>; riêng mẫu NPBB của diện HĐTV gửi thẳng <b>Ban Tổ chức Nhân sự</b>.</p>
+
+      <div class="label">N+1 ở <code>list_leaves</code> — sửa trong PR này, tuy không phải PR gây ra</div>
+      <p><code>list_leaves</code> vốn lấy danh sách id rồi gọi <code>_leave_to_out()</code>
+        <b>riêng cho từng dòng</b>, mỗi dòng 4 câu SQL. PR cộng thêm 1–2 câu nữa cho mỗi đơn
+        <code>bat_buoc</code>, và câu mới tra <code>adjusts_leave_id</code> — cột chưa có index nên
+        <code>EXPLAIN QUERY PLAN</code> ra <code>SCAN TABLE leave_records</code>: mỗi đơn bắt buộc
+        quét lại toàn bộ bảng, chi phí tăng theo <b>bình phương</b> số dòng.</p>
+      <table>
+        <tr><th>Cách làm</th><th>Số câu SQL</th><th>Thời gian</th></tr>
+        <tr><td>Từng dòng (cũ)</td><td>4.261</td><td>118,1 ms</td></tr>
+        <tr><td>Gộp theo lô (nay)</td><td><b>6</b></td><td><b>33,2 ms</b></td></tr>
+      </table>
+      <p>Đo trên bản sao DB thật, <code>scope=all</code>, 991 dòng trả về. Số câu lệnh nay là
+        <b>hằng số</b>, không tăng theo số dòng. Thêm <code>ix_leave_records_adj</code> đưa câu tra
+        về <code>SEARCH ... USING INDEX</code> — nhanh gấp 94 lần ở bảng 9.190 dòng.</p>
+      <div class="note"><b>Nạp lịch làm việc một lần cho cả danh sách là an toàn</b>:
+        <code>LichLamViec</code> chỉ là hai tập ngày lễ / ngày làm bù trong khoảng nạp, nạp khoảng
+        rộng hơn chỉ cho ra <b>tập cha</b> nên <code>la_ngay_lam_viec()</code> vẫn trả đúng từng
+        ngày. Bỏ qua hẳn khi mọi đơn đều có <code>spread_dates</code>, vì khi đó
+        <code>_period_days()</code> không bao giờ được gọi tới.</div>
+      <div class="caution"><b>Đánh đổi đã chấp nhận:</b> quy tắc "đơn điều chỉnh mới nhất chưa bị
+        từ chối" nay được viết <b>hai lần</b> — <code>ORDER BY created_at DESC LIMIT 1</code> trong
+        <code>_leave_to_out()</code> (đường 1 đơn) và <code>ORDER BY</code> + <code>setdefault</code>
+        trong <code>list_leaves()</code> (đường gộp). Sửa một bên mà quên bên kia thì màn chi tiết
+        đơn và màn danh sách nói hai điều khác nhau, <b>không lỗi, không log</b>. Đã kiểm tương
+        đương thủ công (40 người × 5 scope = 125 lượt gọi, 0 lệch nội dung, 0 lệch thứ tự) nhưng
+        <b>chưa khoá lại bằng test</b> — việc cần làm ngay ở PR sau.</div>
+
+      <div class="label">Ba lỗi phát hiện khi review, CỐ Ý chưa sửa trước khi merge</div>
+      <p>Người dùng chốt merge để không chặn phần việc còn lại; ba lỗi dưới đây xử lý ở PR riêng.
+        <b>Cả ba đều sai số liệu, không phải sai giao diện.</b></p>
+      <table>
+        <tr><th>Lỗi</th><th>Vì sao xảy ra</th><th>Sửa thế nào</th></tr>
+        <tr>
+          <td><b>Báo cáo Mẫu 18/19 in cả bản ghi giả của "Nhập file hạn mức"</b><br>
+              <span class="pill pill-red">Nặng nhất</span> Đo trên DB thật:
+              <b>68 dòng ma, 0 dòng đúng</b></td>
+          <td><code>import_quota_apply()</code> và <code>update_used_days()</code> chèn bản ghi tổng
+              hợp <b>đúng dạng</b> <code>leave_type='bat_buoc'</code>,
+              <code>status='approved'</code>, ngày T2–T6 giả lập. Mọi nơi khác đều lọc chúng bằng
+              <code>reason NOT LIKE '[Import]%'</code> — <code>export_npbb_batch()</code> quên.</td>
+          <td>Thêm mệnh đề lọc đó vào truy vấn <code>roots</code>.</td>
+        </tr>
+        <tr>
+          <td><b><code>used_leave_days</code> cộng dồn khi đơn gốc bị thay</b></td>
+          <td><code>_cancel_adjusted_original()</code> <code>UPDATE</code> thẳng cột
+              <code>status</code>, không qua <code>_apply_status_transition()</code>, nên không
+              hoàn lại ngày. Chú thích trong hàm nói <code>bat_buoc</code> "chưa từng bị trừ hạn
+              mức" — <b>sai</b>: miễn trừ chỉ áp cho bước CHẶN khi hết phép, còn
+              <code>_NO_QUOTA_TYPES</code> chỉ gồm <code>thai_san</code> /
+              <code>bao_hiem</code>. Nghỉ 5 ngày bị ghi thành 10.</td>
+          <td>Gọi <code>_apply_status_transition()</code> như đường huỷ đơn thường. Nhẹ bớt vì
+              <code>_calc_used_days()</code> (nguồn sự thật) đếm từ <code>leave_records</code>;
+              lệch chỉ nằm ở cột cache <code>user_tttt.used_leave_days</code>.</td>
+        </tr>
+        <tr>
+          <td><b>Điều chỉnh dây chuyền làm người đó biến mất khỏi báo cáo</b></td>
+          <td><code>npbb_adjust_leave()</code> không kiểm
+              <code>orig["adjusts_leave_id"] IS NULL</code>. Đơn điều chỉnh B sau khi duyệt cũng là
+              <code>bat_buoc</code> + <code>approved</code> nên nút hiện lại trên nó → chuỗi
+              A ← B ← C. Khi C duyệt xong thì B bị huỷ; lúc đó A không <code>approved</code> mà con
+              trực tiếp duy nhất của A (là B) cũng không — A rơi khỏi
+              <code>export_npbb_batch()</code> hoàn toàn.</td>
+          <td>Chặn ngay ở <code>npbb_adjust_leave()</code>: đơn đã là đơn điều chỉnh thì không
+              điều chỉnh tiếp.</td>
+        </tr>
+      </table>
+      <div class="caution"><b>Đừng dùng Báo cáo NPBB (Mẫu 18/19) cho tới khi lỗi 1 được sửa.</b>
+        Tờ trình gửi Ban Tổ chức Nhân sự sẽ liệt kê gần như toàn bộ nhân sự kèm khoảng ngày bịa.
+        Cảnh báo tương ứng đã ghi trong <code>Logs_update.md</code> và README.</div>
+
+    </div>
+  </div>
 
   <!-- VB3 -->
   <div class="card">
@@ -13544,6 +13649,59 @@ This may happen if you try to create UI from a background task.</pre>
         thao tác "đổi chủ ô" giữ nguyên mốc thời gian. Không làm bây giờ vì cả hai đều đụng vào đường
         đọc số liệu bàn giao dùng chung cho báo cáo khối lượng và đóng tập; làm vội dễ hỏng chỗ khác
         hơn là ích lợi của việc chữa một ca lẻ.</p>
+
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">118</span>
+      <span class="card-title">Chấm ILO1000 — <code>detect_huy()</code> gom nhầm REFERENCE dùng chung giữa nhiều chi nhánh, lây "Đã hủy" sang giao dịch bình thường (2026-09-03)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Báo cáo người chấm</span> Dữ liệu ngày 26/8/2026, comment trực tiếp trong file kết quả</div>
+      <p>"Đề nghị kiểm tra lại món này sheet hub trạng thái hoàn thành mà trạng thái của hệ thống
+        chấm là đã hủy" — 24 dòng Core (REFERENCE dạng <code>1000OTT...</code>, các đợt chi trả trợ
+        cấp xã hội hàng loạt BTXH) bị hệ thống gán TT = "Đã hủy" trong khi sheet Hub cho đúng cùng
+        Trace/số tiền lại ghi "Hoàn thành".</p>
+
+      <div class="label"><span class="pill pill-blue">Nguyên nhân gốc</span> REFERENCE không duy nhất giữa các chi nhánh trong 1 batch</div>
+      <p><code>detect_huy()</code> (<code>backend/services/ilo1000/process.py</code>) gom Core theo
+        <b>REFERENCE một mình</b> để tính net-zero Nợ/Có. Xác nhận bằng CSV GL02 gốc
+        (<code>1000_gl02_2026082620260826.csv</code>): REFERENCE <code>1000OTT261006174</code> xuất
+        hiện ở <b>3 chi nhánh khác nhau</b> — 1410 (CR +14.015.000, giao dịch thật), 5708 (CR
+        +746.700, giao dịch thật) và 2008 (CR +128.000 / -128.000, cặp hủy net-zero thật sự). Gom
+        theo REFERENCE một mình khiến tổng CR toàn nhóm ≠ 0 nhưng có dòng CR&lt;0 (tín hiệu (2), xem
+        card cũ về P1) → toàn bộ REFERENCE bị đánh dấu "Đã hủy", <b>lây nhầm sang cả 1410 và 5708</b>
+        dù 2 chi nhánh đó không liên quan gì tới cặp hủy của 2008. Trong <code>process_core()</code>,
+        bước gán Hủy/Đã hủy chạy <i>trước</i> bước khớp Hub (thứ tự ưu tiên TT) nên đè mất kết quả
+        khớp Hub đúng ("Hoàn thành") trước khi kịp tra tới.</p>
+
+      <div class="note"><b>Vì sao REFERENCE trùng giữa các chi nhánh:</b> các đợt chi trả trợ cấp xã
+        hội hàng loạt (BTXH) dùng chung một số hiệu đợt (OTT) cho nhiều chi nhánh tham gia cùng đợt
+        — REFERENCE không phải khóa giao dịch duy nhất trong toàn hệ thống, chỉ duy nhất trong phạm
+        vi 1 chi nhánh. <code>Trace</code> (tính sau, ở dòng dưới) đã tự cộng thêm TRBRCD cho đúng
+        lý do này (<code>brcd + REFERENCE[4:16]</code>) — <code>detect_huy()</code> lại tính SỚM HƠN,
+        trên REFERENCE thô, nên bỏ sót bài học đó.</div>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Gom theo khóa ghép (REFERENCE, TRBRCD)</div>
+      <p><code>detect_huy()</code> nhóm theo <code>(REFERENCE, TRBRCD)</code> thay vì REFERENCE đơn —
+        trả về <code>dict[(REFERENCE, TRBRCD), 'Hủy'|'Đã hủy']</code>. <code>process_core()</code> tra
+        cứu bằng khóa ghép tương ứng (<code>zip(ref, brcd)</code>) thay vì REFERENCE đơn. Verify trên
+        đúng batch GL02 thật (26/8): sau fix, <code>detect_huy()</code> không còn nhóm 1410/5708 vào
+        "Đã hủy"; chạy lại toàn bộ pipeline (<code>main_from_dir</code>) trên dữ liệu thật cho ra cả
+        5 dòng flagged đúng lại "citad 26.8" (khớp Citad), 5 dòng của chi nhánh 2008/3600 (cặp hủy
+        thật) vẫn đúng "Hủy" — không mất tín hiệu hủy thật, chỉ hết lây lan sai chi nhánh.</p>
+
+      <p>2 test mới: <code>test_huy_at_one_branch_does_not_leak_to_other_branches</code> +
+        <code>test_process_core_leaves_other_branches_unmarked</code>
+        (<code>TestDetectHuyRefSharedAcrossBranches</code>, <code>test_ilo1000_algorithm.py</code>) —
+        tái hiện đúng kịch bản 3 chi nhánh dùng chung REFERENCE, chỉ 1 chi nhánh có cặp net-zero.
+        6 test cũ đổi key literal từ REFERENCE đơn sang tuple <code>(REFERENCE, TRBRCD)</code> —
+        hành vi không đổi vì mọi test cũ đều dùng 1 TRBRCD cố định cho mỗi REFERENCE. 118/118 test
+        module ILO1000 pass.</p>
 
     </div>
   </div>

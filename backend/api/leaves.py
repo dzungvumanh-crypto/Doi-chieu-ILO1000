@@ -500,70 +500,55 @@ def _is_alt_ksv(current: dict, staff_id: int, db: sqlite3.Connection) -> bool:
     return bool(row and row["department_id"] and row["department_id"] == current.get("department_id"))
 
 
-def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
-    today = _vn_now().date().isoformat()
-    r = db.execute(
-        """SELECT lr.*,
-                  s.full_name AS staff_name, s.department_id AS s_dept_id, s.role AS staff_role,
-                  kv.full_name AS ksv_name,
-                  th.full_name AS th_name,
-                  gd.full_name AS gd_approver_name, gd.role AS gd_role,
-                  d.name AS dept_name,
-                  db_user.full_name AS declarer_name,
-                  -- PGĐ chỉ duyệt được khi còn ủy quyền hiệu lực HÔM NAY. Tính sẵn ở
-                  -- đây (không phải chỉ trong gd_review) để màn hình nói được lý do
-                  -- vì sao người duyệt không có nút, thay vì im lặng.
-                  CASE WHEN gd.role = 'pho_giam_doc' THEN
-                       (SELECT COUNT(*) FROM delegation_records dr
-                         WHERE dr.pho_giam_doc_id = gd.id AND dr.is_active = 1
-                           AND dr.start_date <= ? AND dr.end_date >= ?)
-                       ELSE 1 END AS gd_can_review
-           FROM leave_records lr
-           LEFT JOIN user_tttt s       ON lr.staff_id             = s.id
-           LEFT JOIN user_tttt kv      ON lr.ksv_approver_id      = kv.id
-           LEFT JOIN user_tttt th      ON lr.tong_hop_approver_id = th.id
-           LEFT JOIN user_tttt gd      ON lr.gd_approver_id       = gd.id
-           LEFT JOIN departments d     ON s.department_id          = d.id
-           LEFT JOIN user_tttt db_user ON lr.direct_by             = db_user.id
-           WHERE lr.id = ?""",
-        (today, today, leave_id),
-    ).fetchone()
-    if not r:
-        return {}
+# Câu SELECT đủ mọi cột/JOIN mà 1 dòng "LeaveOut" cần — dùng chung cho cả
+# _leave_to_out (1 đơn) lẫn list_leaves (nhiều đơn, xem _LEAVE_JOIN_SQL bên
+# dưới bọc thêm "WHERE lr.id IN (...)" thay vì "WHERE lr.id = ?").
+_LEAVE_JOIN_SQL = """SELECT lr.*,
+              s.full_name AS staff_name, s.department_id AS s_dept_id, s.role AS staff_role,
+              kv.full_name AS ksv_name,
+              th.full_name AS th_name,
+              gd.full_name AS gd_approver_name, gd.role AS gd_role,
+              d.name AS dept_name,
+              db_user.full_name AS declarer_name,
+              -- PGĐ chỉ duyệt được khi còn ủy quyền hiệu lực HÔM NAY. Tính sẵn ở
+              -- đây (không phải chỉ trong gd_review) để màn hình nói được lý do
+              -- vì sao người duyệt không có nút, thay vì im lặng.
+              CASE WHEN gd.role = 'pho_giam_doc' THEN
+                   (SELECT COUNT(*) FROM delegation_records dr
+                     WHERE dr.pho_giam_doc_id = gd.id AND dr.is_active = 1
+                       AND dr.start_date <= ? AND dr.end_date >= ?)
+                   ELSE 1 END AS gd_can_review
+       FROM leave_records lr
+       LEFT JOIN user_tttt s       ON lr.staff_id             = s.id
+       LEFT JOIN user_tttt kv      ON lr.ksv_approver_id      = kv.id
+       LEFT JOIN user_tttt th      ON lr.tong_hop_approver_id = th.id
+       LEFT JOIN user_tttt gd      ON lr.gd_approver_id       = gd.id
+       LEFT JOIN departments d     ON s.department_id          = d.id
+       LEFT JOIN user_tttt db_user ON lr.direct_by             = db_user.id"""
 
+
+def _npbb_brief_row(o) -> dict:
+    """Tóm tắt 1 đơn NPBB liên quan (đơn gốc hoặc đơn điều chỉnh) — hình dạng
+    dùng chung cho cả adjusts_leave lẫn npbb_adjustment trong LeaveOut."""
+    return {
+        "id": o["id"], "status": o["status"],
+        "start_date": o["start_date"], "end_date": o["end_date"],
+        "spread_dates": json.loads(o["spread_dates"]) if o["spread_dates"] else None,
+    }
+
+
+def _leave_row_to_dict(r, lich: LichLamViec, is_resubmitted: bool,
+                       adjusts_leave: Optional[dict], npbb_adjustment: Optional[dict]) -> dict:
+    """Dựng dict LeaveOut từ 1 dòng đã SELECT bằng _LEAVE_JOIN_SQL, cộng phần
+    phải tra riêng theo lô (lịch làm việc, is_resubmitted, NPBB 2 chiều) —
+    tách khỏi _leave_to_out để list_leaves tra 1 lần cho cả danh sách thay vì
+    lặp lại N lần (mỗi lần thêm vài câu SQL riêng, xem list_leaves)."""
     start = date.fromisoformat(r["start_date"])
     end   = date.fromisoformat(r["end_date"])
-    _lich = _load_lich(db, start, end)
-    _days = len(json.loads(r["spread_dates"])) if r["spread_dates"] else _period_days(start, end, _lich, r["leave_type"])
-
-    # NPBB — đơn gốc mà đơn NÀY điều chỉnh (nếu có), và đơn điều chỉnh trỏ VỀ
-    # đơn này (nếu đơn này là bat_buoc và có ai đó điều chỉnh nó).
-    def _npbb_ref(other_id):
-        o = db.execute(
-            "SELECT id, status, start_date, end_date, spread_dates FROM leave_records WHERE id=?",
-            (other_id,),
-        ).fetchone()
-        if not o:
-            return None
-        return {
-            "id": o["id"], "status": o["status"],
-            "start_date": o["start_date"], "end_date": o["end_date"],
-            "spread_dates": json.loads(o["spread_dates"]) if o["spread_dates"] else None,
-        }
-
-    _adjusts_leave = _npbb_ref(r["adjusts_leave_id"]) if r["adjusts_leave_id"] else None
-    _npbb_adjustment = None
-    if r["leave_type"] == "bat_buoc":
-        _adj_row = db.execute(
-            "SELECT id FROM leave_records WHERE adjusts_leave_id=? "
-            "AND status NOT IN ('rejected') ORDER BY created_at DESC LIMIT 1",
-            (leave_id,),
-        ).fetchone()
-        if _adj_row:
-            _npbb_adjustment = _npbb_ref(_adj_row["id"])
+    _days = len(json.loads(r["spread_dates"])) if r["spread_dates"] else _period_days(start, end, lich, r["leave_type"])
 
     _status_label = _LEAVE_STATUS_VN.get(r["status"], r["status"])
-    if r["status"] == LeaveStatus.CANCELLED and _npbb_adjustment and _npbb_adjustment["status"] == LeaveStatus.APPROVED:
+    if r["status"] == LeaveStatus.CANCELLED and npbb_adjustment and npbb_adjustment["status"] == LeaveStatus.APPROVED:
         _status_label = "Đã hủy - Đã điều chỉnh"
 
     return {
@@ -580,8 +565,8 @@ def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
         "status":                 r["status"],
         "status_label":           _status_label,
         "adjusts_leave_id":       r["adjusts_leave_id"],
-        "adjusts_leave":          _adjusts_leave,
-        "npbb_adjustment":        _npbb_adjustment,
+        "adjusts_leave":          adjusts_leave,
+        "npbb_adjustment":        npbb_adjustment,
         "ksv_approver_id":        r["ksv_approver_id"],
         "ksv_approver_name":      r["ksv_name"],
         "ksv_approved_at":        r["ksv_approved_at"],
@@ -608,11 +593,46 @@ def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
             else "KSV" if r["status"] == "rejected"
             else None
         ),
-        "is_resubmitted": bool(db.execute(
-            "SELECT 1 FROM leave_action_logs WHERE leave_id=? AND action='resubmit' LIMIT 1",
-            (leave_id,)
-        ).fetchone()),
+        "is_resubmitted": is_resubmitted,
     }
+
+
+def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
+    today = _vn_now().date().isoformat()
+    r = db.execute(f"{_LEAVE_JOIN_SQL}\n           WHERE lr.id = ?", (today, today, leave_id)).fetchone()
+    if not r:
+        return {}
+
+    start = date.fromisoformat(r["start_date"])
+    end   = date.fromisoformat(r["end_date"])
+    lich = _load_lich(db, start, end)
+
+    # NPBB — đơn gốc mà đơn NÀY điều chỉnh (nếu có), và đơn điều chỉnh trỏ VỀ
+    # đơn này (nếu đơn này là bat_buoc và có ai đó điều chỉnh nó).
+    def _npbb_ref(other_id):
+        o = db.execute(
+            "SELECT id, status, start_date, end_date, spread_dates FROM leave_records WHERE id=?",
+            (other_id,),
+        ).fetchone()
+        return _npbb_brief_row(o) if o else None
+
+    adjusts_leave = _npbb_ref(r["adjusts_leave_id"]) if r["adjusts_leave_id"] else None
+    npbb_adjustment = None
+    if r["leave_type"] == "bat_buoc":
+        _adj_row = db.execute(
+            "SELECT id FROM leave_records WHERE adjusts_leave_id=? "
+            "AND status NOT IN ('rejected') ORDER BY created_at DESC LIMIT 1",
+            (leave_id,),
+        ).fetchone()
+        if _adj_row:
+            npbb_adjustment = _npbb_ref(_adj_row["id"])
+
+    is_resubmitted = bool(db.execute(
+        "SELECT 1 FROM leave_action_logs WHERE leave_id=? AND action='resubmit' LIMIT 1",
+        (leave_id,)
+    ).fetchone())
+
+    return _leave_row_to_dict(r, lich, is_resubmitted, adjusts_leave, npbb_adjustment)
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────────────
@@ -932,10 +952,77 @@ def list_leaves(
         raise HTTPException(400, "scope phải là mine | pending | declared | dept | all")
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    # 1 câu duy nhất cho cả danh sách (không phải 1 câu id + N câu _leave_to_out
+    # riêng từng dòng) — mệnh đề where ở trên chỉ tham chiếu cột của leave_records
+    # (không alias) nên bọc nguyên vào 1 subquery lọc id là an toàn, không đụng
+    # gì tới cách dựng clauses/params phía trên.
+    today = _vn_now().date().isoformat()
+    id_where_sql = f"SELECT id FROM leave_records {where}"
     rows = db.execute(
-        f"SELECT id FROM leave_records {where} ORDER BY created_at DESC", params
+        f"{_LEAVE_JOIN_SQL}\n           WHERE lr.id IN ({id_where_sql})\n           ORDER BY lr.created_at DESC",
+        [today, today] + params,
     ).fetchall()
-    return [_leave_to_out(r["id"], db) for r in rows]
+    if not rows:
+        return []
+
+    # Lịch làm việc: 1 lần cho cả danh sách (khoảng rộng nhất bao hết mọi đơn)
+    # thay vì mỗi đơn 1 lần — LichLamViec là tập ngày lễ/bù trong khoảng nạp,
+    # nạp rộng hơn chỉ là tập cha, la_ngay_lam_viec() vẫn ra đúng kết quả từng
+    # ngày. Bỏ qua hẳn nếu MỌI đơn đều có spread_dates (khi đó _period_days
+    # không bao giờ được gọi tới, lịch nạp về sẽ không dùng vào đâu).
+    if any(not r["spread_dates"] for r in rows):
+        lich = _load_lich(
+            db,
+            min(date.fromisoformat(r["start_date"]) for r in rows),
+            max(date.fromisoformat(r["end_date"]) for r in rows),
+        )
+    else:
+        lich = LICH_RONG
+
+    leave_ids = [r["id"] for r in rows]
+    ph = ",".join("?" for _ in leave_ids)
+    resubmitted_ids = {rr["leave_id"] for rr in db.execute(
+        f"SELECT DISTINCT leave_id FROM leave_action_logs WHERE action='resubmit' AND leave_id IN ({ph})",
+        leave_ids,
+    ).fetchall()}
+
+    # NPBB, chiều "đơn gốc mà 1 dòng trong danh sách điều chỉnh" — chỉ những
+    # đơn có adjusts_leave_id mới cần tra.
+    adj_target_ids = {r["adjusts_leave_id"] for r in rows if r["adjusts_leave_id"]}
+    adjusts_leave_by_id: dict = {}
+    if adj_target_ids:
+        ph2 = ",".join("?" for _ in adj_target_ids)
+        for rr in db.execute(
+            f"SELECT id, status, start_date, end_date, spread_dates FROM leave_records WHERE id IN ({ph2})",
+            list(adj_target_ids),
+        ).fetchall():
+            adjusts_leave_by_id[rr["id"]] = _npbb_brief_row(rr)
+
+    # NPBB, chiều "đơn điều chỉnh trỏ VỀ 1 đơn bat_buoc trong danh sách" — chỉ
+    # đơn bat_buoc mới có thể bị điều chỉnh, y hệt điều kiện trong _leave_to_out.
+    bat_buoc_ids = [r["id"] for r in rows if r["leave_type"] == "bat_buoc"]
+    npbb_adjustment_by_original: dict = {}
+    if bat_buoc_ids:
+        ph3 = ",".join("?" for _ in bat_buoc_ids)
+        for rr in db.execute(
+            f"""SELECT id, adjusts_leave_id, status, start_date, end_date, spread_dates
+               FROM leave_records WHERE adjusts_leave_id IN ({ph3})
+                 AND status NOT IN ('rejected') ORDER BY created_at DESC""",
+            bat_buoc_ids,
+        ).fetchall():
+            # Giữ dòng ĐẦU TIÊN mỗi đơn gốc (đã ORDER BY created_at DESC) — khớp
+            # đúng "ORDER BY created_at DESC LIMIT 1" của _leave_to_out.
+            npbb_adjustment_by_original.setdefault(rr["adjusts_leave_id"], _npbb_brief_row(rr))
+
+    return [
+        _leave_row_to_dict(
+            r, lich,
+            r["id"] in resubmitted_ids,
+            adjusts_leave_by_id.get(r["adjusts_leave_id"]) if r["adjusts_leave_id"] else None,
+            npbb_adjustment_by_original.get(r["id"]),
+        )
+        for r in rows
+    ]
 
 
 @router.get("/today")

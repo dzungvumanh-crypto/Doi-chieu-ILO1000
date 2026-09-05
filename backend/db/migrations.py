@@ -1826,6 +1826,12 @@ def _ensure_indexes():
         "CREATE INDEX IF NOT EXISTS ix_hr_trainings_staff    ON hr_trainings(staff_id)",
         "CREATE INDEX IF NOT EXISTS ix_hr_tools_staff        ON hr_tools(staff_id)",
         "CREATE INDEX IF NOT EXISTS ix_hr_attachments_owner  ON hr_attachments(section, item_id)",
+        # ── Nghỉ phép bắt buộc — 2026-09-05 ────────────────────────────────────
+        # _leave_to_out tra adjusts_leave_id cho mỗi đơn bat_buoc (tìm đơn điều
+        # chỉnh) — list_leaves gọi hàm này cho TỪNG dòng nên thiếu index này
+        # khiến mỗi đơn bat_buoc quét lại toàn bộ leave_records, chi phí tăng
+        # theo bình phương số dòng thay vì tuyến tính.
+        "CREATE INDEX IF NOT EXISTS ix_leave_records_adj ON leave_records(adjusts_leave_id)",
     ]
     conn = sqlite3.connect(DB_PATH, timeout=30)
     try:

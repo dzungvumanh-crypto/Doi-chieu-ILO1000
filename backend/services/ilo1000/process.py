@@ -161,8 +161,8 @@ def process_citad(citad_df: pd.DataFrame, hub_lookups: dict, ngay_int: int) -> t
 
 def detect_huy(df: pd.DataFrame) -> dict:
     """
-    Phát hiện giao dịch Hủy: gom theo REFERENCE. Hai tín hiệu ĐỘC LẬP, kết hợp
-    OR (một mình tín hiệu (1) không đủ — xem lý do dưới):
+    Phát hiện giao dịch Hủy: gom theo (REFERENCE, TRBRCD). Hai tín hiệu ĐỘC
+    LẬP, kết hợp OR (một mình tín hiệu (1) không đủ — xem lý do dưới):
 
     1. Tổng Nợ = tổng Có trong batch (net-zero) — bắt được khi CẢ vế gốc lẫn vế
        hủy cùng nằm trong batch đang xử lý (`df` nên là Core GỘP TOÀN BỘ các
@@ -180,32 +180,43 @@ def detect_huy(df: pd.DataFrame) -> dict:
     - 'Hủy'    — net-zero VÀ ngày lập/ngày hủy CÙNG 1 ngày (TRDATE)
     - 'Đã hủy' — mọi trường hợp còn lại (khác ngày, hoặc thiếu vế gốc trong batch)
 
-    Trả về dict REFERENCE → 'Hủy' | 'Đã hủy'.
+    Gộp thêm TRBRCD vào khóa nhóm (không chỉ REFERENCE) — xác nhận qua phản
+    hồi người chấm + dữ liệu thật 26/8/2026: các lệnh chi trả trợ cấp xã hội
+    hàng loạt (REFERENCE dạng "1000OTT...") dùng CHUNG một REFERENCE giữa
+    NHIỀU chi nhánh khác nhau trong cùng batch (VD "1000OTT261006174" xuất
+    hiện ở cả 3 chi nhánh 1410/2008/5708). Chỉ 1 chi nhánh (2008) có cặp
+    Nợ/Có net-zero thật sự là hủy lệnh; nếu gom theo REFERENCE một mình, tín
+    hiệu hủy của chi nhánh đó lây lan sai sang 2 chi nhánh còn lại (giao dịch
+    bình thường, khớp Hub "Hoàn thành") — khiến core bị gắn nhầm 'Đã hủy'.
+
+    Trả về dict (REFERENCE, TRBRCD) → 'Hủy' | 'Đã hủy'.
     """
     if df.empty or 'REFERENCE' not in df.columns:
         return {}
 
     ref    = _safe_str(df['REFERENCE'])
+    brcd   = _safe_str(df.get('TRBRCD', pd.Series('', index=df.index)))
     dr     = pd.to_numeric(df.get('DRAMOUNT', 0), errors='coerce').fillna(0)
     cr     = pd.to_numeric(df.get('CRAMOUNT', 0), errors='coerce').fillna(0)
     trdate = _safe_str(df.get('TRDATE', pd.Series('', index=df.index)))
 
-    tmp = pd.DataFrame({'REFERENCE': ref, '_DR': dr, '_CR': cr, '_TRDATE': trdate})
+    tmp = pd.DataFrame({'REFERENCE': ref, 'TRBRCD': brcd, '_DR': dr, '_CR': cr, '_TRDATE': trdate})
     tmp = tmp[tmp['REFERENCE'] != '']
+    tmp['_KEY'] = list(zip(tmp['REFERENCE'], tmp['TRBRCD']))
 
-    sums   = tmp.groupby('REFERENCE', sort=False)[['_DR', '_CR']].sum()
-    n_days = tmp.groupby('REFERENCE', sort=False)['_TRDATE'].nunique()
+    sums   = tmp.groupby('_KEY', sort=False)[['_DR', '_CR']].sum()
+    n_days = tmp.groupby('_KEY', sort=False)['_TRDATE'].nunique()
 
-    net_zero_refs = set(sums[sums['_CR'] - sums['_DR'] == 0].index)
-    neg_cr_refs   = set(tmp.loc[tmp['_CR'] < 0, 'REFERENCE'])
-    huy_refs      = net_zero_refs | neg_cr_refs
+    net_zero_keys = set(sums[sums['_CR'] - sums['_DR'] == 0].index)
+    neg_cr_keys   = set(tmp.loc[tmp['_CR'] < 0, '_KEY'])
+    huy_keys      = net_zero_keys | neg_cr_keys
 
-    def _label(r: str) -> str:
-        if r in net_zero_refs and n_days.get(r, 1) <= 1:
+    def _label(k) -> str:
+        if k in net_zero_keys and n_days.get(k, 1) <= 1:
             return 'Hủy'
         return 'Đã hủy'
 
-    return {r: _label(r) for r in huy_refs}
+    return {k: _label(k) for k in huy_keys}
 
 
 def process_core(
@@ -217,10 +228,11 @@ def process_core(
 ) -> pd.DataFrame:
     """
     Điền Trace, Map dc, TT cho sheet Core.
-    `huy_map` (REFERENCE → 'Hủy'/'Đã hủy') nên được tính trước trên Core GỘP
-    toàn batch bằng detect_huy() rồi truyền vào, để bắt được cả Hủy khác ngày.
-    Nếu không truyền (VD gọi lẻ trong test), tự tính trên chính core_df này —
-    khi đó chỉ phát hiện được Hủy cùng ngày (đúng theo dữ liệu đang có).
+    `huy_map` ((REFERENCE, TRBRCD) → 'Hủy'/'Đã hủy') nên được tính trước trên
+    Core GỘP toàn batch bằng detect_huy() rồi truyền vào, để bắt được cả Hủy
+    khác ngày. Nếu không truyền (VD gọi lẻ trong test), tự tính trên chính
+    core_df này — khi đó chỉ phát hiện được Hủy cùng ngày (đúng theo dữ liệu
+    đang có).
     """
     df = core_df.copy()
 
@@ -253,8 +265,9 @@ def process_core(
     # ── Tính TT theo thứ tự ưu tiên ──
     tt = pd.Series('', index=df.index)
 
-    # 1. Hủy / Đã hủy
-    huy_label = ref.map(huy_map)
+    # 1. Hủy / Đã hủy — khóa (REFERENCE, TRBRCD), xem detect_huy()
+    huy_key   = pd.Series(list(zip(ref, brcd)), index=df.index)
+    huy_label = huy_key.map(huy_map)
     huy_mask  = huy_label.notna()
     tt[huy_mask] = huy_label[huy_mask]
 
