@@ -4,6 +4,46 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 05/09/2026 Nghỉ phép - **Sửa 2 cảnh báo còn treo của đợt trước + thêm loạt báo cáo/phiếu in + rà soát tìm thêm 5 lỗi liên quan hạn mức phép**
+    + ✅ **Đã sửa "Báo cáo NPBB liệt kê nhầm gần như toàn bộ nhân sự"** (cảnh báo ở mục dưới) — nguyên
+      nhân là 1 lỗi SQL rộng hơn nhiều so với tưởng ban đầu: mọi danh sách/báo cáo đơn nghỉ phép đều
+      **âm thầm bỏ sót đơn thật không nhập lý do** (không riêng gì báo cáo NPBB). Xem chi tiết ở
+      [Implementation Notes #119](docs/Implementation-notes.html)
+    + ✅ **Đã sửa "Số Đã nghỉ hiển thị lớn hơn thực tế"** (cảnh báo ở mục dưới) — tab Hạn mức phép/số
+      "Phép còn lại"/xuất Excel hạn mức trước đây đếm trùng đơn gốc **và** đơn điều chỉnh NPBB cùng
+      lúc trong thời gian đơn điều chỉnh còn chờ duyệt. Xem #119
+    + **Rà soát thêm phát hiện 3 lỗi tính hạn mức khác chưa ai báo**: đơn nghỉ vắt qua đêm giao thừa
+      (29/12→02/01) có ứng phép năm sau bị trừ hụt đúng số ngày đã ứng; nút "Hủy đơn" bị ẩn nhầm cho
+      đơn đang chờ duyệt ở tài khoản chưa được cấp quyền riêng; nút Phê duyệt/Từ chối của Phó Giám đốc
+      vẫn hiện dù giấy uỷ quyền đã hết hạn. Cả 5 lỗi đã sửa, verify bằng dữ liệu thật trước/sau —
+      xem #119, #120
+    + **Thêm 2 loại nghỉ mới**: *Nghỉ không lương* và *Họp/Công tác* — đi qua đúng quy trình duyệt
+      (KSV → Tổng hợp → Giám đốc) như đơn thường, nhưng **không trừ vào hạn mức phép năm** (vẫn hiện
+      trong chấm công/báo cáo để theo dõi). Họp/Công tác cho chọn lẻ từng ngày (giống phép năm) thay
+      vì chọn khoảng liên tục
+    + **Điều chỉnh nghỉ phép bắt buộc giờ có thêm lối tạo trực tiếp** từ nút "Tạo đơn" (trước đây chỉ
+      tạo được từ nút "Điều chỉnh ngày NPBB" trong chi tiết 1 đơn cụ thể) — chọn loại "Điều chỉnh
+      nghỉ phép bắt buộc", tìm và chọn đơn gốc cần đổi ngày, sau đó vào đúng màn nhập ngày mới +
+      chọn KSV/Ban lãnh đạo phê duyệt như luồng cũ. Chi tiết đơn (cả gốc lẫn điều chỉnh) có link bấm
+      mở tab mới sang đơn liên quan
+    + **Báo cáo chấm công tháng** (theo đúng mẫu TCNS): chọn 1 tháng hoặc "Chọn cả năm" (dừng đúng ở
+      tháng hiện tại nếu đang xem năm nay, không sinh sheet tương lai); ký hiệu P/BB/H theo đúng loại
+      nghỉ; dữ liệu quét lại thật mỗi lần xuất, không cache
+    + **Báo cáo nghỉ phép năm viết lại theo đúng mẫu giấy thật**: nhóm theo phòng ban (dòng tổng
+      trước, chi tiết từng người sau), cột "Đã nghỉ" tính đến đúng thời điểm bấm xuất file
+    + **Tải phiếu nghỉ phép**: cho chọn PDF (có chữ ký, mặc định) hoặc Word (không có chữ ký — ghi rõ
+      trên nút để không nhầm là bản tương đương); PDF mở xem trước toàn màn hình trước khi tải, có
+      nút "Tải xuống"/"Đóng" riêng thay vì tải thẳng
+    + **Bảng danh sách đơn nghỉ phép**: sắp lại thứ tự cột (Họ và tên/Phòng lên ngay sau Ngày tạo),
+      kéo dãn được từng cột bằng chuột, khung viền đậm rõ hơn; thêm bộ lọc theo "Ngày tạo" (chọn 1
+      ngày) và ô "Tìm theo tên" giờ gõ ra danh sách nhân sự thật để bấm chọn (tự cập nhật theo danh
+      sách nhân sự hiện tại, không phải gõ mù)
+    + **Popup nhắc đơn quá hạn chưa duyệt**: đơn của chính mình đã tới/qua ngày nghỉ mà vẫn còn
+      "chờ duyệt" sẽ tự nhắc khi mở trang, ghi rõ đang kẹt ở cấp nào
+    + *Lưu ý vận hành*: nhóm quyền "QA-all" (tài khoản test nội bộ) thiếu sẵn quyền "Hủy đơn nghỉ
+      phép"/"Rút đơn nhiều cấp" — đã cấp bổ sung; nếu nhóm quyền khác của đơn vị cũng thiếu 2 quyền
+      này thì cấp thêm tương tự qua màn Quản lý nhóm quyền
+
 - 05/09/2026 Nghỉ phép - **Nghỉ phép bắt buộc: đăng ký, điều chỉnh ngày, và mẫu đơn riêng theo chức danh**
     + **Điều chỉnh ngày nghỉ phép bắt buộc sau khi đơn đã duyệt xong.** Đơn đã "Hoàn thành" nay có
       nút *"Điều chỉnh ngày NPBB"*. Bấm vào sẽ tạo **một đơn mới**, đi lại đủ ba bước duyệt như đơn
@@ -18,14 +58,15 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       chính mình. Đối chiếu mẫu giấy thật, nay sửa thành **Tổng Giám đốc Agribank**
     + **Thêm 2 mẫu đơn cá nhân** (đăng ký / điều chỉnh nghỉ phép bắt buộc, "Mẫu 1 TCNS") và
       **báo cáo tổng hợp Mẫu 18 (nội bộ) / Mẫu 19 (gửi TCNS)** cho phòng Tổng hợp
-    + ⚠️ **CHƯA DÙNG ĐƯỢC "Báo cáo NPBB" (Mẫu 18/19).** Báo cáo này đang **liệt kê nhầm gần như
-      toàn bộ nhân sự** kèm khoảng ngày không có thật. Nguyên nhân: mỗi lần nhập hạn mức phép bằng
-      file Excel, phần mềm ghi lại một dòng tổng hợp *"đã nghỉ bao nhiêu ngày"* mang cùng nhãn với
-      đơn nghỉ phép bắt buộc — mọi màn hình khác đều bỏ qua các dòng này, riêng báo cáo mới thì
-      chưa. **Đừng gửi file đó đi**, đang sửa ở đợt tới
-    + ⚠️ **Số "Đã nghỉ" hiển thị có thể lớn hơn thực tế** với người đã điều chỉnh ngày NPBB — đơn
-      cũ bị thay chưa được trả lại ngày phép. Số trên **tab Hạn mức phép vẫn đúng** (chỗ đó đếm
-      lại từ đầu chứ không lấy số đã cộng sẵn). Cũng đang sửa ở đợt tới
+    + ⚠️→✅ **~~CHƯA DÙNG ĐƯỢC "Báo cáo NPBB" (Mẫu 18/19)~~ — đã sửa, xem entry mới nhất ở trên.**
+      Báo cáo này từng **liệt kê nhầm gần như toàn bộ nhân sự** kèm khoảng ngày không có thật.
+      Nguyên nhân thật rộng hơn tưởng ban đầu: không phải riêng báo cáo NPBB bỏ sót lọc dòng tổng
+      hợp, mà là lỗi SQL khiến MỌI danh sách/báo cáo đơn nghỉ phép âm thầm bỏ sót đơn thật không
+      nhập lý do — xem chi tiết ở entry mới nhất
+    + ⚠️→✅ **~~Số "Đã nghỉ" hiển thị có thể lớn hơn thực tế~~ — đã sửa, xem entry mới nhất ở trên.**
+      Ghi chú lúc đó "*tab Hạn mức phép vẫn đúng*" **hoá ra chưa chính xác** — chính tab đó cũng bị
+      đếm trùng đơn gốc/đơn điều chỉnh trong lúc đơn điều chỉnh còn chờ duyệt, chỉ là bug khác với
+      bug ban đầu nghi ngờ. Đã sửa cả 2
     + ✅ **Màn hình danh sách đơn nghỉ phép nhanh hơn** — trước đây mỗi đơn hiện ra tốn 4 lượt hỏi
       cơ sở dữ liệu riêng, danh sách 1.000 đơn là hơn 4.000 lượt. Nay gộp lại còn 6 lượt cho cả
       danh sách, bất kể bao nhiêu đơn (đo được: 118 ms → 33 ms cho 991 đơn)
