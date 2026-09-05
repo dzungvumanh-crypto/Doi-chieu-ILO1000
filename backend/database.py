@@ -82,7 +82,7 @@ def compute_carry_over(staff_id: int, year: int, db,
     rows = db.execute(
         """SELECT start_date, end_date, spread_dates, borrow_next_year_days FROM leave_records
            WHERE staff_id=? AND status='approved'
-             AND leave_type NOT IN ('thai_san','bao_hiem')
+             AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
              AND start_date <= ? AND end_date >= ?""",
         (staff_id, f"{prev_year}-12-31", f"{prev_year}-01-01"),
     ).fetchall()
@@ -95,10 +95,16 @@ def compute_carry_over(staff_id: int, year: int, db,
     for row in rows:
         # Phần đã "ứng" sang năm sau (borrow_next_year_days, xem
         # backend/api/leaves.py::_check_quota_or_borrow) không tính là đã dùng
-        # của prev_year — nếu không carry-over sẽ bị tính hụt.
+        # của prev_year — nếu không carry-over sẽ bị tính hụt. CHỈ trừ borrow ở
+        # đúng năm GỐC của đơn (năm chứa start_date) — đơn vắt ranh giới năm
+        # (vd 29/12→02/01) có thể khớp overlap ở đây dù start_date KHÔNG phải
+        # prev_year (vd đơn bắt đầu từ prev_year-1); trừ nhầm borrow của đơn đó
+        # vào prev_year sẽ làm hụt used y hệt bug đã sửa ở _calc_used_days.
         borrow = row["borrow_next_year_days"] or 0.0
+        row_start_year = _date.fromisoformat(row["start_date"]).year
+        own_borrow = borrow if row_start_year == prev_year else 0.0
         if row["spread_dates"]:
-            used += len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(prev_year))]) - borrow
+            used += len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(prev_year))]) - own_borrow
         else:
             if _lich is None:
                 _lich = tai_lich(db, _date(prev_year, 1, 1), _date(prev_year, 12, 31))
@@ -109,7 +115,7 @@ def compute_carry_over(staff_id: int, year: int, db,
                 if d.year == prev_year and la_ngay_lam_viec(d, _lich):
                     yr_count += 1
                 d += timedelta(days=1)
-            used += yr_count - borrow
+            used += yr_count - own_borrow
     return max(0.0, prev_quota - used)
 
 

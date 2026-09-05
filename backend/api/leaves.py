@@ -31,11 +31,13 @@ from backend.services import leave_pdf
 router = APIRouter()
 
 LEAVE_TYPE_LABELS = {
-    "bat_buoc":  "Nghỉ phép bắt buộc",
-    "annual":    "Nghỉ phép năm",
-    "thai_san":  "Nghỉ thai sản",
-    "bao_hiem":  "Nghỉ bảo hiểm",
-    "other":     "Khác",
+    "bat_buoc":    "Nghỉ phép bắt buộc",
+    "annual":      "Nghỉ phép năm",
+    "thai_san":    "Nghỉ thai sản",
+    "bao_hiem":    "Nghỉ bảo hiểm",
+    "khong_luong": "Nghỉ không lương",
+    "hop_cong_tac": "Họp/Công tác",
+    "other":       "Khác",
     # Legacy types (giữ để tương thích với data cũ)
     "sick":      "Nghỉ ốm",
     "personal":  "Nghỉ việc riêng",
@@ -43,8 +45,9 @@ LEAVE_TYPE_LABELS = {
 }
 
 _VALID_LEAVE_TYPES = frozenset(LEAVE_TYPE_LABELS.keys())
-# Các loại nghỉ không tính vào/trừ hạn mức phép năm
-_NO_QUOTA_TYPES = frozenset({"thai_san", "bao_hiem"})
+# Các loại nghỉ không tính vào/trừ hạn mức phép năm — nghỉ không lương cũng
+# không dùng tới hạn mức phép năm (nghỉ hẳn không lương, không phải trừ phép).
+_NO_QUOTA_TYPES = frozenset({"thai_san", "bao_hiem", "khong_luong", "hop_cong_tac"})
 
 ACTION_LABELS = {
     "create":         ("Nộp đơn",            "blue"),
@@ -79,6 +82,13 @@ _HIGH_ROLES = frozenset(("giam_doc", "pho_giam_doc", "admin", "truong_phong"))
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
+_NO_ACTIVE_ADJ_SQL = (
+    "AND NOT EXISTS (SELECT 1 FROM leave_records adj "
+    "WHERE adj.adjusts_leave_id = leave_records.id "
+    "AND adj.status NOT IN ('rejected','cancelled'))"
+)
+
+
 def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
                     exclude_id: int | None = None,
                     include_pending: bool = False) -> float:
@@ -92,6 +102,13 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
     _check_quota_or_borrow): phần đã ứng bị trừ khỏi năm gốc của đơn, cộng
     sang năm sau — nên đơn tạo năm N-1 có ứng vẫn cộng đúng vào năm N dù ngày
     nghỉ thực tế không nằm trong năm N.
+
+    Đơn NPBB gốc (bat_buoc) đang có đơn điều chỉnh CÒN HIỆU LỰC (chưa bị từ
+    chối/hủy, kể cả khi đơn điều chỉnh còn đang chờ duyệt) bị loại khỏi tổng —
+    nếu không, cả đơn gốc (vẫn 'approved' cho tới khi đơn điều chỉnh duyệt xong
+    hẳn, xem _cancel_adjusted_original) LẪN đơn điều chỉnh (include_pending=True
+    cộng luôn cả pending) cùng cộng vào, ra hạn mức "đã dùng" gấp đôi ảo trong
+    lúc đơn điều chỉnh còn đang xử lý.
     """
     if include_pending:
         statuses = ("'approved','pending_ksv','pending_tong_hop','pending_gd'")
@@ -108,14 +125,25 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
     rows = db.execute(
         f"""SELECT spread_dates, start_date, end_date, borrow_next_year_days FROM leave_records
             WHERE staff_id=? {excl} AND status IN ({statuses})
-              AND leave_type NOT IN ('thai_san','bao_hiem')
-              AND start_date <= ? AND end_date >= ?""",
+              AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              AND start_date <= ? AND end_date >= ?
+              {_NO_ACTIVE_ADJ_SQL}""",
         params,
     ).fetchall()
     total = 0.0
     _lich: LichLamViec | None = None  # lazy load khi cần
     for row in rows:
         borrow = row["borrow_next_year_days"] or 0.0
+        # borrow_next_year_days là số ngày VƯỢT hạn mức năm GỐC (năm chứa
+        # start_date, xem _check_quota_or_borrow) bị chuyển sang tính vào năm
+        # sau — không phải "số ngày rơi vào năm sau" theo lịch. Đơn vắt qua
+        # ranh giới năm (vd 29/12→02/01) đồng thời khớp CẢ 2 câu SELECT ở đây
+        # (năm gốc lẫn năm sau, vì cùng chồng lấn khoảng ngày) — nếu trừ borrow
+        # ở MỌI năm đơn này chồng lấn tới (thay vì chỉ năm gốc) thì phần ngày
+        # đã "ứng" bị trừ 2 lần, tổng dùng cả 2 năm cộng lại hụt mất đúng bằng
+        # borrow (bug thật, xem audit — 5 ngày thực tế chỉ còn ra tổng 3).
+        row_start_year = date.fromisoformat(row["start_date"]).year
+        own_borrow = borrow if row_start_year == year else 0.0
         if row["spread_dates"]:
             yr_count = len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
         else:
@@ -128,7 +156,7 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
                 if d.year == year and la_ngay_lam_viec(d, _lich):
                     yr_count += 1
                 d += timedelta(days=1)
-        total += yr_count - borrow
+        total += yr_count - own_borrow
     # Phần ứng TỪ năm trước SANG năm đang tính — đơn gốc nằm hẳn ở year-1
     # nhưng phần vượt hạn mức đã được tính vào year, cộng riêng ở đây vì câu
     # SELECT trên chỉ lấy đơn có ngày nghỉ chồng lên year.
@@ -139,7 +167,8 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
     for row in db.execute(
         f"""SELECT borrow_next_year_days FROM leave_records
             WHERE staff_id=? {excl} AND status IN ({statuses})
-              AND strftime('%Y', start_date) = ?""",
+              AND strftime('%Y', start_date) = ?
+              {_NO_ACTIVE_ADJ_SQL}""",
         borrowed_params,
     ).fetchall():
         total += row["borrow_next_year_days"] or 0.0
@@ -160,14 +189,19 @@ def _calc_used_days_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
     rows = db.execute(
         f"""SELECT staff_id, spread_dates, start_date, end_date, borrow_next_year_days FROM leave_records
             WHERE staff_id IN ({placeholders}) AND status IN ({statuses})
-              AND leave_type NOT IN ('thai_san','bao_hiem')
-              AND start_date <= ? AND end_date >= ?""",
+              AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              AND start_date <= ? AND end_date >= ?
+              {_NO_ACTIVE_ADJ_SQL}""",
         list(staff_ids) + [f"{year}-12-31", f"{year}-01-01"],
     ).fetchall()
     result = {sid: 0.0 for sid in staff_ids}
     _lich: LichLamViec | None = None
     for row in rows:
         borrow = row["borrow_next_year_days"] or 0.0
+        # Chỉ trừ borrow ở đúng năm GỐC (năm chứa start_date) — xem chú thích
+        # đầy đủ trong _calc_used_days, cùng 1 bug/1 cách sửa.
+        row_start_year = date.fromisoformat(row["start_date"]).year
+        own_borrow = borrow if row_start_year == year else 0.0
         if row["spread_dates"]:
             yr_count = len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
         else:
@@ -180,12 +214,13 @@ def _calc_used_days_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
                 if d.year == year and la_ngay_lam_viec(d, _lich):
                     yr_count += 1
                 d += timedelta(days=1)
-        result[row["staff_id"]] += yr_count - borrow
+        result[row["staff_id"]] += yr_count - own_borrow
     # Phần ứng TỪ năm trước SANG năm đang tính — xem chú thích trong _calc_used_days.
     for row in db.execute(
         f"""SELECT staff_id, borrow_next_year_days FROM leave_records
             WHERE staff_id IN ({placeholders}) AND status IN ({statuses})
-              AND strftime('%Y', start_date) = ?""",
+              AND strftime('%Y', start_date) = ?
+              {_NO_ACTIVE_ADJ_SQL}""",
         list(staff_ids) + [str(year - 1)],
     ).fetchall():
         result[row["staff_id"]] += row["borrow_next_year_days"] or 0.0
@@ -223,19 +258,23 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
     for r in db.execute(
         f"""SELECT staff_id, start_date, end_date, spread_dates, borrow_next_year_days FROM leave_records
            WHERE staff_id IN ({placeholders}) AND status='approved'
-             AND leave_type NOT IN ('thai_san','bao_hiem')
+             AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
              AND start_date <= ? AND end_date >= ?""",
         list(staff_ids) + [f"{prev_year}-12-31", f"{prev_year}-01-01"],
     ).fetchall():
         sid = r["staff_id"]
         # Phần đã "ứng" sang year (= prev_year + 1) không tính là đã dùng của
         # prev_year — nếu không carry-over sẽ bị tính hụt (coi như dùng hết cả
-        # phần đã chuyển sang năm sau), xem _check_quota_or_borrow.
+        # phần đã chuyển sang năm sau), xem _check_quota_or_borrow. Chỉ trừ ở
+        # đúng năm gốc của đơn — xem chú thích đầy đủ trong compute_carry_over
+        # (backend/database.py) và _calc_used_days, cùng 1 bug/1 cách sửa.
         borrow = r["borrow_next_year_days"] or 0.0
+        row_start_year = date.fromisoformat(r["start_date"]).year
+        own_borrow = borrow if row_start_year == prev_year else 0.0
         if r["spread_dates"]:
             used_by_staff[sid] = used_by_staff.get(sid, 0.0) + len(
                 [d for d in json.loads(r["spread_dates"]) if d.startswith(str(prev_year))]
-            ) - borrow
+            ) - own_borrow
         else:
             if _lich is None:
                 _lich = _load_lich(db, date(prev_year, 1, 1), date(prev_year, 12, 31))
@@ -246,7 +285,7 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
                 if d.year == prev_year and la_ngay_lam_viec(d, _lich):
                     yr_count += 1
                 d += timedelta(days=1)
-            used_by_staff[sid] = used_by_staff.get(sid, 0.0) + yr_count - borrow
+            used_by_staff[sid] = used_by_staff.get(sid, 0.0) + yr_count - own_borrow
     result = {}
     for sid in staff_ids:
         prev_quota = quota_by_staff.get(sid)
@@ -341,7 +380,7 @@ def _period_days(
 ) -> int:
     """Số ngày của khoảng nghỉ liên tục (khi không dùng spread_dates).
 
-    thai_san/bao_hiem: tính theo ngày lịch liên tục (kể cả T7, CN, lễ).
+    thai_san/bao_hiem/khong_luong/hop/cong_tac: tính theo ngày lịch liên tục (kể cả T7, CN, lễ).
     Các loại khác: chỉ tính ngày làm việc (calculate_leave_days).
     """
     if leave_type in _NO_QUOTA_TYPES:
@@ -737,7 +776,7 @@ def _create_leave_core(body: LeaveCreate, current: dict, db: sqlite3.Connection,
         _existing = db.execute(
             f"""SELECT start_date, end_date, spread_dates FROM leave_records
                WHERE staff_id=? {_excl_sql} AND status NOT IN ('rejected','cancelled')
-                 AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')""",
+                 AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))""",
             [current["id"]] + _excl_params
         ).fetchall()
         _new_days = set(spread)
@@ -755,7 +794,7 @@ def _create_leave_core(body: LeaveCreate, current: dict, db: sqlite3.Connection,
         _existing2 = db.execute(
             f"""SELECT start_date, end_date, spread_dates FROM leave_records
                WHERE staff_id=? {_excl_sql} AND status NOT IN ('rejected','cancelled')
-                 AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')
+                 AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))
                  AND start_date<=? AND end_date>=?""",
             [current["id"]] + _excl_params + [eff_end.isoformat(), eff_start.isoformat()]
         ).fetchall()
@@ -881,7 +920,7 @@ def list_leaves(
     # import_quota_apply) chỉ phục vụ tính _calc_used_days — không phải đơn nghỉ
     # phép thật, không có người nộp/KSV/TH/GĐ nào cả. Ẩn khỏi mọi danh sách đơn để
     # khỏi hiện như 1 đơn thật trong "Đơn của tôi"/"Chờ duyệt"/lịch/toàn trung tâm.
-    clauses: list = ["NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')"]
+    clauses: list = ["(reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))"]
     params: list  = []
 
     if scope == "mine":
@@ -1043,7 +1082,7 @@ def leaves_today(
            JOIN user_tttt u ON lr.staff_id = u.id
            LEFT JOIN departments d ON u.department_id = d.id
            WHERE lr.status = 'approved'
-             AND NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')
+             AND (lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))
              AND lr.start_date <= ? AND lr.end_date >= ?""",
         (today, today),
     ).fetchall()
@@ -1099,7 +1138,7 @@ def leave_calendar(
                 or _is_tong_hop_staff(current, db))
 
     clauses = ["lr.status NOT IN ('rejected','cancelled')",
-               "NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')",
+               "(lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))",
                "lr.start_date <= ?", "lr.end_date >= ?"]
     params: list = [end.isoformat(), start.isoformat()]
     if not sees_all:
@@ -1160,7 +1199,7 @@ def export_leaves(
     role = current["role"]
     # Bản ghi tổng hợp giả (nhập Excel / sửa tay hạn mức) không phải đơn nghỉ phép
     # thật — ẩn khỏi file xuất, xem chú thích tương tự ở list_leaves().
-    clauses: list = ["NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')"]
+    clauses: list = ["(lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))"]
     params: list  = []
 
     # Nếu có danh sách ID cụ thể → xuất đúng những dòng đó
@@ -1343,6 +1382,44 @@ def ack_carryover_notice(
     )
     db.commit()
     return {"ok": True}
+
+
+_OVERDUE_PENDING_LEVEL_VN = {
+    "pending_ksv": "KSV", "pending_tong_hop": "Phòng Tổng hợp", "pending_gd": "Ban lãnh đạo",
+}
+
+
+@router.get("/overdue-pending-notice")
+def get_overdue_pending_notice(
+    db: sqlite3.Connection = Depends(get_db),
+    current: dict = Depends(get_current_staff),
+):
+    """Đơn nghỉ phép CỦA CHÍNH user này đã tới/qua ngày nghỉ mà vẫn còn ở trạng
+    thái chờ duyệt (KSV/Tổng hợp/Ban lãnh đạo) — nhắc họ theo dõi/thúc duyệt.
+    Hiện lại mỗi lần mở trang trong khi vẫn còn đơn thoả điều kiện (không phải
+    thông báo 1 lần/năm như carryover-notice — vấn đề còn tồn tại là còn nhắc)."""
+    today = _vn_now().date()
+    rows = db.execute(
+        """SELECT id, start_date, end_date, spread_dates, status FROM leave_records
+           WHERE staff_id=? AND status IN ('pending_ksv','pending_tong_hop','pending_gd')
+             AND start_date <= ?""",
+        (current["id"], today.isoformat()),
+    ).fetchall()
+    items = []
+    for r in rows:
+        if r["spread_dates"]:
+            overdue = sorted(d for d in json.loads(r["spread_dates"]) if date.fromisoformat(d) <= today)
+            if not overdue:
+                continue
+            date_label = ", ".join(date.fromisoformat(d).strftime("%d/%m/%Y") for d in overdue)
+        else:
+            date_label = date.fromisoformat(r["start_date"]).strftime("%d/%m/%Y")
+        items.append({
+            "id": r["id"],
+            "date_label": date_label,
+            "level": _OVERDUE_PENDING_LEVEL_VN.get(r["status"], r["status"]),
+        })
+    return {"show": bool(items), "items": items}
 
 
 @router.get("/my-balance")
@@ -1647,7 +1724,7 @@ def resubmit_leave(
         _existing = db.execute(
             """SELECT start_date, end_date, spread_dates FROM leave_records
                WHERE staff_id=? AND id!=? AND status NOT IN ('rejected','cancelled')
-                 AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')""",
+                 AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))""",
             (current["id"], leave_id)
         ).fetchall()
         _new_days = set(spread)
@@ -1661,7 +1738,7 @@ def resubmit_leave(
         _existing2 = db.execute(
             """SELECT start_date, end_date, spread_dates FROM leave_records
                WHERE staff_id=? AND id!=? AND status NOT IN ('rejected','cancelled')
-                 AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')
+                 AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))
                  AND start_date<=? AND end_date>=?""",
             (current["id"], leave_id, eff_end.isoformat(), eff_start.isoformat())
         ).fetchall()
@@ -2261,6 +2338,7 @@ def _build_form_ctx(r, leave_id: Optional[int], db: sqlite3.Connection) -> tuple
     _LEAVE_TYPE_VN = {
         "thai_san": "thai sản theo chế độ", "bao_hiem": "bảo hiểm theo chế độ",
         "annual": "phép năm", "bat_buoc": "phép bắt buộc",
+        "khong_luong": "không lương", "hop_cong_tac": "họp/công tác",
         "other": "phép khác",
     }
     is_no_quota = r["leave_type"] in _NO_QUOTA_TYPES
@@ -3255,121 +3333,160 @@ def export_quotas(
     )
 
 
+def _calc_occurred_days(staff_id: int, year: int, db: sqlite3.Connection, today: date) -> float:
+    """Số ngày ĐÃ THỰC SỰ NGHỈ tính đến `today` trong năm — chỉ đếm ngày đã
+    xảy ra (<= today), KHÁC _calc_used_days (đếm cả phần đơn đã duyệt nhưng
+    ngày nghỉ còn ở tương lai, dùng để kiểm tra hạn mức lúc tạo đơn). Loại trừ
+    y hệt _NO_QUOTA_TYPES — bat_buoc vẫn tính (mang tính bắt buộc nhưng vẫn
+    trừ vào quỹ phép năm khi báo cáo, xem export_all_leaves_annual)."""
+    rows = db.execute(
+        """SELECT spread_dates, start_date, end_date FROM leave_records
+            WHERE staff_id=? AND status='approved'
+              AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              AND start_date <= ? AND end_date >= ?""",
+        (staff_id, f"{year}-12-31", f"{year}-01-01"),
+    ).fetchall()
+    total = 0.0
+    lich: LichLamViec | None = None
+    for row in rows:
+        if row["spread_dates"]:
+            for ds in json.loads(row["spread_dates"]):
+                if ds.startswith(str(year)) and date.fromisoformat(ds) <= today:
+                    total += 1
+        else:
+            if lich is None:
+                lich = _load_lich(db, date(year, 1, 1), date(year, 12, 31))
+            d = date.fromisoformat(row["start_date"])
+            e = min(date.fromisoformat(row["end_date"]), today)
+            while d <= e:
+                if d.year == year and la_ngay_lam_viec(d, lich):
+                    total += 1
+                d += timedelta(days=1)
+    return total
+
+
 @router.get("/export/annual")
 def export_all_leaves_annual(
     year: int,
     db: sqlite3.Connection = Depends(get_db),
     current: dict = Depends(require_feature("leaves.stats_export")),
 ):
-    """Xuất tất cả đơn nghỉ phép trong năm ra Excel."""
+    """Báo cáo tổng hợp phép năm theo phòng ban — đúng mẫu Phòng Tổng hợp
+    đang dùng: STT/Họ và tên/Phòng/Chức vụ/Hạn mức/Chuyển năm/Tổng phép/
+    "Đã nghỉ tính đến [ngày xuất file]"/Còn lại, có dòng tổng theo từng phòng
+    (đứng TRƯỚC danh sách nhân sự phòng đó, đúng thứ tự mẫu giấy thật).
+    """
     import openpyxl, io
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.worksheet.page import PageMargins
     from fastapi.responses import Response
+
+    today = _vn_now().date()
 
     # feature leaves.stats_export chỉ gate theo group_features, không tự ràng buộc
     # phòng ban — nếu admin lỡ gán quyền này cho nhóm không phải Tổng hợp/lãnh đạo,
     # phải tự lọc ở đây để không lộ dữ liệu toàn trung tâm (khớp leader_dashboard).
     _scope_required = (current["role"] not in ("admin", "giam_doc", "pho_giam_doc")
                        and not _is_tong_hop_staff(current, db))
-    _dept_sql    = " AND s.department_id = ?" if _scope_required else ""
+    _dept_sql    = " AND u.department_id = ?" if _scope_required else ""
     _dept_params = [current.get("department_id")] if _scope_required else []
 
-    rows = db.execute(
-        f"""SELECT lr.*, s.full_name AS staff_name, d.name AS dept_name,
-                  kv.full_name AS ksv_name, th.full_name AS th_name,
-                  gd.full_name AS gd_name
-           FROM leave_records lr
-           LEFT JOIN user_tttt s  ON lr.staff_id = s.id
-           LEFT JOIN departments d ON s.department_id = d.id
-           LEFT JOIN user_tttt kv ON lr.ksv_approver_id = kv.id
-           LEFT JOIN user_tttt th ON lr.tong_hop_approver_id = th.id
-           LEFT JOIN user_tttt gd ON lr.gd_approver_id = gd.id
-           WHERE strftime('%Y', lr.start_date) = ?{_dept_sql}
-           ORDER BY lr.created_at DESC""",
-        [str(year)] + _dept_params
+    staffs = db.execute(
+        f"""SELECT u.id, u.full_name, u.role, u.join_industry_date, d.name AS dept_name
+           FROM user_tttt u
+           LEFT JOIN departments d ON u.department_id = d.id
+           WHERE u.is_active=1 AND (u.is_deleted=0 OR u.is_deleted IS NULL)
+             AND u.department_id IS NOT NULL{_dept_sql}
+           ORDER BY d.name, u.full_name""",
+        _dept_params
     ).fetchall()
 
-    import json as _json
-
-    def _fmt_date(d_str):
-        """YYYY-MM-DD → DD/MM/YYYY"""
-        try:
-            y, mo, dd = d_str[:10].split("-")
-            return f"{dd}/{mo}/{y}"
-        except Exception:
-            return d_str or ""
-
-    _STATUS_VN = {
-        "pending_ksv": "Chờ KSV duyệt", "pending_tong_hop": "Chờ Tổng hợp",
-        "pending_gd": "Chờ Ban lãnh đạo duyệt", "approved": "Hoàn thành",
-        "rejected": "Từ chối", "cancelled": "Đã hủy"
-    }
-    headers = ["STT", "Ngày tạo", "Họ và tên", "Phòng", "Loại nghỉ", "Ngày nghỉ",
-               "Số ngày", "Trạng thái", "KSV duyệt", "Phòng Tổng hợp", "GĐ/PGĐ"]
-    widths  = [6, 14, 28, 28, 18, 40, 10, 18, 22, 22, 20]
-    hfill = PatternFill("solid", fgColor="8B0000")
-    hfont = Font(bold=True, color="FFFFFF")
-
-    # Sắp xếp theo ngày bắt đầu tăng dần
-    rows_sorted = sorted(rows, key=lambda r: r["start_date"] or "")
-
-    # "Số ngày" phải khớp cách tính dùng để trừ hạn mức (_period_days: chỉ tính
-    # ngày làm việc, trừ T7/CN/lễ — trừ thai_san/bao_hiem tính ngày lịch), không
-    # phải đếm ngày lịch thô như trước.
-    _lich_nam = _load_lich(db, date(year, 1, 1), date(year, 12, 31))
+    # Tính trước từng người — cần xong hết mới biết tổng theo phòng để ghi
+    # dòng tổng TRƯỚC danh sách nhân sự (đúng thứ tự mẫu giấy thật).
+    person_rows = []
+    for s in staffs:
+        quota_row = db.execute(
+            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
+            (s["id"], year),
+        ).fetchone()
+        han_muc = float(quota_row["quota_days"]) if quota_row else float(compute_annual_leave(s["join_industry_date"], year))
+        chuyen_nam = compute_carry_over(s["id"], year, db, effective=True, ref_date=today)
+        tong_phep = han_muc + chuyen_nam
+        da_nghi = _calc_occurred_days(s["id"], year, db, today)
+        con_lai = tong_phep - da_nghi
+        person_rows.append({
+            "name": s["full_name"] or "", "dept": s["dept_name"] or "(Chưa gán phòng)",
+            "chuc_vu": _ROLE_VN.get(s["role"] or "", s["role"] or ""),
+            "han_muc": han_muc, "chuyen_nam": chuyen_nam, "tong_phep": tong_phep,
+            "da_nghi": da_nghi, "con_lai": con_lai,
+        })
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = f"Don nghi phep {year}"
+    ws.title = f"Báo cáo {year}"[:31]
 
-    ws.merge_cells("A1:L1")
-    tc = ws.cell(1, 1, f"TẤT CẢ ĐƠN NGHỈ PHÉP NĂM {year}")
-    tc.font = Font(bold=True, size=13)
-    tc.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[1].height = 24
-
+    FONT_NAME = "Times New Roman"
+    FONT_SIZE = 14
+    headers = ["STT", "Họ và tên", "Phòng", "Chức vụ", "Hạn mức (ngày)", "Chuyển năm",
+               "Tổng phép", f"Đã nghỉ (ngày) tính đến {today.strftime('%d/%m/%Y')}", "Còn lại"]
+    widths  = [6, 28, 34, 22, 9, 10, 8, 20, 10]
+    hdr_font = Font(name=FONT_NAME, size=FONT_SIZE, bold=True)
     for ci, (h, w) in enumerate(zip(headers, widths), 1):
         cell = ws.cell(2, ci, h)
-        cell.fill = hfill; cell.font = hfont
-        cell.alignment = Alignment(horizontal="center")
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws.column_dimensions[cell.column_letter].width = w
+    # Cột "Đã nghỉ tính đến..." tô đỏ — mốc ngày động, dễ thấy ngay là số liệu
+    # chỉ đúng tính đến lúc xuất, không phải trọn năm.
+    ws.cell(2, 8).font = Font(name=FONT_NAME, size=FONT_SIZE, bold=True, color="FFFF0000")
+    ws.row_dimensions[2].height = 40
 
-    for idx, r in enumerate(rows_sorted, 1):
-        try:
-            nd = len(_json.loads(r["spread_dates"])) if r["spread_dates"] else _period_days(
-                date.fromisoformat(r["start_date"]), date.fromisoformat(r["end_date"]),
-                _lich_nam, r["leave_type"],
-            )
-        except Exception:
-            nd = 1
-        ri = idx + 2
-        ws.cell(ri, 1, idx).alignment = Alignment(horizontal="center")
-        # Ngày nghỉ: ghi từng ngày riêng nếu không liên nhau
-        if r["spread_dates"]:
-            try:
-                spread = _json.loads(r["spread_dates"])
-                dates_str = ", ".join(_fmt_date(d) for d in sorted(spread))
-            except Exception:
-                dates_str = _fmt_date(r["start_date"])
-        else:
-            dates_str = f"{_fmt_date(r['start_date'])} → {_fmt_date(r['end_date'])}"
+    dept_font = Font(name=FONT_NAME, size=FONT_SIZE, bold=True)
+    data_font = Font(name=FONT_NAME, size=FONT_SIZE)
 
-        ws.cell(ri, 2, _fmt_date((r["created_at"] or "")[:10])).alignment = Alignment(horizontal="center")
-        ws.cell(ri, 3, r["staff_name"] or "").alignment = Alignment(horizontal="left")
-        ws.cell(ri, 4, r["dept_name"] or "").alignment = Alignment(horizontal="left")
-        ws.cell(ri, 5, LEAVE_TYPE_LABELS.get(r["leave_type"] or "", r["leave_type"] or ""))
-        ws.cell(ri, 6, dates_str).alignment = Alignment(horizontal="left", wrap_text=True)
-        ws.cell(ri, 7, nd).alignment = Alignment(horizontal="center")
-        ws.cell(ri, 8, _STATUS_VN.get(r["status"] or "", r["status"] or ""))
-        ws.cell(ri, 9, r["ksv_name"] or "")
-        ws.cell(ri, 10, r["th_name"] or "")
-        ws.cell(ri, 11, r["gd_name"] or "")
+    ri = 3
+    stt = 0
+    idx = 0
+    while idx < len(person_rows):
+        dept = person_rows[idx]["dept"]
+        group = []
+        while idx < len(person_rows) and person_rows[idx]["dept"] == dept:
+            group.append(person_rows[idx])
+            idx += 1
+
+        dept_row = ri
+        ws.cell(dept_row, 2, dept).font = dept_font
+        for col, key in ((5, "han_muc"), (7, "tong_phep"), (8, "da_nghi"), (9, "con_lai")):
+            cell = ws.cell(dept_row, col, round(sum(p[key] for p in group), 1))
+            cell.font = dept_font
+            cell.alignment = Alignment(horizontal="center")
+        ri += 1
+
+        for p in group:
+            stt += 1
+            ws.cell(ri, 1, stt).font = data_font
+            ws.cell(ri, 1).alignment = Alignment(horizontal="center")
+            ws.cell(ri, 2, p["name"]).font = data_font
+            ws.cell(ri, 3, p["dept"]).font = data_font
+            ws.cell(ri, 4, p["chuc_vu"]).font = data_font
+            for col, key in ((5, "han_muc"), (6, "chuyen_nam"), (7, "tong_phep"), (8, "da_nghi"), (9, "con_lai")):
+                cell = ws.cell(ri, col, round(p[key], 1))
+                cell.font = data_font
+                cell.alignment = Alignment(horizontal="center")
+            ri += 1
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins = PageMargins(left=0.3, right=0.3, top=0.4, bottom=0.4, header=0.2, footer=0.2)
+    ws.print_area = f"A1:I{ri - 1}"
 
     buf = io.BytesIO(); wb.save(buf)
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="bao_cao_don_nghi_phep_{year}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="bao_cao_nghi_phep_{year}.xlsx"'},
     )
 
 
@@ -3401,13 +3518,24 @@ def _npbb_set_cell_text(cell, text: str):
 def export_npbb_batch(
     year: int,
     mau: str = Query(..., pattern="^(18|19)$", description="18 = tờ trình nội bộ, 19 = gửi TCNS"),
+    month: int = Query(None, ge=1, le=12, description="Bỏ trống = xuất cả năm, đúng theo yêu cầu 'báo cáo hàng tháng'"),
+    preview: bool = Query(False, description="True = trả PDF xem trước (chuyển tạm qua Word), False = tải file .docx gốc theo mẫu TCNS"),
     db: sqlite3.Connection = Depends(get_db),
     current: dict = Depends(require_feature("leaves.stats_export")),
 ):
-    """Danh sách nhân sự có đơn nghỉ phép bắt buộc trong năm — "Thời gian đã
-    đăng ký" lấy đúng đơn GỐC (adjusts_leave_id IS NULL), "Thời gian điều
+    """Danh sách nhân sự có đơn nghỉ phép bắt buộc trong năm/tháng — "Thời gian
+    đã đăng ký" lấy đúng đơn GỐC (adjusts_leave_id IS NULL), "Thời gian điều
     chỉnh" lấy đơn điều chỉnh ĐÃ DUYỆT nếu có (xem npbb_adjust_leave). Đơn
-    gốc bị hủy do KHÔNG PHẢI điều chỉnh (rút/hủy thường) không xuất hiện."""
+    gốc bị hủy do KHÔNG PHẢI điều chỉnh (rút/hủy thường) không xuất hiện.
+
+    Lọc theo THỜI GIAN ĐÃ ĐĂNG KÝ (start_date của đơn gốc) — cùng field với
+    chế độ theo năm cũ, chỉ thu hẹp thêm xuống đúng 1 tháng khi có truyền
+    `month`, không đổi field lọc sang created_at.
+
+    `preview=true` chuyển bản .docx vừa dựng sang PDF qua Word (leave_pdf.
+    docx_to_pdf, cùng cơ chế với xem trước phiếu nghỉ phép) chỉ để hiển thị —
+    bản tải về thật vẫn phải gọi lại không kèm preview để lấy đúng .docx gốc.
+    """
     import docx
     from copy import deepcopy
     from fastapi.responses import Response
@@ -3424,6 +3552,13 @@ def export_npbb_batch(
     _dept_sql    = " AND s.department_id = ?" if _scope_required else ""
     _dept_params = [current.get("department_id")] if _scope_required else []
 
+    if month:
+        _period_sql = "strftime('%Y-%m', lr.start_date) = ?"
+        _period_param = f"{year:04d}-{month:02d}"
+    else:
+        _period_sql = "strftime('%Y', lr.start_date) = ?"
+        _period_param = str(year)
+
     roots = db.execute(
         f"""SELECT lr.*, s.full_name AS staff_name, s.role AS staff_role,
                   s.join_industry_date, d.name AS dept_name
@@ -3431,12 +3566,12 @@ def export_npbb_batch(
            LEFT JOIN user_tttt s   ON lr.staff_id = s.id
            LEFT JOIN departments d ON s.department_id = d.id
            WHERE lr.leave_type='bat_buoc' AND lr.adjusts_leave_id IS NULL
-             AND strftime('%Y', lr.start_date) = ?{_dept_sql}
+             AND {_period_sql}{_dept_sql}
              AND (lr.status='approved' OR EXISTS(
                     SELECT 1 FROM leave_records adj
                     WHERE adj.adjusts_leave_id = lr.id AND adj.status='approved'))
            ORDER BY d.name, s.full_name""",
-        [str(year)] + _dept_params,
+        [_period_param] + _dept_params,
     ).fetchall()
 
     def _fmt_range(s: str, e: str) -> str:
@@ -3497,9 +3632,18 @@ def export_npbb_batch(
 
     buf = io.BytesIO()
     doc.save(buf)
+    docx_bytes = buf.getvalue()
+
+    if preview:
+        try:
+            pdf_bytes = leave_pdf.docx_to_pdf(docx_bytes)
+        except leave_pdf.PdfConvertError as e:
+            raise HTTPException(503, f"Không tạo được bản xem trước: {e}")
+        return Response(content=pdf_bytes, media_type="application/pdf")
+
     fname = f"bao_cao_npbb_mau{mau}_{year}.docx"
     return Response(
-        content=buf.getvalue(),
+        content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
@@ -3597,26 +3741,259 @@ def stats_annual(
 
 
 # ─── Báo cáo chấm công tháng (suy ra từ đơn nghỉ phép đã duyệt) ────────────
+def _build_attendance_month_sheet(ws, db: sqlite3.Connection, year: int, month: int, staffs):
+    """Dựng 1 sheet chấm công cho đúng 1 tháng vào worksheet `ws` đã tạo sẵn —
+    theo mẫu giấy "TONG HOP CHAM CONG TTTT" của Phòng Tổng hợp: nhóm theo
+    phòng ban, mỗi người 1 dòng, X = đi làm, P = nghỉ phép (suy ra từ
+    leave_records đã duyệt), để trống = T7/CN/lễ.
+
+    CHỈ tự động được phần suy ra từ đơn nghỉ phép đã duyệt — cột xếp loại thi
+    đua không có nguồn dữ liệu nào trong phần mềm nên không tự điền được;
+    Phòng Tổng hợp bổ sung thủ công sau khi tải về, đúng như mẫu giấy vẫn dùng.
+
+    Ngày sau thời điểm xuất file (kể cả các ngày còn lại của tháng hiện tại)
+    để trống — chưa xảy ra thì chưa có gì để tính, không suy đoán "X".
+    """
+    import calendar
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.page import PageMargins
+
+    today = _vn_now().date()
+    ws.title = f"Thang {month:02d}-{year}"
+
+    days_in_month = calendar.monthrange(year, month)[1]
+    start = date(year, month, 1)
+    end = date(year, month, days_in_month)
+    lich = _load_lich(db, start, end)
+
+    # Ký hiệu theo loại nghỉ (theo yêu cầu Phòng Tổng hợp) — loại nào không có
+    # ký hiệu riêng thì dùng chung "P". "hop_cong_tac" giờ là leave_type thật
+    # (đi qua đúng luồng đơn nghỉ phép bình thường) nên tự điền được từ dữ liệu
+    # thật, không còn phải để trống như trước khi loại này chưa tồn tại.
+    _ATTENDANCE_SYMBOL = {"bat_buoc": "BB", "hop_cong_tac": "H"}
+
+    staff_ids = [s["id"] for s in staffs]
+    leave_symbol_by_staff: dict[int, dict] = {sid: {} for sid in staff_ids}
+    if staff_ids:
+        placeholders = ",".join("?" for _ in staff_ids)
+        rows = db.execute(
+            f"""SELECT staff_id, start_date, end_date, spread_dates, leave_type FROM leave_records
+               WHERE status='approved' AND staff_id IN ({placeholders})
+                 AND start_date <= ? AND end_date >= ?""",
+            (*staff_ids, end.isoformat(), start.isoformat()),
+        ).fetchall()
+        for r in rows:
+            symbol = _ATTENDANCE_SYMBOL.get(r["leave_type"], "P")
+            if r["spread_dates"]:
+                for ds in json.loads(r["spread_dates"]):
+                    d = date.fromisoformat(ds)
+                    if start <= d <= end:
+                        leave_symbol_by_staff[r["staff_id"]][d] = symbol
+            else:
+                d = max(date.fromisoformat(r["start_date"]), start)
+                e = min(date.fromisoformat(r["end_date"]), end)
+                while d <= e:
+                    leave_symbol_by_staff[r["staff_id"]][d] = symbol
+                    d += timedelta(days=1)
+
+    # Font/cỡ chữ lấy đúng nguyên file mẫu thật "TONG HOP CHAM CONG TTTT-2026.xlsx"
+    # (sheet T12026/T22026 — bản 2026 hiện hành, không phải bản 2023 cũ đã đổi mẫu).
+    FONT_NAME = "Times New Roman"
+    total_cols = 3 + days_in_month + 3  # STT, Họ và tên, Mã cán bộ, các ngày, X, N.L, Ăn ca
+    last_col = get_column_letter(total_cols)
+    left_end = total_cols // 2
+
+    ws.merge_cells(f"A1:{get_column_letter(left_end)}1")
+    a1 = ws.cell(1, 1, "NGÂN HÀNG NÔNG NGHIỆP")
+    a1.font = Font(name=FONT_NAME, size=12, bold=False)
+    a1.alignment = Alignment(horizontal="center")
+    ws.merge_cells(f"{get_column_letter(left_end + 1)}1:{last_col}1")
+    c = ws.cell(1, left_end + 1, "CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM")
+    c.font = Font(name=FONT_NAME, size=12, bold=True)
+    c.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A2:{get_column_letter(left_end)}2")
+    a2 = ws.cell(2, 1, "VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM")
+    a2.font = Font(name=FONT_NAME, size=12, bold=False)
+    a2.alignment = Alignment(horizontal="center")
+    ws.merge_cells(f"{get_column_letter(left_end + 1)}2:{last_col}2")
+    c = ws.cell(2, left_end + 1, "Độc lập - Tự do - Hạnh phúc")
+    c.font = Font(name=FONT_NAME, size=12, bold=True)
+    c.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A3:{get_column_letter(left_end)}3")
+    a3 = ws.cell(3, 1, "TRUNG TÂM THANH TOÁN")
+    a3.font = Font(name=FONT_NAME, size=12, bold=True)
+    a3.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A5:{last_col}5")
+    tc = ws.cell(5, 1, "BẢNG CHẤM CÔNG LAO ĐỘNG")
+    tc.font = Font(name=FONT_NAME, size=14, bold=True)
+    tc.alignment = Alignment(horizontal="center")
+    ws.row_dimensions[5].height = 18.75
+
+    ws.merge_cells(f"A6:{last_col}6")
+    tc = ws.cell(6, 1, f"Tháng {month:02d} năm {year}")
+    tc.font = Font(name=FONT_NAME, size=14, bold=True)
+    tc.alignment = Alignment(horizontal="center")
+    ws.row_dimensions[6].height = 18.75
+
+    HEADER_ROW = 8
+    # Mẫu thật dùng cỡ chữ KHÁC NHAU theo từng cột ở dòng tiêu đề, không đồng
+    # nhất 1 cỡ: STT/Mã cán bộ 10, Họ và tên 12, các cột ngày 10, X/N.L/Ăn ca 9.
+    hdr_font_stt  = Font(name=FONT_NAME, size=10, bold=True)
+    hdr_font_name = Font(name=FONT_NAME, size=12, bold=True)
+    hdr_font_day  = Font(name=FONT_NAME, size=10, bold=True)
+    hdr_font_sum  = Font(name=FONT_NAME, size=9, bold=True)
+    weekend_fill = PatternFill("solid", fgColor="FFFFFF00")
+    holiday_fill = PatternFill("solid", fgColor="C8E6C9")
+    thin = Side(style="thin", color="000000")
+    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    wrap_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.row_dimensions[HEADER_ROW].height = 27
+    ws.cell(HEADER_ROW, 1, "STT").font = hdr_font_stt
+    ws.cell(HEADER_ROW, 2, "Họ và tên").font = hdr_font_name
+    ws.cell(HEADER_ROW, 3, "Mã cán bộ").font = hdr_font_stt
+    ws.column_dimensions["A"].width = 4
+    ws.column_dimensions["B"].width = 24
+    ws.column_dimensions["C"].width = 10
+    day_col0 = 4
+    for dnum in range(1, days_in_month + 1):
+        col = day_col0 + dnum - 1
+        cell = ws.cell(HEADER_ROW, col, dnum)
+        cell.font = hdr_font_day
+        cell.border = cell_border
+        ws.column_dimensions[get_column_letter(col)].width = 3.5
+        d = date(year, month, dnum)
+        if not la_ngay_lam_viec(d, lich):
+            cell.fill = holiday_fill if d in lich.ngay_le else weekend_fill
+    sum_col0 = day_col0 + days_in_month
+    for i, label in enumerate(("X", "N.L", "Ăn ca")):
+        col = sum_col0 + i
+        cell = ws.cell(HEADER_ROW, col, label)
+        cell.font = hdr_font_sum
+        ws.column_dimensions[get_column_letter(col)].width = 4.3
+    for ci in range(1, total_cols + 1):
+        cell = ws.cell(HEADER_ROW, ci)
+        cell.border = cell_border
+        cell.alignment = wrap_center
+
+    # Font/cỡ chữ dòng dữ liệu (khác dòng tiêu đề): STT 11, Họ tên/Mã cán bộ 12,
+    # ô ngày + cột tổng 10 — không bold, màu chữ mặc định (đen). Mẫu thật có vài
+    # dòng tô chữ đỏ nhưng KHÔNG theo quy luật cố định nào (chỉ 1 số cán bộ ở 1
+    # số tháng) nên không có cách suy ra tự động — để mặc định đen cho mọi dòng.
+    data_font_stt  = Font(name=FONT_NAME, size=11)
+    data_font_name = Font(name=FONT_NAME, size=12)
+    data_font_code = Font(name=FONT_NAME, size=10)
+    data_font_day  = Font(name=FONT_NAME, size=10)
+    data_font_sum  = Font(name=FONT_NAME, size=10)
+    dept_font      = Font(name=FONT_NAME, size=10, bold=True)
+
+    ri = HEADER_ROW + 1
+    cur_dept = None
+    dept_stt = 0
+    for s in staffs:
+        if s["dept_name"] != cur_dept:
+            if cur_dept is not None:
+                ws.cell(ri, 2, dept_stt).font = dept_font
+                ri += 1
+            cur_dept = s["dept_name"]
+            dept_stt = 0
+            dc = ws.cell(ri, 2, cur_dept or "(Chưa gán phòng)")
+            dc.font = dept_font
+            dc.alignment = wrap_center
+            ri += 1
+        ws.row_dimensions[ri].height = 22.5
+        dept_stt += 1
+        c1 = ws.cell(ri, 1, dept_stt); c1.font = data_font_stt; c1.alignment = Alignment(horizontal="center")
+        ws.cell(ri, 2, s["full_name"] or "").font = data_font_name
+        c3 = ws.cell(ri, 3, s["employee_code"] or ""); c3.font = data_font_code; c3.alignment = Alignment(horizontal="center")
+        x_count = 0
+        for dnum in range(1, days_in_month + 1):
+            d = date(year, month, dnum)
+            col = day_col0 + dnum - 1
+            cell = ws.cell(ri, col)
+            cell.font = data_font_day
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = cell_border
+            if not la_ngay_lam_viec(d, lich):
+                cell.fill = holiday_fill if d in lich.ngay_le else weekend_fill
+                continue
+            # Ngày chưa tới (sau thời điểm xuất file) — chưa có dữ liệu thật, để
+            # trống, không suy đoán "X" cho ngày chưa xảy ra.
+            if d > today:
+                continue
+            _sym = leave_symbol_by_staff.get(s["id"], {}).get(d)
+            if _sym:
+                cell.value = _sym
+            else:
+                cell.value = "X"
+                x_count += 1
+        total_work_days = sum(
+            1 for dnum in range(1, days_in_month + 1)
+            if la_ngay_lam_viec(date(year, month, dnum), lich) and date(year, month, dnum) <= today
+        )
+        for i, val in enumerate((x_count, total_work_days, x_count)):
+            cell = ws.cell(ri, sum_col0 + i, val)
+            cell.font = data_font_sum
+            cell.alignment = Alignment(horizontal="center")
+        for ci in range(1, total_cols + 1):
+            ws.cell(ri, ci).border = cell_border
+        ri += 1
+    if cur_dept is not None:
+        ws.cell(ri, 2, dept_stt).font = dept_font
+        ri += 1
+
+    ri += 1
+    note = ws.cell(ri, 1,
+        "Ghi chú: X = đi làm, P = nghỉ phép, BB = nghỉ phép bắt buộc, H = họp/công tác "
+        "(tất cả tự động lấy từ đơn nghỉ phép đã duyệt trong hệ thống). Ô để trống tô màu = Thứ Bảy/Chủ "
+        "nhật/ngày lễ, ô để trống không tô màu = ngày chưa tới "
+        f"(tính đến {today.strftime('%d/%m/%Y')}, thời điểm xuất file). Cột xếp loại thi đua KHÔNG có dữ "
+        "liệu nên chưa tự điền.")
+    note.font = Font(name=FONT_NAME, size=9, italic=True, color="666666")
+    ws.merge_cells(f"A{ri}:{last_col}{ri}")
+
+    ri += 2
+    footer_font = Font(name=FONT_NAME, size=12, bold=True)
+    third = total_cols // 3
+    # Merge 1 khoảng nhỏ quanh mỗi nhãn — chữ căn giữa (center) trong Excel
+    # KHÔNG tự tràn sang ô trống bên cạnh như chữ căn trái, cột A lại rất hẹp
+    # (width=4) nên nếu chỉ ghi vào đúng 1 ô, "LẬP BẢNG" sẽ bị cắt chữ khi mở
+    # bằng Excel thật (chỉ hiện được "BẢNG"). Excel/LibreOffice không kiểm
+    # tra chồng lấn merge khi ghi bằng openpyxl nên vẫn phải tự canh đủ hẹp.
+    for col, label in ((1, "LẬP BẢNG"), (third + 1, "KIỂM SOÁT"), (2 * third + 1, "GIÁM ĐỐC")):
+        end_col = min(col + 3, total_cols)
+        ws.merge_cells(start_row=ri, start_column=col, end_row=ri, end_column=end_col)
+        cell = ws.cell(ri, col, label)
+        cell.font = footer_font
+        cell.alignment = Alignment(horizontal="center")
+
+    # Canh in vừa 1 trang ngang — bảng rộng tới hơn 30 cột (mỗi ngày 1 cột)
+    # nên khổ dọc mặc định của Excel sẽ luôn bị tràn sang trang 2 nếu không
+    # ép khổ ngang + fit-to-width. fitToPage PHẢI bật thì fitToWidth mới có
+    # tác dụng — thiếu dòng đó Excel bỏ qua toàn bộ cấu hình fit, in theo
+    # scale 100% mặc định.
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins = PageMargins(left=0.2, right=0.2, top=0.4, bottom=0.4, header=0.2, footer=0.2)
+    ws.print_area = f"A1:{last_col}{ri}"
+
+
 @router.get("/export/attendance-monthly")
 def export_attendance_monthly(
     year: int,
-    month: int = Query(..., ge=1, le=12),
+    month: int = Query(None, ge=1, le=12, description="Bỏ trống = xuất cả năm, mỗi tháng 1 sheet"),
     db: sqlite3.Connection = Depends(get_db),
     current: dict = Depends(require_feature("leaves.stats_export")),
 ):
-    """Bảng chấm công toàn trung tâm, theo mẫu giấy "TONG HOP CHAM CONG TTTT"
-    của Phòng Tổng hợp — nhóm theo phòng ban, mỗi người 1 dòng, X = đi làm,
-    P = nghỉ phép (suy ra từ leave_records đã duyệt), để trống = T7/CN/lễ.
-
-    CHỈ tự động được phần suy ra từ đơn nghỉ phép — các buổi họp/tập huấn/công
-    tác (không qua hệ thống nghỉ phép) và cột xếp loại thi đua KHÔNG có nguồn
-    dữ liệu nào trong phần mềm nên không tự điền được; Phòng Tổng hợp bổ sung
-    thủ công sau khi tải về, đúng như mẫu giấy vẫn dùng.
-    """
-    import calendar
+    """Xuất báo cáo chấm công — 1 tháng (1 sheet) hoặc cả năm (12 sheet, mỗi
+    tháng 1 sheet, đúng cấu trúc file mẫu "TONG HOP CHAM CONG TTTT")."""
     import openpyxl
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
 
     _scope_required = (current["role"] not in ("admin", "giam_doc", "pho_giam_doc")
                        and not _is_tong_hop_staff(current, db))
@@ -3633,165 +4010,23 @@ def export_attendance_monthly(
         _dept_params
     ).fetchall()
 
-    days_in_month = calendar.monthrange(year, month)[1]
-    start = date(year, month, 1)
-    end = date(year, month, days_in_month)
-    lich = _load_lich(db, start, end)
-
-    staff_ids = [s["id"] for s in staffs]
-    leave_days_by_staff: dict[int, set] = {sid: set() for sid in staff_ids}
-    if staff_ids:
-        placeholders = ",".join("?" for _ in staff_ids)
-        rows = db.execute(
-            f"""SELECT staff_id, start_date, end_date, spread_dates FROM leave_records
-               WHERE status='approved' AND staff_id IN ({placeholders})
-                 AND start_date <= ? AND end_date >= ?""",
-            (*staff_ids, end.isoformat(), start.isoformat()),
-        ).fetchall()
-        for r in rows:
-            if r["spread_dates"]:
-                for ds in json.loads(r["spread_dates"]):
-                    d = date.fromisoformat(ds)
-                    if start <= d <= end:
-                        leave_days_by_staff[r["staff_id"]].add(d)
-            else:
-                d = max(date.fromisoformat(r["start_date"]), start)
-                e = min(date.fromisoformat(r["end_date"]), end)
-                while d <= e:
-                    leave_days_by_staff[r["staff_id"]].add(d)
-                    d += timedelta(days=1)
-
     wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = f"Cham cong {month:02d}-{year}"
-
-    FONT_NAME = "Times New Roman"
-    total_cols = 3 + days_in_month + 3  # STT, Họ và tên, Mã cán bộ, các ngày, X, N.L, Ăn ca
-    last_col = get_column_letter(total_cols)
-    left_end = total_cols // 2
-
-    ws.merge_cells(f"A1:{get_column_letter(left_end)}1")
-    ws.cell(1, 1, "NGÂN HÀNG NÔNG NGHIỆP").font = Font(name=FONT_NAME, size=12, bold=True)
-    ws.merge_cells(f"{get_column_letter(left_end + 1)}1:{last_col}1")
-    c = ws.cell(1, left_end + 1, "CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM")
-    c.font = Font(name=FONT_NAME, size=12, bold=True)
-    c.alignment = Alignment(horizontal="center")
-
-    ws.merge_cells(f"A2:{get_column_letter(left_end)}2")
-    ws.cell(2, 1, "VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM").font = Font(name=FONT_NAME, size=12, bold=True)
-    ws.merge_cells(f"{get_column_letter(left_end + 1)}2:{last_col}2")
-    c = ws.cell(2, left_end + 1, "Độc lập - Tự do - Hạnh phúc")
-    c.font = Font(name=FONT_NAME, size=12, bold=True)
-    c.alignment = Alignment(horizontal="center")
-
-    ws.merge_cells(f"A3:{get_column_letter(left_end)}3")
-    ws.cell(3, 1, "TRUNG TÂM THANH TOÁN").font = Font(name=FONT_NAME, size=12, bold=True)
-
-    ws.merge_cells(f"A5:{last_col}5")
-    tc = ws.cell(5, 1, "BẢNG CHẤM CÔNG LAO ĐỘNG")
-    tc.font = Font(name=FONT_NAME, size=14, bold=True)
-    tc.alignment = Alignment(horizontal="center")
-
-    ws.merge_cells(f"A6:{last_col}6")
-    tc = ws.cell(6, 1, f"Tháng {month:02d} năm {year}")
-    tc.font = Font(name=FONT_NAME, size=12, bold=True)
-    tc.alignment = Alignment(horizontal="center")
-
-    HEADER_ROW = 8
-    hdr_font = Font(name=FONT_NAME, size=11, bold=True)
-    weekend_fill = PatternFill("solid", fgColor="FFFFFF00")
-    holiday_fill = PatternFill("solid", fgColor="C8E6C9")
-    thin = Side(style="thin", color="000000")
-    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-    ws.cell(HEADER_ROW, 1, "STT").font = hdr_font
-    ws.cell(HEADER_ROW, 2, "Họ và tên").font = hdr_font
-    ws.cell(HEADER_ROW, 3, "Mã cán bộ").font = hdr_font
-    ws.column_dimensions["A"].width = 5
-    ws.column_dimensions["B"].width = 24
-    ws.column_dimensions["C"].width = 12
-    day_col0 = 4
-    for dnum in range(1, days_in_month + 1):
-        col = day_col0 + dnum - 1
-        cell = ws.cell(HEADER_ROW, col, dnum)
-        cell.font = hdr_font
-        cell.alignment = Alignment(horizontal="center")
-        cell.border = cell_border
-        ws.column_dimensions[get_column_letter(col)].width = 3.5
-        d = date(year, month, dnum)
-        if not la_ngay_lam_viec(d, lich):
-            cell.fill = holiday_fill if d in lich.ngay_le else weekend_fill
-    sum_col0 = day_col0 + days_in_month
-    for i, label in enumerate(("X", "N.L", "Ăn ca")):
-        col = sum_col0 + i
-        cell = ws.cell(HEADER_ROW, col, label)
-        cell.font = hdr_font
-        cell.alignment = Alignment(horizontal="center")
-        ws.column_dimensions[get_column_letter(col)].width = 7
-    for ci in range(1, total_cols + 1):
-        ws.cell(HEADER_ROW, ci).border = cell_border
-        ws.cell(HEADER_ROW, ci).alignment = Alignment(horizontal="center", vertical="center")
-
-    ri = HEADER_ROW + 1
-    cur_dept = None
-    dept_stt = 0
-    for s in staffs:
-        if s["dept_name"] != cur_dept:
-            if cur_dept is not None:
-                ws.cell(ri, 2, dept_stt)
-                ri += 1
-            cur_dept = s["dept_name"]
-            dept_stt = 0
-            ws.cell(ri, 2, cur_dept or "(Chưa gán phòng)").font = Font(name=FONT_NAME, size=11, bold=True)
-            ri += 1
-        dept_stt += 1
-        ws.cell(ri, 1, dept_stt).alignment = Alignment(horizontal="center")
-        ws.cell(ri, 2, s["full_name"] or "")
-        ws.cell(ri, 3, s["employee_code"] or "").alignment = Alignment(horizontal="center")
-        x_count = 0
-        for dnum in range(1, days_in_month + 1):
-            d = date(year, month, dnum)
-            col = day_col0 + dnum - 1
-            cell = ws.cell(ri, col)
-            cell.alignment = Alignment(horizontal="center")
-            cell.border = cell_border
-            if not la_ngay_lam_viec(d, lich):
-                cell.fill = holiday_fill if d in lich.ngay_le else weekend_fill
-                continue
-            if d in leave_days_by_staff.get(s["id"], set()):
-                cell.value = "P"
-            else:
-                cell.value = "X"
-                x_count += 1
-        total_work_days = sum(
-            1 for dnum in range(1, days_in_month + 1)
-            if la_ngay_lam_viec(date(year, month, dnum), lich)
-        )
-        ws.cell(ri, sum_col0, x_count).alignment = Alignment(horizontal="center")
-        ws.cell(ri, sum_col0 + 1, total_work_days).alignment = Alignment(horizontal="center")
-        ws.cell(ri, sum_col0 + 2, x_count).alignment = Alignment(horizontal="center")
-        for ci in range(1, total_cols + 1):
-            ws.cell(ri, ci).border = cell_border
-        ri += 1
-    if cur_dept is not None:
-        ws.cell(ri, 2, dept_stt)
-        ri += 1
-
-    ri += 1
-    note = ws.cell(ri, 1,
-        "Ghi chú: X = đi làm, P = nghỉ phép (tự động lấy từ đơn nghỉ phép đã duyệt trong hệ thống), "
-        "ô để trống (tô màu) = Thứ Bảy/Chủ nhật/ngày lễ. Các buổi họp/tập huấn/công tác và cột xếp loại "
-        "thi đua KHÔNG có trong dữ liệu nghỉ phép nên chưa tự điền — Phòng Tổng hợp bổ sung thủ công.")
-    note.font = Font(name=FONT_NAME, size=9, italic=True, color="666666")
-    ws.merge_cells(f"A{ri}:{last_col}{ri}")
-
-    ri += 2
-    third = total_cols // 3
-    ws.cell(ri, 1, "LẬP BẢNG").font = Font(name=FONT_NAME, bold=True)
-    ws.cell(ri, third + 1, "KIỂM SOÁT").font = Font(name=FONT_NAME, bold=True)
-    ws.cell(ri, 2 * third + 1, "GIÁM ĐỐC").font = Font(name=FONT_NAME, bold=True)
-    for c in (1, third + 1, 2 * third + 1):
-        ws.cell(ri, c).alignment = Alignment(horizontal="center")
+    if month is None:
+        # Cả năm: chỉ xuất tới tháng hiện tại — tháng chưa tới thì chưa có
+        # ngày nào xảy ra, không có gì để tính, xuất sheet trống vô nghĩa.
+        today = _vn_now().date()
+        months_so_far = [m for m in range(1, 13) if date(year, m, 1) <= today]
+        if not months_so_far:
+            raise HTTPException(400, f"Năm {year} chưa tới, chưa có tháng nào để xuất báo cáo")
+        wb.remove(wb.active)
+        for m in months_so_far:
+            ws = wb.create_sheet()
+            _build_attendance_month_sheet(ws, db, year, m, staffs)
+        fname = f"bao_cao_cham_cong_ca_nam_{year}.xlsx"
+    else:
+        ws = wb.active
+        _build_attendance_month_sheet(ws, db, year, month, staffs)
+        fname = f"bao_cao_cham_cong_{month:02d}_{year}.xlsx"
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -3799,7 +4034,7 @@ def export_attendance_monthly(
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''bao_cao_cham_cong_{month:02d}_{year}.xlsx"},
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"},
     )
 
 
@@ -3882,7 +4117,7 @@ def leader_dashboard(
     # Bản ghi tổng hợp giả (nhập Excel/sửa tay hạn mức) không phải đơn nghỉ phép
     # thật — loại khỏi "Hoàn thành"/"Khai báo hộ" để khớp với list_leaves() (đã ẩn
     # tương tự) và không đếm 1 thao tác đối soát hạn mức như 1 đơn đã hoàn thành.
-    _not_synthetic = "AND NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')"
+    _not_synthetic = "AND (lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))"
     approved_cnt = db.execute(
         f"""SELECT COUNT(*) FROM leave_records lr JOIN user_tttt s ON lr.staff_id = s.id
            WHERE lr.status='approved' AND strftime('%Y', lr.start_date)=?{_dept_sql} {_not_synthetic}""",
@@ -3988,7 +4223,7 @@ def create_direct_leave(
         """SELECT lr.id, lr.start_date, lr.end_date, lr.spread_dates
            FROM leave_records lr
            WHERE lr.staff_id=? AND lr.status NOT IN ('cancelled','rejected')
-             AND NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')""",
+             AND (lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))""",
         (body.staff_id,)
     ).fetchall()
     conflict_dates = []
@@ -4091,6 +4326,17 @@ def approve_recall(
         if leave["status"] != LeaveStatus.PENDING_TONG_HOP or not leave["recall_reason"]:
             raise HTTPException(400, "Đơn này không trong trạng thái chờ xác nhận rút")
     old = leave["status"]
+    # Khoá lạc quan (giống _apply_status_transition): chỉ chuyển trạng thái nếu
+    # status hiện tại trong DB đúng bằng old — chặn 2 request xác nhận rút trùng
+    # cùng lúc (double-click, 2 tab Phòng Tổng hợp) trừ used_leave_days 2 lần
+    # cho cùng 1 đơn. Đổi trạng thái TRƯỚC rồi mới trừ hạn mức — request thua
+    # cuộc dừng lại ở đây (409), không chạm tới bước trừ hạn mức nữa.
+    cur = db.execute(
+        "UPDATE leave_records SET status=?, updated_at=? WHERE id=? AND status=?",
+        (LeaveStatus.CANCELLED, str(_vn_now()), leave_id, old),
+    )
+    if cur.rowcount == 0:
+        raise HTTPException(409, "Đơn đã được xử lý bởi một yêu cầu khác, vui lòng tải lại trang")
     # Trừ used_leave_days khi xác nhận rút (approved → cancelled) — trừ thai_san/bao_hiem
     # vì loại này chưa từng được cộng vào used_leave_days lúc duyệt.
     if leave["leave_type"] not in _NO_QUOTA_TYPES:
@@ -4102,10 +4348,6 @@ def approve_recall(
             "UPDATE user_tttt SET used_leave_days = MAX(0, COALESCE(used_leave_days,0) - ?) WHERE id=?",
             (days, leave["staff_id"]),
         )
-    db.execute(
-        "UPDATE leave_records SET status=?, updated_at=? WHERE id=?",
-        (LeaveStatus.CANCELLED, str(_vn_now()), leave_id),
-    )
     _log_action(db, leave_id, current["id"], "recall_approve", None, old, LeaveStatus.CANCELLED)
     db.commit()
     return _leave_to_out(leave_id, db)
