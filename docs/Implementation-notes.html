@@ -14038,6 +14038,67 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">121</span>
+      <span class="card-title">Nghỉ phép — 2 cảnh báo cuối cùng của đợt "Ứng phép năm sau": mốc hết hạn 31/03 bị hard-code sai, và "Sửa &amp; Nộp lại" chưa hỏi ứng phép dù backend đã hỗ trợ sẵn (2026-09-05)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Lỗi 1</span> Ngày phép chuyển kỳ không bao giờ thực sự hết hạn 31/03</div>
+      <p><code>compute_carry_over(effective=True, ref_date=...)</code> chỉ trả 0 khi
+        <code>ref_date &gt; 31/03/năm</code> — đúng thiết kế. Nhưng <code>_check_quota_or_borrow</code>
+        (hàm kiểm tra hạn mức lúc tạo/nộp lại/khai báo hộ đơn) gọi hàm này với
+        <code>ref_date=date(ref_year, 1, 1)</code> — HARD-CODE CỨNG thành 01/01, không phải ngày
+        tạo đơn thật (<code>_vn_now()</code>). Vì 01/01 không bao giờ &gt; 31/03 cùng năm, điều
+        kiện hết hạn <b>không bao giờ đúng</b> — carry-over luôn được tính là còn hiệu lực, bất kể
+        đơn được tạo tháng 6 hay tháng 10.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Bỏ hard-code, để mặc định lấy ngày hôm nay</div>
+      <p>Xoá tham số <code>ref_date=date(ref_year, 1, 1)</code>, để hàm tự lấy <code>_vn_now().date()</code>
+        (mặc định của <code>compute_carry_over</code> khi <code>ref_date=None</code>) — đúng ngữ nghĩa
+        "carry-over còn dùng được hay không phụ thuộc ngày TẠO ĐƠN, không phải ngày nghỉ dự kiến".
+        2 chỗ gọi khác (<code>_build_form_ctx</code> dùng <code>ref_date=start</code> để in phiếu
+        đúng thời điểm nghỉ, <code>export_all_leaves_annual</code> dùng <code>ref_date=today</code>
+        để xuất báo cáo đúng thời điểm xuất) vốn đã đúng, không đụng tới.</p>
+
+      <p>Verify thật (hôm nay 05/09/2026, đã qua 31/03 từ lâu): gọi trực tiếp
+        <code>compute_carry_over(staff_id=5, year=2026, effective=True)</code> — trước sửa (giả lập
+        lại bằng <code>ref_date=date(2026,1,1)</code>) ra <code>12.0</code> (❌ vẫn còn hiệu lực);
+        sau sửa (không truyền <code>ref_date</code>, để mặc định hôm nay) ra <code>0.0</code> (✅ đã
+        hết hạn đúng). Số ngày chuyển kỳ thực tế (không tính hạn) vẫn đúng <code>12.0</code> —
+        không phải do tính sai số ngày, chỉ riêng mốc hết hạn không bao giờ kích hoạt.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 2</span> "Sửa &amp; Nộp lại" vượt hạn mức báo lỗi cứng thay vì hỏi ứng phép</div>
+      <p>Backend (<code>resubmit_leave</code>) đã gọi đúng <code>_check_quota_or_borrow(...,
+        body.confirm_borrow_next_year, db)</code> từ trước — hoàn toàn tương đương
+        <code>create_leave</code>/<code>create_direct_leave</code>, kể cả <code>frontend/api_client.py</code>
+        cũng đã raise đúng <code>QuotaExceededBorrowError</code> cho <code>PUT</code> (dùng chung
+        <code>_raise_http_error</code> với <code>POST</code>). Chỉ riêng dialog "Sửa &amp; Nộp lại"
+        ở frontend (<code>do_resubmit</code>) bắt lỗi bằng <code>except Exception</code> chung chung
+        — 409 <code>quota_exceeded_borrow</code> rơi vào nhánh đó, hiện thông báo lỗi rồi dừng luôn,
+        không có đường hỏi lại như 2 dialog kia.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Thêm nhánh <code>except api.QuotaExceededBorrowError</code>, dùng lại đúng popup</div>
+      <p>Tách logic gửi request trong <code>do_resubmit</code> ra hàm con <code>_send()</code> nhận
+        tham số <code>_body</code> (để gọi lại được khi xác nhận ứng phép) — giống hệt mẫu
+        <code>do_create</code>. Verify thật qua API: tạo đơn (ứng trước để vượt qua chặn ban đầu do
+        hạn mức đã hết sẵn), từ chối ở bước KSV, nộp lại với ngày mới KHÔNG kèm
+        <code>confirm_borrow_next_year</code> → nhận đúng <code>HTTP 409</code> kèm
+        <code>{"code":"quota_exceeded_borrow","year":2026,"next_year":2027,"remaining":-3.0,"borrow_days":3.0}</code>;
+        gọi lại kèm <code>confirm_borrow_next_year=true</code> → <code>HTTP 200</code>, đơn quay về
+        <code>pending_ksv</code> với <code>borrow_next_year_days=3.0</code> đúng số đã ứng. Dọn đơn
+        test sau khi verify.</p>
+
+      <div class="note">Cả 2 lỗi này đã được <b>chính đội phát triển ghi nhận sẵn</b> là "đang sửa
+        ở đợt tới" ngay trong <code>Logs_update.md</code> của đợt "Ứng phép năm sau" (05/09/2026,
+        cùng với lỗi #119 về ranh giới năm) — phát hiện lại khi merge nhánh và đối chiếu log, không
+        phải phát hiện mới từ rà soát.</div>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-05</footer>
 </div>
 </body>

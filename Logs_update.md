@@ -4,7 +4,7 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
-- 05/09/2026 Nghỉ phép - **Sửa 3 cảnh báo còn treo của 2 đợt trước + thêm loạt báo cáo/phiếu in + rà soát tìm thêm 2 lỗi quyền/khoá**
+- 05/09/2026 Nghỉ phép - **Sửa hết 5 cảnh báo còn treo của 2 đợt trước + thêm loạt báo cáo/phiếu in + rà soát tìm thêm 2 lỗi quyền/khoá**
     + ✅ **Đã sửa "Báo cáo NPBB liệt kê nhầm gần như toàn bộ nhân sự"** (cảnh báo ở mục dưới) — nguyên
       nhân là 1 lỗi SQL rộng hơn nhiều so với tưởng ban đầu: mọi danh sách/báo cáo đơn nghỉ phép đều
       **âm thầm bỏ sót đơn thật không nhập lý do** (không riêng gì báo cáo NPBB). Xem chi tiết ở
@@ -14,11 +14,17 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       lúc trong thời gian đơn điều chỉnh còn chờ duyệt. Xem #119
     + ✅ **Đã sửa "Đơn nghỉ vắt qua Tết dương lịch có ứng phép bị đếm thiếu ngày"** (cảnh báo ở đợt
       "Ứng phép năm sau" bên dưới) — trừ nhầm số ngày đã ứng ở cả 2 năm thay vì đúng 1 năm gốc. Xem #119
+    + ✅ **Đã sửa "Ngày phép chuyển kỳ chưa hết hạn 31/03 như quy định"** (cảnh báo ở đợt "Ứng phép
+      năm sau" bên dưới) — mốc so sánh hạn 31/03 bị hard-code cứng thành 01/01 nên phép chuyển kỳ
+      **không bao giờ hết hạn thật sự**; đơn nghỉ tạo tháng 6, tháng 10 vẫn cộng thêm ngày chuyển
+      năm. Xem #121
+    + ✅ **Đã sửa "Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép"** (cảnh báo ở đợt
+      "Ứng phép năm sau" bên dưới) — backend vốn đã hỗ trợ sẵn, chỉ riêng màn "Sửa & Nộp lại" chưa
+      bắt tín hiệu để hỏi, nên vượt hạn mức là báo lỗi rồi dừng luôn. Xem #121
     + **Rà soát thêm phát hiện 2 lỗi quyền/khoá không liên quan tới hạn mức**: nút "Hủy đơn" bị ẩn
       nhầm cho đơn đang chờ duyệt ở tài khoản chưa được cấp quyền riêng; nút Phê duyệt/Từ chối của
-      Phó Giám đốc vẫn hiện dù giấy uỷ quyền đã hết hạn. Cả 5 lỗi (3 ở trên + 2 lỗi này) đã sửa,
-      verify bằng dữ liệu thật trước/sau — xem #119, #120. **Còn 2 cảnh báo ở đợt "Ứng phép năm
-      sau" chưa sửa** (chuyển kỳ chưa hết hạn 31/03, nộp lại đơn bị từ chối chưa hỏi ứng phép)
+      Phó Giám đốc vẫn hiện dù giấy uỷ quyền đã hết hạn. Toàn bộ 7 lỗi (5 ở trên + 2 lỗi này) đã
+      sửa, verify bằng dữ liệu thật trước/sau cho từng lỗi — xem #119, #120, #121
     + **Thêm 2 loại nghỉ mới**: *Nghỉ không lương* và *Họp/Công tác* — đi qua đúng quy trình duyệt
       (KSV → Tổng hợp → Giám đốc) như đơn thường, nhưng **không trừ vào hạn mức phép năm** (vẫn hiện
       trong chấm công/báo cáo để theo dõi). Họp/Công tác cho chọn lẻ từng ngày (giống phép năm) thay
@@ -102,15 +108,14 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       chỉ khớp **12/72**. Ai vào ngành đủ 4, 8, 12… năm sẽ **giảm 1 ngày** so với con số phần mềm
       hiển thị trước đây. Người nào đã nghỉ hết số cũ thì lần xin nghỉ tới sẽ báo hết phép —
       **báo lại cho phòng Tổng hợp chỉnh tay ở tab Hạn mức phép**, đừng tự đoán
-    + ⚠️ **Ngày phép chuyển từ năm trước hiện chưa hết hạn 31/03 như quy định** — đơn nghỉ vào
-      tháng 6, tháng 10 vẫn được cộng thêm số ngày chuyển năm. Đang sửa ở đợt tới
-    + ⚠️ **Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép**, vẫn báo lỗi và dừng.
-      Tạo đơn mới và khai báo hộ thì đã có. Đang sửa ở đợt tới
+    + ⚠️→✅ **~~Ngày phép chuyển từ năm trước hiện chưa hết hạn 31/03 như quy định~~ — đã sửa, xem
+      entry mới nhất ở trên cùng.** Trước đây đơn nghỉ vào tháng 6, tháng 10 vẫn được cộng thêm
+      số ngày chuyển năm
+    + ⚠️→✅ **~~Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép~~ — đã sửa, xem entry
+      mới nhất ở trên cùng.** Trước đây vẫn báo lỗi và dừng (tạo đơn mới và khai báo hộ thì đã có)
     + ⚠️→✅ **~~Đơn nghỉ vắt qua Tết dương lịch mà có ứng phép sẽ bị đếm thiếu ngày~~ — đã sửa,
       xem entry mới nhất ở trên cùng.** Trước đây chỉ ảnh hưởng đơn bắt đầu năm này kết thúc năm
       sau và đồng thời vượt hạn mức
-    + ⚠️ **Còn 2 cảnh báo trên chưa sửa** (chuyển kỳ chưa hết hạn 31/03, nộp lại đơn bị từ chối
-      chưa hỏi ứng phép) — chưa nằm trong đợt rà soát vừa rồi, để đợt sau
 - 05/09/2026 Nghỉ phép - **Nghỉ phép bắt buộc: đăng ký, điều chỉnh ngày, và mẫu đơn riêng theo chức danh**
     + **Điều chỉnh ngày nghỉ phép bắt buộc sau khi đơn đã duyệt xong.** Đơn đã "Hoàn thành" nay có
       nút *"Điều chỉnh ngày NPBB"*. Bấm vào sẽ tạo **một đơn mới**, đi lại đủ ba bước duyệt như đơn
