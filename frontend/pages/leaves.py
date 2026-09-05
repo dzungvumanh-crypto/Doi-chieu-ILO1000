@@ -1602,24 +1602,45 @@ async def leaves_page(open_id: Optional[int] = None):
                     body["ksv_approver_id"] = r_approver.value
 
                 _is_npbb = _rsub_mode[0] == "npbb_adjust"
-                try:
-                    if _is_npbb:
-                        await asyncio.to_thread(api.post, f"/api/leaves/{lid}/npbb-adjust", body)
-                    else:
-                        await asyncio.to_thread(api.put, f"/api/leaves/{lid}/resubmit", body)
 
-                    resubmit_dialog.close()
+                async def _send(_body=body):
+                    try:
+                        if _is_npbb:
+                            await asyncio.to_thread(api.post, f"/api/leaves/{lid}/npbb-adjust", _body)
+                        else:
+                            await asyncio.to_thread(api.put, f"/api/leaves/{lid}/resubmit", _body)
 
-                    detail_drawer.hide()
+                        resubmit_dialog.close()
 
-                    ui.notify("Đã tạo đơn điều chỉnh NPBB!" if _is_npbb else "Đã nộp lại đơn!",
-                              type="positive")
+                        detail_drawer.hide()
 
-                    ui.navigate.to("/leaves")
+                        ui.notify("Đã tạo đơn điều chỉnh NPBB!" if _is_npbb else "Đã nộp lại đơn!",
+                                  type="positive")
 
-                except Exception as e:
+                        ui.navigate.to("/leaves")
 
-                    _handle_api_error(e)
+                    except api.QuotaExceededBorrowError as e:
+                        # Vượt hạn mức năm nay nhưng năm sau còn đủ chỗ ứng — hỏi
+                        # xác nhận thay vì chặn cứng, giống hệt do_create/_send_direct
+                        # (trước đây nộp lại đơn bị từ chối mà vượt hạn mức chỉ báo
+                        # lỗi rồi dừng, backend đã hỗ trợ ứng phép năm sau từ trước
+                        # nhưng dialog này chưa bắt riêng ngoại lệ này để hỏi).
+                        async def _retry_with_borrow(_body2=_body):
+                            _body2["confirm_borrow_next_year"] = True
+                            await _send(_body2)
+                        _ask_confirm(
+                            "Vượt hạn mức phép",
+                            f"Đơn nghỉ phép đã vượt quá hạn mức ngày nghỉ phép năm {e.year} "
+                            f"(còn lại {e.remaining:.0f} ngày). Bạn có muốn tiếp tục ứng trước "
+                            f"{e.borrow_days:.0f} ngày phép của năm {e.next_year} không?",
+                            _retry_with_borrow, "Đồng ý ứng phép", "bg-orange-600",
+                        )
+
+                    except Exception as e:
+
+                        _handle_api_error(e)
+
+                await _send(body)
 
 
 

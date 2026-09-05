@@ -314,7 +314,13 @@ def _check_quota_or_borrow(staff_id: int, join_industry_date: Optional[str], lea
     if leave_type in _NO_QUOTA_TYPES or leave_type == "bat_buoc":
         return 0.0
 
-    carry_eff = compute_carry_over(staff_id, ref_year, db, effective=True, ref_date=date(ref_year, 1, 1))
+    # ref_date=None → compute_carry_over tự lấy _vn_now().date() (HÔM NAY, lúc
+    # tạo/nộp đơn) để so mốc hết hạn 31/03 — carry-over còn dùng được hay không
+    # phụ thuộc NGÀY TẠO ĐƠN, không phải ngày nghỉ dự kiến. Trước đây hard-code
+    # ref_date=date(ref_year, 1, 1) (luôn là 01/01) nên check "> 31/03" không
+    # bao giờ đúng — carry-over hết hạn không bao giờ được áp dụng, đơn nghỉ
+    # tạo tháng 6, tháng 10 vẫn cộng thêm ngày chuyển năm dù đã hết hạn 31/03.
+    carry_eff = compute_carry_over(staff_id, ref_year, db, effective=True)
     _q_row = db.execute(
         "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
         (staff_id, ref_year),
