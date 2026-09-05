@@ -55,7 +55,10 @@ from .config import (
     USERID_API_KEYWORD, USERID_QT_OSB,
 )
 
-__all__ = ["KEY_COL", "classify_core_di", "classify_hub_di", "build_khoa_huy_cheo_ngay"]
+__all__ = [
+    "KEY_COL", "classify_core_di", "classify_hub_di", "build_khoa_huy_cheo_ngay",
+    "tim_nhom_lenh_fx_trung_remark",
+]
 
 _KHONG_LOG: Callable[[str], None] = lambda msg: None
 
@@ -90,6 +93,27 @@ def mask_lenh_fx_core(df: pd.DataFrame) -> pd.Series:
     """Bước 2.5: `USERID` KHÔNG chứa chuỗi "API" → lệnh fx. Phải chạy SAU Bước 2.4 (dòng OSB
     cũng không chứa "API" nhưng đã bị bắt trước, xem `classify_core_di`)."""
     return ~df["USERID"].fillna("").astype(str).str.contains(USERID_API_KEYWORD, regex=False)
+
+
+def tim_nhom_lenh_fx_trung_remark(core_df: pd.DataFrame) -> pd.DataFrame:
+    """Lọc các dòng "lệnh fx" (Bước 2.5) có `TRBRCD & REMARK` trùng với ≥1 dòng lệnh fx khác —
+    xuất riêng để người soát tự đối chiếu trên hệ thống, KHÔNG để chương trình tự ghép cặp.
+
+    Bối cảnh (quyết định người dùng 2026-09-05): docx chỉ định nghĩa "hủy cùng ngày" theo
+    `TRBRCD&REFERENCE` (Bước 2.3) — không có rule ghép cặp theo REMARK. Verify dữ liệu thật tìm
+    được 1 ca có thật (2 dòng REFERENCE khác nhau, REMARK giống hệt nhau, CRAMOUNT +X/-X) mà người
+    chấm tay coi là 1 cặp huỷ — nhưng cũng tìm được 7 nhóm REMARK "công thức" (chi lương NSNN, trợ
+    cấp xã hội...) lặp lại hàng trăm dòng/ngày với nhiều mức tiền trùng cả 2 dấu — nếu để code tự
+    ghép cặp theo REMARK+tổng=0 sẽ ghép NHẦM giao dịch không liên quan. Giải pháp: không tự ghép,
+    chỉ xuất NGUYÊN VẸN mọi dòng lệnh fx có REMARK trùng lặp để Ly/Trang tự đối chiếu tay.
+
+    Trả DataFrame rỗng (0 dòng, giữ nguyên cột) nếu không có nhóm nào trùng."""
+    fx = core_df[core_df["KETQUADOICHIEU"] == NHAN_LENH_FX].copy()
+    if fx.empty:
+        return fx
+    dem = fx.groupby(["TRBRCD", "REMARK"])["TRBRCD"].transform("size")
+    trung = fx[dem >= 2].sort_values(["TRBRCD", "REMARK"])
+    return trung
 
 
 def build_khoa_huy_cheo_ngay(df: pd.DataFrame, so_trace: pd.Series) -> pd.Series:

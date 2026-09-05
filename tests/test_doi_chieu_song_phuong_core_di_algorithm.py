@@ -689,3 +689,71 @@ class TestTimFileDi:
 
     def test_osb_khong_co_file_thi_none(self, tmp_path):
         assert pipeline._tim_file_osb_di(tmp_path, "20260901", "201") is None
+
+
+# ── tim_nhom_lenh_fx_trung_remark — quyết định người dùng 2026-09-05 ─────────
+
+class TestTimNhomLenhFxTrungRemark:
+    def _fx_row(self, trbrcd="6200", remark="Thanh toan tien ky quy", cramount="8877000"):
+        row = _core_row(trbrcd=trbrcd, userid="BTAVPHUONG", remark=remark, cramount=cramount)
+        return row
+
+    def test_2_dong_cung_trbrcd_remark_duoc_gom_nhom(self):
+        """Ca thật (2026-09-04): REFERENCE khác nhau nhưng REMARK giống hệt, CRAMOUNT +X/-X —
+        docx không có rule ghép cặp theo REMARK (chỉ REFERENCE, Bước 2.3) nên cả 2 dòng đúng là
+        "lệnh fx" theo code — vẫn phải xuất ra để người soát tự đối chiếu."""
+        df = _core_df([self._fx_row(cramount="8877000"), self._fx_row(cramount="-8877000")])
+        df["KETQUADOICHIEU"] = NHAN_LENH_FX
+        nhom = match.tim_nhom_lenh_fx_trung_remark(df)
+        assert len(nhom) == 2
+
+    def test_remark_cong_thuc_lap_lai_nhieu_dong_van_xuat_du(self):
+        """Nhóm REMARK "công thức" (chi lương NSNN...) lặp hàng trăm dòng — KHÔNG được code tự
+        ghép cặp (rủi ro ghép nhầm giao dịch không liên quan), chỉ xuất nguyên vẹn cả nhóm."""
+        rows = [self._fx_row(remark="Chi luong NSNN", cramount=str(1000 * i)) for i in range(1, 6)]
+        df = _core_df(rows)
+        df["KETQUADOICHIEU"] = NHAN_LENH_FX
+        nhom = match.tim_nhom_lenh_fx_trung_remark(df)
+        assert len(nhom) == 5
+
+    def test_remark_don_le_khong_trung_thi_khong_xuat(self):
+        df = _core_df([self._fx_row(remark="Giao dich rieng le, khong ai giong")])
+        df["KETQUADOICHIEU"] = NHAN_LENH_FX
+        nhom = match.tim_nhom_lenh_fx_trung_remark(df)
+        assert nhom.empty
+
+    def test_chi_xet_dong_da_gan_nhan_lenh_fx(self):
+        """Dòng KHÔNG phải "lệnh fx" (VD "hub T core T") dù trùng TRBRCD+REMARK cũng không được
+        tính — hàm này chỉ soi trong phạm vi Bước 2.5, không phải toàn bộ CORE."""
+        df = _core_df([self._fx_row(remark="Trung remark"), self._fx_row(remark="Trung remark")])
+        df["KETQUADOICHIEU"] = ["lệnh fx", "hub T core T"]
+        nhom = match.tim_nhom_lenh_fx_trung_remark(df)
+        assert len(nhom) == 0
+
+    def test_khong_co_dong_lenh_fx_nao_thi_tra_rong(self):
+        df = _core_df([_core_row()])
+        df["KETQUADOICHIEU"] = "hub T core T"
+        nhom = match.tim_nhom_lenh_fx_trung_remark(df)
+        assert nhom.empty
+
+
+class TestExportLenhFxTrungRemark:
+    def test_export_ghi_them_file_khi_co_nhom_trung(self, tmp_path):
+        core_df = _core_df([
+            _core_row(trbrcd="6200", userid="BTAVPHUONG", remark="X", cramount="100"),
+            _core_row(trbrcd="6200", userid="BTAVPHUONG", remark="X", cramount="-100"),
+        ])
+        core_df["KETQUADOICHIEU"] = NHAN_LENH_FX
+        hub_df = pd.DataFrame(columns=["CHI_NHANH", "SO_TIEN", "KETQUADOICHIEU"])
+        files = export.export_excel_di({"core_df": core_df, "hub_df": hub_df}, tmp_path, "test")
+        ten_file = [p.name for p in files]
+        assert "test_lenh_fx_trung_remark.csv" in ten_file
+        noi_dung = pd.read_csv(tmp_path / "test_lenh_fx_trung_remark.csv", dtype=str)
+        assert len(noi_dung) == 2
+
+    def test_export_khong_ghi_file_khi_khong_co_nhom_trung(self, tmp_path):
+        core_df = _core_df([_core_row()])
+        core_df["KETQUADOICHIEU"] = "hub T core T"
+        hub_df = pd.DataFrame(columns=["CHI_NHANH", "SO_TIEN", "KETQUADOICHIEU"])
+        files = export.export_excel_di({"core_df": core_df, "hub_df": hub_df}, tmp_path, "test")
+        assert "test_lenh_fx_trung_remark.csv" not in [p.name for p in files]

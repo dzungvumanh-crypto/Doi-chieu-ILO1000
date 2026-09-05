@@ -13596,6 +13596,29 @@ This may happen if you try to create UI from a background task.</pre>
         cùng 1 hệ (tương đối T/T±N hoặc tuyệt đối dd/mm) trước khi tính "số dòng lệch" — nếu không,
         con số báo động sẽ sai lệch hoàn toàn quy mô thật của vấn đề.</div>
 
+      <div class="label"><span class="pill pill-green">Phản biện đa agent (2026-09-05) — bác bỏ 2 giả thuyết ban đầu, thêm 1 tính năng an toàn</span></div>
+      <p>Theo yêu cầu người dùng, giao 2 agent phản biện (skill <code>multi-agent-command</code>)
+        quét toàn bộ 22 file (11 ngày × NH 202/203/201/311, dữ liệu đã phân loại sẵn — không cần
+        giải mã lại GL02) để đo QUY MÔ THẬT của 2 nghi vấn tìm được ở phần verify trên.</p>
+      <p><b>Giả thuyết "cửa sổ T±3 cần mở rộng" — BỊ BÁC BỎ.</b> Quét 199 cặp huỷ chéo ngày tìm
+        được trên cả 4 NH: 100% nằm ở cách nhau đúng 1 ngày, 0 cặp ở cách 2-5 ngày dù dữ liệu đủ để
+        kiểm (VD 27/8↔1/9, 27/8↔2/9 đều có sẵn). Người dùng xác nhận thêm nguyên nhân vận hành: hệ
+        thống chấm TUẦN TỰ THEO NGÀY, dữ liệu ngày T+6 chưa tồn tại tại thời điểm chấm ngày T — nên
+        183 điện Ly gán "hủy 3.9" không phải lỗ hổng cửa sổ cần sửa, mà là giới hạn tự nhiên của
+        việc chấm theo phiên/ngày (không thể "nhìn thấy tương lai").</p>
+      <p><b>Giả thuyết "lệnh fx cần quy tắc khớp huỷ theo REMARK" — ĐÚNG nghiệp vụ nhưng NGUY HIỂM
+        nếu code tự làm.</b> Hiện tượng có thật nhưng cực hiếm (1/45.797 dòng lệnh fx trên cả 11
+        ngày). Agent tìm được 7 nhóm REMARK "công thức" (chi lương NSNN, trợ cấp xã hội — có nhóm
+        tới 572 dòng) dùng chung 1 REMARK cho nhiều giao dịch không liên quan, cùng mức tiền lặp
+        lại cả 2 dấu — nếu code tự ghép cặp theo "REMARK+tổng=0" sẽ ghép NHẦM giao dịch không liên
+        quan trong các nhóm này.</p>
+      <p><b>Giải pháp đã triển khai (quyết định người dùng):</b> KHÔNG để code tự ghép cặp huỷ theo
+        REMARK. Thêm <code>match.py::tim_nhom_lenh_fx_trung_remark()</code> — lọc mọi dòng "lệnh
+        fx" (Bước 2.5) có <code>TRBRCD&amp;REMARK</code> trùng ≥1 dòng lệnh fx khác, xuất NGUYÊN
+        VẸN (không tự ghép) ra file riêng <code>{base_name}_lenh_fx_trung_remark.csv</code> (chỉ
+        ghi khi thực sự có nhóm trùng) để Ly/Trang tự đối chiếu tay trên hệ thống. 7 test mới, 224
+        test song_phuong pass.</p>
+
     </div>
   </div>
 

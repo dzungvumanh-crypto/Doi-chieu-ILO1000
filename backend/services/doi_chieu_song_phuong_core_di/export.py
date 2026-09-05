@@ -1,13 +1,16 @@
 """Xuất kết quả đối chiếu HUB↔CORE **chiều ĐI** — 1 file Excel tổng hợp (`TongHop`, phân bố theo
-nhãn KETQUADOICHIEU) + 2 file CSV chi tiết CORE/HUB.
+nhãn KETQUADOICHIEU) + 2 file CSV chi tiết CORE/HUB + (nếu có) 1 file CSV riêng cho nhóm "lệnh fx"
+trùng REMARK (xem `match.py::tim_nhom_lenh_fx_trung_remark` — không tự ghép cặp huỷ bằng code,
+xuất nguyên vẹn để người soát tự đối chiếu tay trên hệ thống).
 
 Giữ nguyên khuôn của chiều đến (`doi_chieu_song_phuong_core/export.py`): chi tiết ghi CSV, chỉ
 bảng tổng hợp ghi Excel — số đo thật 2026-08-31 cho thấy ghi Excel chiếm ~60% thời gian job với
 dữ liệu vài trăm nghìn dòng, mà module không dùng style/công thức Excel nào.
 
-KHÁC chiều đến đúng MỘT chỗ: cột "Số tiền CORE" cộng `CRAMOUNT` thay vì `DRAMOUNT` — CSV
-`{ma_nh}_DI*.csv` có DRAMOUNT LUÔN = "0" (511.378/511.378 và 878.092/878.092 dòng đã khảo sát),
-lấy DRAMOUNT thì cột tiền CORE ra 0 tuyệt đối, bảng tổng hợp mất hết ý nghĩa mà không báo lỗi.
+KHÁC chiều đến đúng MỘT chỗ (ngoài file lệnh-fx-trùng-remark mới): cột "Số tiền CORE" cộng
+`CRAMOUNT` thay vì `DRAMOUNT` — CSV `{ma_nh}_DI*.csv` có DRAMOUNT LUÔN = "0" (511.378/511.378 và
+878.092/878.092 dòng đã khảo sát), lấy DRAMOUNT thì cột tiền CORE ra 0 tuyệt đối, bảng tổng hợp
+mất hết ý nghĩa mà không báo lỗi.
 """
 
 from pathlib import Path
@@ -16,7 +19,7 @@ import pandas as pd
 
 from backend.services.ach.so_tien import doc_so_tien
 
-from .match import KEY_COL
+from .match import KEY_COL, tim_nhom_lenh_fx_trung_remark
 
 _TONG_HOP_COLS = ["Nhãn (KETQUADOICHIEU)", "Số dòng CORE", "Số tiền CORE", "Số dòng HUB", "Số tiền HUB"]
 
@@ -57,7 +60,8 @@ def build_tong_hop_di(core_df: pd.DataFrame, hub_df: pd.DataFrame) -> pd.DataFra
 def export_excel_di(ket_qua: dict, out_dir: str | Path, base_name: str) -> list[Path]:
     """`ket_qua` = dict trả về từ `pipeline.doi_chieu_hub_core_di()`. Ghi vào `out_dir`:
     `{base_name}.xlsx` (sheet `TongHop`) + `{base_name}_core_chi_tiet.csv` +
-    `{base_name}_hub_chi_tiet.csv`. Trả `[tonghop_path, core_csv_path, hub_csv_path]`."""
+    `{base_name}_hub_chi_tiet.csv` + (nếu có) `{base_name}_lenh_fx_trung_remark.csv`. Trả danh
+    sách đường dẫn theo đúng thứ tự ghi (file cuối chỉ xuất hiện khi có dòng để báo)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     core_df, hub_df = ket_qua["core_df"], ket_qua["hub_df"]
@@ -76,4 +80,16 @@ def export_excel_di(ket_qua: dict, out_dir: str | Path, base_name: str) -> list[
     hub_df.drop(columns=[KEY_COL], errors="ignore").to_csv(
         hub_csv_path, index=False, encoding="utf-8-sig")
 
-    return [tonghop_path, core_csv_path, hub_csv_path]
+    ket_qua_files = [tonghop_path, core_csv_path, hub_csv_path]
+
+    # Nhóm "lệnh fx" trùng REMARK — quyết định người dùng 2026-09-05 (xem
+    # match.py::tim_nhom_lenh_fx_trung_remark): không tự ghép cặp huỷ bằng code, chỉ xuất nguyên
+    # vẹn để Ly/Trang tự đối chiếu tay trên hệ thống. Chỉ ghi file khi thực sự có nhóm trùng.
+    nhom_fx_trung = tim_nhom_lenh_fx_trung_remark(core_df)
+    if not nhom_fx_trung.empty:
+        fx_trung_path = out_dir / f"{base_name}_lenh_fx_trung_remark.csv"
+        nhom_fx_trung.drop(columns=[KEY_COL], errors="ignore").to_csv(
+            fx_trung_path, index=False, encoding="utf-8-sig")
+        ket_qua_files.append(fx_trung_path)
+
+    return ket_qua_files
