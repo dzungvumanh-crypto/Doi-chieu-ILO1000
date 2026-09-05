@@ -4,6 +4,22 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 05/09/2026 Chấm ILO1000 - **Sửa lỗi giao dịch bình thường bị gán nhầm "Đã hủy"**
+    + Người chấm phản ánh ngay trên file kết quả ngày **26/08**: nhiều món **sheet Hub ghi "Hoàn
+      thành"** nhưng hệ thống chấm lại ghi **"Đã hủy"** — 24 dòng, đều thuộc các đợt chi trả
+      **trợ cấp xã hội (BTXH)**
+    + Nguyên nhân: các đợt chi trả này **dùng chung một số hiệu đợt** cho nhiều chi nhánh cùng
+      tham gia — giống nhiều nhà chung một số nhà. Hệ thống tưởng đó là một giao dịch duy nhất,
+      nên khi **một** chi nhánh có lệnh hủy thật thì nó gán **"Đã hủy" cho cả các chi nhánh còn
+      lại**, dù những chi nhánh đó không liên quan gì
+    + Cách chữa: khi xét hủy, hệ thống nay ghép **số hiệu đợt + mã chi nhánh** làm một cặp, không
+      nhìn số hiệu đợt một mình nữa. Lệnh hủy của chi nhánh nào chỉ ảnh hưởng đúng chi nhánh đó
+    + ⚠️ **Kết quả đã chấm trước đây có thể sai — nên chấm lại.** Món nào hệ thống ghi "Đã hủy"
+      mà sheet Hub ghi "Hoàn thành" thì chạy lại file ngày đó để lấy kết quả đúng. **Lệnh hủy
+      thật vẫn được nhận ra đầy đủ như cũ**, không mất món nào
+    + ✅ **Không phải làm gì sau khi cập nhật** — không đổi giao diện, không đổi quyền, không đổi
+      thao tác
+
 - 04/09/2026 Chuẩn hoá văn bản - **Sửa 4 lỗi phát hiện trên văn bản thật (TB Swift code Quảng Ninh)**
     + **Số trang in ra sai — trang 2 ghi "24", trang 3 ghi "25".** Nguyên nhân: file gốc được cắt
       ra từ một tài liệu dài nên vẫn mang lệnh *"đánh số bắt đầu từ trang 23"* ẩn bên trong. Người
