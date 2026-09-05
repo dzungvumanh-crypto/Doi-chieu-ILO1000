@@ -21,6 +21,7 @@ class LeaveCreate(BaseModel):
     gd_approver_id: Optional[int] = None   # Chọn trước Ban lãnh đạo phê duyệt
     spread_dates: Optional[List[str]] = None  # YYYY-MM-DD list khi nghỉ ngày lẻ không liên tục
     signature: Optional[SignaturePlacement] = None  # Chữ ký người đề nghị đặt ở popup xem trước
+    confirm_borrow_next_year: bool = False  # Đã đồng ý ứng phép năm sau khi vượt hạn mức năm nay
 
 class LeaveReview(BaseModel):
     action: Literal["approve", "reject"]
@@ -63,6 +64,7 @@ class LeaveOut(BaseModel):
     is_direct: bool = False
     spread_dates: Optional[List[str]] = None
     recall_reason: Optional[str] = None
+    borrow_next_year_days: float = 0.0
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -101,6 +103,7 @@ class DirectLeaveCreate(BaseModel):
     leave_type: str = "annual"
     reason: Optional[str] = None
     spread_dates: Optional[List[str]] = None
+    confirm_borrow_next_year: bool = False
 
 class RecallCreate(BaseModel):
     reason: str
