@@ -414,7 +414,7 @@ def _status_dec(v) -> Decimal:
 def is_reconciliation_matched(sess: dict) -> bool:
     """True nếu tổng CITAD (5 cổng + Napas/PSS-MDP IH Đến) == tổng
     PaymentHub cho ĐỦ 8 trường — đúng công thức dòng "CHÊNH LỆCH" hiện trên
-    trang Đối chiếu CITAD (`_compute_totals()` ở
+    trang Đối chiếu CITAD (`_compute_totals_group(CURS)` ở
     frontend/pages/doi_chieu_citad.py) — giữ đồng bộ công thức ở 2 nơi vì
     frontend không gọi được service backend trực tiếp (khác tiến trình).
 
