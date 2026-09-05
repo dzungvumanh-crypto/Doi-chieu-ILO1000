@@ -347,6 +347,26 @@ Truy cập:
   > gần như toàn bộ nhân sự kèm ngày giả lập. Xem card **NP1** trong
   > [`docs/Implementation-notes.html`](docs/Implementation-notes.html)
 
+- **Ứng phép năm sau khi vượt hạn mức**: vượt quỹ năm nay mà năm sau còn chỗ thì API trả **409**
+  `{"code":"quota_exceeded_borrow", ...}` thay vì chặn cứng 400; frontend hỏi xác nhận rồi gọi lại với
+  `confirm_borrow_next_year=true`. Phần vượt lưu ở `leave_records.borrow_next_year_days` và **trừ thật**
+  vào quỹ năm sau. Vượt cả năm sau thì chặn hẳn. Cả 3 bước duyệt + duyệt lô đều cảnh báo trước khi duyệt
+  đơn có ứng phép
+- **KSV thay thế**: Trưởng/Phó phòng **cùng phòng** với người nộp đơn duyệt được bước KSV dù không phải
+  `ksv_approver_id` (`_is_alt_ksv`) — đơn không còn kẹt khi người được chỉ định vắng mặt. Đây là *bước
+  duyệt của hồ sơ*, không phải quyền truy cập; xem mục **Phân quyền** trong `docs/DESIGN.md`
+- Tab **Báo cáo tổng hợp** (tên cũ: Báo cáo năm) — thêm **Báo cáo chấm công tháng**
+  `GET /api/leaves/export/attendance-monthly?year=&month=`: nhóm theo phòng, `X` = đi làm, `P` = nghỉ
+  phép suy từ đơn đã duyệt, để trống = T7/CN/lễ. Họp/tập huấn/công tác và xếp loại thi đua **không có
+  nguồn dữ liệu** nên để trống cho phòng Tổng hợp điền tay
+  > ⚠️ **Số ngày phép năm đổi mốc thâm niên 4 → 5 năm** (`compute_annual_leave()`, đúng Điều 114 BLLĐ:
+  > khớp 67/72 người trên báo cáo thật 2026, mốc 4 năm cũ khớp 12/72). Người vào ngành đủ 4/8/12… năm
+  > **giảm 1 ngày**; chưa có bước rà ai đã nghỉ quá hạn mức mới — xem card **NP2** trong
+  > [`docs/Implementation-notes.html`](docs/Implementation-notes.html)
+  > ⚠️ **Ngày chuyển năm chưa hết hạn 31/03**: `_check_quota_or_borrow()` truyền
+  > `ref_date=date(ref_year,1,1)` nên `compute_carry_over(effective=True)` không bao giờ hết hiệu lực.
+  > Cùng card NP2 còn 2 lỗi quỹ phép khác chưa sửa
+
 ### Module Chứng từ Hậu kiểm
 - **Bàn giao**: GDV nhập số tờ theo ngày, HKV/KSV xác nhận từng ô
   - *Phạm vi xem*: `admin` / GĐ / PGĐ và người có quyền hậu kiểm (`handovers.confirm_entry`) xem được **mọi phòng nguồn**; các vai trò còn lại — kể cả trưởng/phó phòng — chỉ xem **phòng của chính mình**, dropdown chọn phòng cũng chỉ liệt kê phòng đó. Backend chặn ở `grid`, `history` và `export` (xuất Excel tự ép về phòng người gọi)
