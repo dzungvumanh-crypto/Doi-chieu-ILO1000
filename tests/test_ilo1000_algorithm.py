@@ -332,7 +332,7 @@ class TestDetectHuyCrossDay:
             _core_row_dated('REF700', 'B001', 0,          dramount='3000000', trdate='20260704'),
         ]
         df = pd.DataFrame(rows)
-        assert detect_huy(df) == {'REF700': 'Hủy'}
+        assert detect_huy(df) == {('REF700', 'B001'): 'Hủy'}
 
     def test_cross_day_pair_labeled_da_huy(self):
         """CR lập ngày 04/7, DR hủy ngày 06/7 — nếu chỉ xét từng ngày riêng lẻ
@@ -342,7 +342,7 @@ class TestDetectHuyCrossDay:
             _core_row_dated('REF701', 'B001', 0,          dramount='3000000', trdate='20260706'),
         ]
         df = pd.DataFrame(rows)
-        assert detect_huy(df) == {'REF701': 'Đã hủy'}
+        assert detect_huy(df) == {('REF701', 'B001'): 'Đã hủy'}
 
     def test_single_day_view_misses_cross_day_huy(self):
         """Chỉ đưa Core của 1 ngày (04/7) vào detect_huy — dòng DR hủy ở ngày
@@ -374,6 +374,42 @@ class TestDetectHuyCrossDay:
         assert out['TT'].iloc[0] == 'Đã hủy'
 
 
+# ── Test 5.4a: detect_huy — REFERENCE dùng chung giữa nhiều chi nhánh ───────
+
+class TestDetectHuyRefSharedAcrossBranches:
+    """Xác nhận qua phản hồi người chấm + dữ liệu thật 26/8/2026: các lệnh chi
+    trả trợ cấp xã hội hàng loạt (REFERENCE dạng "OTT...") dùng CHUNG một
+    REFERENCE giữa nhiều chi nhánh trong cùng batch (VD "1000OTT261006174" ở
+    cả 3 chi nhánh 1410/2008/5708 — chỉ chi nhánh 2008 có cặp Nợ/Có net-zero
+    thật sự là hủy). Gom theo REFERENCE một mình sẽ lây nhầm 'Đã hủy' sang 2
+    chi nhánh còn lại (giao dịch bình thường, khớp Hub 'Hoàn thành')."""
+
+    def test_huy_at_one_branch_does_not_leak_to_other_branches(self):
+        rows = [
+            _core_row_dated('REFX', 'B001', 3_000_000, trdate='20260826'),   # chi nhánh khác — không liên quan
+            _core_row_dated('REFX', 'B002', 128_000,   trdate='20260826'),   # cặp hủy net-zero — chỉ B002
+            _core_row_dated('REFX', 'B002', -128_000,  trdate='20260826'),
+            _core_row_dated('REFX', 'B003', 746_700,   trdate='20260826'),   # chi nhánh khác — không liên quan
+        ]
+        df = pd.DataFrame(rows)
+        assert detect_huy(df) == {('REFX', 'B002'): 'Hủy'}
+
+    def test_process_core_leaves_other_branches_unmarked(self):
+        rows = [
+            _core_row_dated('REFX', 'B001', 3_000_000, trdate='20260826'),
+            _core_row_dated('REFX', 'B002', 128_000,   trdate='20260826'),
+            _core_row_dated('REFX', 'B002', -128_000,  trdate='20260826'),
+            _core_row_dated('REFX', 'B003', 746_700,   trdate='20260826'),
+        ]
+        df = pd.DataFrame(rows)
+        huy_map = detect_huy(df)
+        out = process_core(df, {}, {}, 20260826, huy_map)
+        tt_by_branch = dict(zip(out['TRBRCD'], out['TT']))
+        assert tt_by_branch['B001'] != 'Đã hủy' and tt_by_branch['B001'] != 'Hủy'
+        assert tt_by_branch['B003'] != 'Đã hủy' and tt_by_branch['B003'] != 'Hủy'
+        assert all(out.loc[out['TRBRCD'] == 'B002', 'TT'] == 'Hủy')
+
+
 # ── Test 5.4b: detect_huy — tín hiệu CRAMOUNT<0 độc lập (P1, thiếu vế gốc) ──
 
 class TestDetectHuyNegativeCrSignal:
@@ -390,7 +426,7 @@ class TestDetectHuyNegativeCrSignal:
         — trước khi sửa P1, tín hiệu net-zero một mình bỏ sót ca này."""
         rows = [_core_row_dated('REF800', 'B001', -500_000, dramount='0', trdate='20260706')]
         df = pd.DataFrame(rows)
-        assert detect_huy(df) == {'REF800': 'Đã hủy'}
+        assert detect_huy(df) == {('REF800', 'B001'): 'Đã hủy'}
 
     def test_negative_cr_with_same_day_positive_labeled_huy(self):
         """Cả 2 vế (dương + âm) cùng ngày, cùng có mặt trong batch → 'Hủy' (không đổi)."""
@@ -399,7 +435,7 @@ class TestDetectHuyNegativeCrSignal:
             _core_row_dated('REF801', 'B001', -500_000, dramount='0', trdate='20260706'),
         ]
         df = pd.DataFrame(rows)
-        assert detect_huy(df) == {'REF801': 'Hủy'}
+        assert detect_huy(df) == {('REF801', 'B001'): 'Hủy'}
 
     def test_negative_cr_with_cross_day_positive_labeled_da_huy(self):
         """Cả 2 vế cùng có mặt nhưng khác ngày → 'Đã hủy' (net-zero, không cần tín hiệu CR<0)."""
@@ -408,7 +444,7 @@ class TestDetectHuyNegativeCrSignal:
             _core_row_dated('REF802', 'B001', -500_000, dramount='0', trdate='20260706'),
         ]
         df = pd.DataFrame(rows)
-        assert detect_huy(df) == {'REF802': 'Đã hủy'}
+        assert detect_huy(df) == {('REF802', 'B001'): 'Đã hủy'}
 
     def test_positive_cr_alone_not_flagged(self):
         """CRAMOUNT dương, không có dòng âm nào cùng REFERENCE → không phải Hủy."""
