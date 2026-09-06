@@ -4,6 +4,18 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 06/09/2026 Nghỉ phép - **Rà soát toàn bộ đợt sửa "Khác"/điều chỉnh NPBB — sửa 2 lỗi hiện chữ hướng dẫn sai loại nghỉ**
+    + Giao agent rà soát riêng toàn bộ code mới của 2 đợt trước (loại "Khác" tự chọn tính hạn mức,
+      chặn điều chỉnh NPBB xếp chuỗi) — xác nhận toàn bộ 5 câu SQL + các điểm chặn/khôi phục đơn gốc
+      đều đúng, không sót chỗ nào cần sửa
+    + ✅ **Phát hiện + sửa**: dòng chữ hướng dẫn (vd "Tối thiểu 5 ngày làm việc") ở dialog "Tạo đơn"
+      và "Sửa & Nộp lại/Điều chỉnh NPBB" bị kẹt hiện theo loại nghỉ đã chọn ở LẦN MỞ DIALOG TRƯỚC —
+      do gán `.value` bằng code không tự kích hoạt sự kiện đổi loại nghỉ (chỉ kích hoạt khi người
+      dùng tự tay bấm dropdown). Gọi tường minh lại hàm cập nhật hướng dẫn mỗi lần mở dialog — cùng
+      cách đã áp dụng đúng cho nút gạt "Trừ vào hạn mức phép năm" ở đợt trước
+    + Verify: chạy lại 135 test liên quan nghỉ phép/hạn mức/chấm công/bàn giao — pass đủ; bấm thử
+      qua Playwright cả 2 dialog sau khi sửa — hiện đúng hướng dẫn theo loại nghỉ mỗi lần mở
+
 - 06/09/2026 Nghỉ phép - **Điều chỉnh NPBB: chặn xếp chuỗi nhiều cấp, đơn gốc tự khôi phục khi rút đơn điều chỉnh**
     + Phát hiện qua rà soát thực tế (tạo đơn điều chỉnh cấp 2 thật rồi kiểm tra báo cáo): điều chỉnh
       1 đơn *vốn đã là đơn điều chỉnh* (chuỗi gốc → điều chỉnh 1 → điều chỉnh 2) khiến nhân sự đó

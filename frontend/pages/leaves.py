@@ -1538,6 +1538,12 @@ async def leaves_page(open_id: Optional[int] = None):
                 _c_min[0] = _c_today_now
                 _c_cur[0], _c_cur[1] = _c_today_now.year, _c_today_now.month
                 c_type.value = "annual"
+                # Đặt .value bằng code không tự bắn "update:model-value" (chỉ
+                # bắn khi người dùng tự tay đổi dropdown) — gọi tường minh để
+                # c_hint/c_reason label không bị kẹt hiện theo loại nghỉ đã
+                # chọn ở lần mở dialog trước (vd còn "Tối thiểu 5 ngày làm
+                # việc" màu xanh của bat_buoc dù dropdown đã về "Nghỉ phép năm").
+                _c_on_type()
                 c_npbb_orig.value = None
                 c_npbb_orig.set_visibility(False)
                 c_reason.value = ""
@@ -1582,6 +1588,15 @@ async def leaves_page(open_id: Optional[int] = None):
         with ui.dialog() as resubmit_dialog, ui.card().classes("p-6 w-[420px]"):
 
             resubmit_title = ui.label("Chỉnh sửa & Nộp lại").classes("text-lg font-bold text-red-900 mb-4")
+
+            # Chỉ hiện ở mode "npbb_adjust" — nhắc rõ ngày đơn GỐC đang đăng ký
+            # (không đụng vào lịch chọn ngày bên dưới, lịch đó dành để bấm chọn
+            # ngày MỚI). Dùng label thường thay vì đánh dấu (event) ngay trên ô
+            # lịch: đã thử qua Quasar QDate `events` prop nhưng NiceGUI không
+            # đẩy được prop kiểu hàm này lên 1 q-date đã mount sẵn (không lỗi gì
+            # cả, chỉ đơn giản không có tác dụng) — label này chắc chắn hiện đúng.
+            r_orig_dates_label = ui.label().classes("text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded px-2 py-1 mb-1 w-full")
+            r_orig_dates_label.set_visibility(False)
 
             r_dates    = ui.date(value=[]).props(f"multiple mask='YYYY-MM-DD' no-header first-day-of-week='1' {_OPT_FUTURE}").classes("w-full")
 
@@ -1742,29 +1757,51 @@ async def leaves_page(open_id: Optional[int] = None):
             _spread = lv.get("spread_dates")
 
             if _spread:
-                r_dates.value = _spread
+                _orig_dates = _spread
             else:
                 # Đơn cũ là khoảng liên tục (vd thai sản/bảo hiểm) — phải nạp
-                # ĐỦ mọi ngày từ start_date đến end_date vào picker "multiple",
-                # nếu không chỉ giữ lại ngày đầu, mất hết các ngày còn lại.
+                # ĐỦ mọi ngày từ start_date đến end_date, nếu không chỉ còn
+                # ngày đầu, mất hết các ngày còn lại.
                 _s = (lv.get("start_date") or "")[:10]
                 _e = (lv.get("end_date") or "")[:10]
                 try:
                     _sd = _dt_mod.date.fromisoformat(_s)
                     _ed = _dt_mod.date.fromisoformat(_e) if _e else _sd
-                    _all_days, _d = [], _sd
+                    _orig_dates, _d = [], _sd
                     while _d <= _ed:
-                        _all_days.append(_d.isoformat())
+                        _orig_dates.append(_d.isoformat())
                         _d += _dt_mod.timedelta(days=1)
-                    r_dates.value = _all_days
                 except ValueError:
-                    r_dates.value = [_s] if _s else []
+                    _orig_dates = [_s] if _s else []
 
+            # Đặt .value bằng code (mở lại dialog) KHÔNG tự bắn "update:model-value"
+            # (chỉ bắn khi người dùng tự tay đổi dropdown) nên _r_on_type() không
+            # tự chạy theo — gọi tường minh ở đây để r_hint/r_dates bounds luôn
+            # đúng loại nghỉ vừa nạp, không bị kẹt hiện chữ/màu của lần mở dialog
+            # trước đó (cùng loại lỗi đã gặp và tự sửa ở _make_other_quota_toggle).
             r_type.value   = lv.get("leave_type", "annual")
             r_type.set_enabled(not lock_type)
+            _r_on_type()
+
+            if mode == "npbb_adjust":
+                # KHÔNG tự chọn sẵn ngày của đơn gốc — điều chỉnh nghĩa là chọn
+                # hẳn ngày MỚI, chọn sẵn ngày cũ dễ khiến tưởng nhầm đã xong,
+                # không cần bấm gì thêm. Ghi rõ ngày gốc bằng 1 dòng chữ riêng
+                # phía trên lịch để đối chiếu trong lúc chọn ngày mới — ngày
+                # mới bấm chọn mới tô đậm trong lịch như bình thường. Đè lại
+                # r_hint sau _r_on_type() ở trên (hàm đó set hint chung theo
+                # loại "bat_buoc", ở đây cần câu chữ riêng cho luồng điều chỉnh).
+                r_dates.value = []
+                r_orig_dates_label.set_text(
+                    f"Đơn gốc đang đăng ký: {_fmt_leave_dates(lv.get('start_date') or '', lv.get('end_date') or '', _spread)}")
+                r_orig_dates_label.set_visibility(True)
+                r_hint.set_text("Bấm chọn ngày điều chỉnh MỚI (tối thiểu 5 ngày làm việc)")
+                r_hint.style("color:#ea580c")
+            else:
+                r_dates.value = _orig_dates
+                r_orig_dates_label.set_visibility(False)
 
             r_other_quota.value = lv.get("other_deduct_quota", True)
-            _r_other_quota_vis(r_type.value == "other")
 
             r_reason.value = lv.get("reason") or ""
 
