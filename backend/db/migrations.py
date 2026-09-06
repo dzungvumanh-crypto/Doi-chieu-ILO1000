@@ -351,6 +351,21 @@ def _create_tables(db_path: str):
             sort_order   INTEGER,
             updated_at   DATETIME
         )""",
+        # Lịch sử sửa đổi từng chi nhánh TTQT — mỗi dòng là MỘT trường đổi.
+        # Không đặt FOREIGN KEY sang ttqt_branches: xoá chi nhánh mà mất luôn
+        # lịch sử thì đúng lúc cần tra "ai xoá, xoá cái gì" lại không còn gì để tra.
+        """CREATE TABLE IF NOT EXISTS ttqt_branch_history (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id    INTEGER,
+            ma_cn        VARCHAR(20),
+            action       VARCHAR(20) NOT NULL,
+            field        VARCHAR(30),
+            old_value    TEXT,
+            new_value    TEXT,
+            actor_id     INTEGER REFERENCES user_tttt(id),
+            actor_name   VARCHAR(100),
+            created_at   DATETIME
+        )""",
         # ── Ôn tập trắc nghiệm (Quizz) ────────────────────────────────────
         # Bộ câu hỏi nhập MỘT LẦN từ Excel rồi dùng chung cho cả cơ quan —
         # `content_hash` để nhận ra ai đó tải lại đúng file cũ dưới tên khác.
@@ -1777,6 +1792,8 @@ def _ensure_indexes():
         "CREATE INDEX IF NOT EXISTS ix_staff_dept_hist       ON staff_department_history(staff_id, effective_from)",
         "CREATE INDEX IF NOT EXISTS ix_ttqt_branches_bic      ON ttqt_branches(swift_bic)",
         "CREATE INDEX IF NOT EXISTS ix_ttqt_branches_sort     ON ttqt_branches(is_closed, sort_order)",
+        "CREATE INDEX IF NOT EXISTS ix_ttqt_hist_branch       ON ttqt_branch_history(branch_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ttqt_hist_ma_cn        ON ttqt_branch_history(ma_cn)",
         "CREATE INDEX IF NOT EXISTS ix_dtbb_reports_date       ON dtbb_reports(report_date)",
         "CREATE INDEX IF NOT EXISTS ix_dtbb_reports_status     ON dtbb_reports(status)",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_dtbb_reports_date_branch ON dtbb_reports(report_date, branch_code)",

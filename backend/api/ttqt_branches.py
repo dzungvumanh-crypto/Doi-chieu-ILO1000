@@ -22,7 +22,9 @@ from backend.core.concurrency import run_heavy
 from backend.core.uploads import read_limited
 from backend.core.deps import require_feature
 from backend.database import get_db, write_audit, _vn_now
-from backend.schemas.ttqt_branches import BranchCreate, BranchOut, BranchUpdate, ImportResult
+from backend.schemas.ttqt_branches import (
+    BranchCreate, BranchOut, BranchUpdate, HistoryOut, ImportResult,
+)
 
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ttqt-branches", tags=["TTQT Branches"])
@@ -79,6 +81,63 @@ def _row_out(r: sqlite3.Row) -> dict:
     d["is_closed"] = bool(d.get("is_closed"))
     d["updated_at"] = str(d["updated_at"]) if d.get("updated_at") else None
     return d
+
+
+# ─── Lịch sử sửa đổi ─────────────────────────────────────────────────────────
+# Nhãn hiển thị: dùng lại đúng tên cột của file Excel để người tra cứu đọc ra
+# ngay, không phải đoán `cn_quan_ly` là cột nào.
+_LABELS = {f: lbl for f, lbl, _ in _COLS}
+_LABELS["is_closed"] = "TRẠNG THÁI BIC"
+_ACTION_LABELS = {
+    "create": "Thêm mới",
+    "update": "Sửa",
+    "delete": "Xoá",
+    "import": "Nhập Excel",
+}
+# Các trường theo dõi thay đổi. `sort_order` cố tình đứng ngoài: mỗi lần nhập
+# Excel nó đổi theo vị trí dòng trong file, ghi lại chỉ làm ngập lịch sử bằng
+# thứ không ai tra.
+_TRACKED = _FIELDS + ["is_closed"]
+
+
+def _fmt_val(field: str, v) -> Optional[str]:
+    if field == "is_closed":
+        return "Đã đóng BIC" if v else "Đang hoạt động"
+    return None if v is None or v == "" else str(v)
+
+
+def _diff(old: sqlite3.Row, new: dict) -> list[tuple]:
+    """So bản cũ với bản mới → [(trường, giá trị cũ, giá trị mới)].
+
+    Chuẩn hoá '' về None trước khi so: ô Excel trống đọc ra None còn form web
+    trống đọc ra '', để nguyên thì mỗi lần lưu lại sinh một dòng lịch sử giả."""
+    out = []
+    for f in _TRACKED:
+        o = old[f] if f in old.keys() else None
+        n = new.get(f)
+        if f == "is_closed":
+            o, n = bool(o), bool(n)
+        else:
+            o = o if o not in ("", None) else None
+            n = n if n not in ("", None) else None
+        if o != n:
+            out.append((f, _fmt_val(f, o), _fmt_val(f, n)))
+    return out
+
+
+def _write_history(db, actor: dict, branch_id: Optional[int], ma_cn: str,
+                   action: str, changes: list[tuple]) -> None:
+    """changes: [(trường|None, cũ, mới)]. Trường None = cả bản ghi (thêm/xoá)."""
+    if not changes:
+        return
+    db.executemany(
+        "INSERT INTO ttqt_branch_history"
+        " (branch_id, ma_cn, action, field, old_value, new_value,"
+        "  actor_id, actor_name, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        [(branch_id, ma_cn, action, f, o, n,
+          actor.get("id"), actor.get("full_name"), _vn_now())
+         for f, o, n in changes],
+    )
 
 
 # ─── Tra cứu ─────────────────────────────────────────────────────────────────
@@ -142,6 +201,8 @@ def create_branch(
     )
     write_audit(db, current["id"], "ttqt_branch.create", "ttqt_branch", cur.lastrowid,
                 f"{body.ma_cn} — {body.ten_cn}")
+    _write_history(db, current, cur.lastrowid, body.ma_cn, "create",
+                   [(None, None, f"{body.ma_cn} — {body.ten_cn}")])
     db.commit()
     row = db.execute("SELECT * FROM ttqt_branches WHERE id = ?", (cur.lastrowid,)).fetchone()
     return _row_out(row)
@@ -167,11 +228,11 @@ def update_branch(
         f" is_closed=?, updated_at=? WHERE id = ?",
         (*[getattr(body, f) for f in _FIELDS], int(body.is_closed), _vn_now(), branch_id),
     )
-    changed = [f for f in _FIELDS if (old[f] or None) != getattr(body, f)]
-    if bool(old["is_closed"]) != body.is_closed:
-        changed.append("is_closed")
+    diffs = _diff(old, body.model_dump())
+    changed = [f for f, _, _ in diffs]
     write_audit(db, current["id"], "ttqt_branch.update", "ttqt_branch", branch_id,
                 f"{body.ma_cn} — sửa: {', '.join(changed) or 'không đổi'}")
+    _write_history(db, current, branch_id, body.ma_cn, "update", diffs)
     db.commit()
     row = db.execute("SELECT * FROM ttqt_branches WHERE id = ?", (branch_id,)).fetchone()
     return _row_out(row)
@@ -189,8 +250,52 @@ def delete_branch(
     db.execute("DELETE FROM ttqt_branches WHERE id = ?", (branch_id,))
     write_audit(db, current["id"], "ttqt_branch.delete", "ttqt_branch", branch_id,
                 f"{row['ma_cn']} — {row['ten_cn']}")
+    _write_history(db, current, branch_id, row["ma_cn"], "delete",
+                   [(None, f"{row['ma_cn']} — {row['ten_cn']}", None)])
     db.commit()
     return {"ok": True}
+
+
+# ─── Lịch sử sửa đổi của một chi nhánh ───────────────────────────────────────
+@router.get("/{branch_id}/history", response_model=list[HistoryOut])
+def branch_history(
+    branch_id: int,
+    limit: int = Query(300, ge=1, le=2000),
+    _: dict = Depends(require_feature("ttqt_branches.history")),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    row = db.execute("SELECT ma_cn FROM ttqt_branches WHERE id = ?", (branch_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Không tìm thấy chi nhánh")
+
+    # Lấy cả lịch sử mồ côi cùng mã CN: nhập Excel có tích "Xoá CN thiếu" rồi
+    # nhập lại sẽ sinh id mới cho cùng một chi nhánh. Chỉ nhận dòng mà branch_id
+    # cũ KHÔNG còn tồn tại, nếu không lịch sử của chi nhánh khác đang sống cũng
+    # bị kéo sang khi hai bên từng dùng chung một mã.
+    rows = db.execute(
+        """SELECT h.id, h.created_at, h.action, h.field, h.old_value, h.new_value,
+                  IFNULL(u.full_name, h.actor_name) AS actor_name
+           FROM ttqt_branch_history h
+           LEFT JOIN user_tttt u ON u.id = h.actor_id
+           LEFT JOIN ttqt_branches b ON b.id = h.branch_id
+           WHERE h.branch_id = ? OR (h.ma_cn = ? AND b.id IS NULL)
+           ORDER BY h.id DESC LIMIT ?""",
+        (branch_id, row["ma_cn"], limit),
+    ).fetchall()
+    return [
+        HistoryOut(
+            id=r["id"],
+            created_at=str(r["created_at"]) if r["created_at"] else None,
+            actor_name=r["actor_name"],
+            action=r["action"],
+            action_label=_ACTION_LABELS.get(r["action"], r["action"]),
+            field=r["field"],
+            field_label=_LABELS.get(r["field"]) if r["field"] else None,
+            old_value=r["old_value"],
+            new_value=r["new_value"],
+        )
+        for r in rows
+    ]
 
 
 # ─── Import Excel ────────────────────────────────────────────────────────────
@@ -304,30 +409,40 @@ async def import_branches(
         seen.add(rec["ma_cn"])
         uniq.append(rec)
 
-    existing = {r["ma_cn"]: r["id"] for r in db.execute("SELECT id, ma_cn FROM ttqt_branches")}
+    # Đọc nguyên bản ghi cũ (không chỉ id) để so ra ĐÚNG những trường đổi. Vài
+    # trăm dòng nên đọc hết một lần rẻ hơn nhiều so với SELECT lại từng dòng.
+    existing = {r["ma_cn"]: r for r in db.execute("SELECT * FROM ttqt_branches")}
     inserted = updated = 0
     for order, rec in enumerate(uniq, start=1):
         vals = [rec.get(f) for f in _FIELDS]
         if rec["ma_cn"] in existing:
+            old = existing[rec["ma_cn"]]
             db.execute(
                 f"UPDATE ttqt_branches SET {','.join(f + '=?' for f in _FIELDS)},"
                 f" is_closed=?, sort_order=?, updated_at=? WHERE id = ?",
-                (*vals, int(rec["is_closed"]), order, _vn_now(), existing[rec["ma_cn"]]),
+                (*vals, int(rec["is_closed"]), order, _vn_now(), old["id"]),
             )
+            # Chỉ ghi lịch sử khi có trường thật sự đổi — nhập lại đúng file cũ
+            # (chuyện thường xuyên) sẽ không sinh dòng lịch sử nào.
+            _write_history(db, current, old["id"], rec["ma_cn"], "import",
+                           _diff(old, rec))
             updated += 1
         else:
-            db.execute(
+            cur = db.execute(
                 f"INSERT INTO ttqt_branches ({','.join(_FIELDS)}, is_closed, sort_order, updated_at)"
                 f" VALUES ({','.join('?' * len(_FIELDS))}, ?, ?, ?)",
                 (*vals, int(rec["is_closed"]), order, _vn_now()),
             )
+            _write_history(db, current, cur.lastrowid, rec["ma_cn"], "import",
+                           [(None, None, f"{rec['ma_cn']} — {rec.get('ten_cn')}")])
             inserted += 1
 
     deleted = 0
     if delete_missing:
-        stale = [mid for ma, mid in existing.items() if ma not in seen]
-        for mid in stale:
+        stale = [(r["id"], ma, r["ten_cn"]) for ma, r in existing.items() if ma not in seen]
+        for mid, ma, ten in stale:
             db.execute("DELETE FROM ttqt_branches WHERE id = ?", (mid,))
+            _write_history(db, current, mid, ma, "delete", [(None, f"{ma} — {ten}", None)])
         deleted = len(stale)
 
     write_audit(
