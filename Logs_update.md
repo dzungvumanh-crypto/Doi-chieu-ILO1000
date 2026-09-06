@@ -4,6 +4,21 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 06/09/2026 Nghỉ phép - **Loại nghỉ "Khác": tự chọn có tính vào hạn mức phép năm hay không**
+    + Trước đây `leave_type="other"` (Khác) LUÔN trừ vào hạn mức phép năm giống hệt "Nghỉ phép năm"
+      — không đúng cho mọi lý do "Khác" (hộp lý do tự do, có thể là loại nghỉ theo luật lao động
+      không tính vào phép năm). Thêm 1 nút gạt "Trừ vào hạn mức phép năm" (kèm dòng giải thích rõ 2
+      chiều) — chỉ hiện khi chọn loại "Khác", ở cả 3 nơi tạo đơn: Tạo đơn, Sửa & Nộp lại, Khai báo hộ
+    + **Bật (mặc định, giữ nguyên hành vi cũ)**: tính đúng như đơn Nghỉ phép năm — trừ hạn mức còn
+      lại, cộng vào số ngày đã nghỉ, có thể phải ứng phép năm sau nếu vượt hạn mức
+    + **Tắt**: chỉ ghi nhận ngày nghỉ để theo dõi, không tính toán gì vào hạn mức phép năm — giống
+      hệt các loại đã miễn hạn mức sẵn có (thai sản/bảo hiểm/không lương/họp-công tác)
+    + Verify thật qua API (tạo/xoá/nộp lại đơn thật, dọn sạch sau khi xong): "Khác" tắt trừ hạn mức
+      tạo được dù vượt xa hạn mức (30 ngày trên hạn mức 12), không đổi `used_leave_days`/báo cáo năm;
+      "Khác" bật trừ hạn mức tính đúng y hệt phép năm (used_days/remaining/báo cáo năm); nộp lại đơn
+      đổi từ bật sang tắt cập nhật đúng trong DB; xoá đơn khai báo hộ loại "Khác tắt" không hoàn
+      nhầm hạn mức (vì bản thân nó chưa từng bị trừ)
+
 - 06/09/2026 Nghỉ phép - **Sửa 5 lỗi từ review thật của Người 1 trên PR #77**
     + ✅ **"Họp/Công tác" chấm công tự động thành 0 công thay vì đủ công** — 2 trigger đồng bộ
       `attendances` (tạo từ PR #22, trước khi loại nghỉ `hop_cong_tac` ra đời) rơi đúng loại này vào

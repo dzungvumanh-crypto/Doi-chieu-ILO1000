@@ -649,6 +649,44 @@ async def leaves_page(open_id: Optional[int] = None):
         confirm_dialog.open()
 
 
+    def _make_other_quota_toggle():
+        """Switch "Trừ vào hạn mức phép năm" + dòng giải thích rõ 2 chiều —
+        chỉ hiện khi chọn loại nghỉ "Khác" (lý do tự do, không cố định sẵn có
+        tính hạn mức hay không như các loại nghỉ khác: annual/bat_buoc luôn
+        trừ, thai_san/bao_hiem/khong_luong/hop_cong_tac luôn miễn). Dùng
+        chung cho cả 3 dialog Tạo đơn/Sửa & Nộp lại/Khai báo hộ để giải
+        thích nhất quán. Trả về (switch, set_visible)."""
+        sw  = ui.switch("Trừ vào hạn mức phép năm", value=True).classes("mt-1")
+        cap = ui.label().classes("text-xs -mt-1 mb-1")
+
+        def _update_caption():
+            if sw.value:
+                cap.set_text(
+                    "Bật (Có): tính đúng như đơn Nghỉ phép năm — trừ vào hạn mức còn lại, "
+                    "cộng vào số ngày đã nghỉ trong năm, có thể phải ứng phép năm sau nếu vượt hạn mức.")
+                cap.style("color:#f97316")
+            else:
+                cap.set_text(
+                    "Tắt (Không): chỉ ghi nhận ngày nghỉ để theo dõi, KHÔNG trừ/cộng gì vào hạn mức "
+                    "phép năm — giống các loại nghỉ thai sản/bảo hiểm/không lương/họp-công tác.")
+                cap.style("color:#6b7280")
+
+        sw.on("update:model-value", _update_caption)
+        _update_caption()
+        sw.set_visibility(False)
+        cap.set_visibility(False)
+
+        def _set_visible(v: bool):
+            # Đặt .value bằng code (mở lại dialog/reset form) không tự bắn
+            # "update:model-value" như thao tác tay của người dùng — làm mới
+            # caption ở đây để không bị kẹt hiện chữ theo trạng thái cũ.
+            if v:
+                _update_caption()
+            sw.set_visibility(v)
+            cap.set_visibility(v)
+
+        return sw, _set_visible
+
 
     # ── Duyệt kèm ký ──────────────────────────────────────────────────────────
 
@@ -1293,6 +1331,8 @@ async def leaves_page(open_id: Optional[int] = None):
 
             c_reason   = ui.textarea("Lý do (tuỳ chọn)").classes("w-full mt-2")
 
+            c_other_quota, _c_other_quota_vis = _make_other_quota_toggle()
+
             c_approver = ui.select(approver_opts, label="Người phê duyệt (KSV)").classes("w-full mt-2") if show_approver else None
 
             # Luôn hiện field này cho non-GĐ kể cả khi gd_opts rỗng (do tải lỗi) — để
@@ -1330,6 +1370,7 @@ async def leaves_page(open_id: Optional[int] = None):
                     return
 
                 c_reason.props(f'label="{"Lý do (bắt buộc)" if lt == "other" else "Lý do (tuỳ chọn)"}"')
+                _c_other_quota_vis(lt == "other")
 
                 if not is_range:
                     if lt in ("annual", "bat_buoc"):
@@ -1395,6 +1436,8 @@ async def leaves_page(open_id: Optional[int] = None):
                     body = {"start_date": dates[0], "end_date": dates[-1],
                             "spread_dates": dates,
                             "leave_type": lt, "reason": c_reason.value or None}
+                    if lt == "other":
+                        body["other_deduct_quota"] = c_other_quota.value
 
                 if show_approver and not c_approver.value:
                     ui.notify("Vui lòng chọn người phê duyệt (KSV)", type="warning"); return
@@ -1475,6 +1518,8 @@ async def leaves_page(open_id: Optional[int] = None):
                 c_npbb_orig.set_visibility(False)
                 c_reason.value = ""
                 c_reason.set_visibility(True)
+                c_other_quota.value = True
+                _c_other_quota_vis(False)
                 if c_approver:
                     c_approver.value = None
                     c_approver.set_visibility(True)
@@ -1522,6 +1567,8 @@ async def leaves_page(open_id: Optional[int] = None):
 
             r_reason   = ui.textarea("Lý do (tuỳ chọn)").classes("w-full mt-2")
 
+            r_other_quota, _r_other_quota_vis = _make_other_quota_toggle()
+
             r_approver = ui.select(approver_opts, label="Người phê duyệt (KSV)").classes("w-full mt-2") if show_approver else None
 
             r_gd_select = ui.select({}, label="Ban lãnh đạo phê duyệt (GĐ/PGĐ)").classes("w-full mt-2")
@@ -1553,6 +1600,8 @@ async def leaves_page(open_id: Optional[int] = None):
                     r_hint.set_text("")
 
                     r_hint.style("color:#6b7280")
+
+                _r_other_quota_vis(lt == "other")
 
 
 
@@ -1597,6 +1646,9 @@ async def leaves_page(open_id: Optional[int] = None):
                         "leave_type": r_type.value, "reason": r_reason.value or None,
 
                         "gd_approver_id": r_gd_select.value}
+
+                if r_type.value == "other":
+                    body["other_deduct_quota"] = r_other_quota.value
 
                 if show_approver:
                     body["ksv_approver_id"] = r_approver.value
@@ -1686,6 +1738,9 @@ async def leaves_page(open_id: Optional[int] = None):
 
             r_type.value   = lv.get("leave_type", "annual")
             r_type.set_enabled(not lock_type)
+
+            r_other_quota.value = lv.get("other_deduct_quota", True)
+            _r_other_quota_vis(r_type.value == "other")
 
             r_reason.value = lv.get("reason") or ""
 
@@ -5878,12 +5933,15 @@ async def leaves_page(open_id: Optional[int] = None):
                         d_reason = ui.textarea("Lý do (tuỳ chọn)").classes("w-full mt-2").props("rows=2")
                         d_reason.set_visibility(False)
 
+                        d_other_quota, _d_other_quota_vis = _make_other_quota_toggle()
+
                         def _on_type_change(e):
                             lt = e.value
                             is_rng = lt in ("thai_san", "bao_hiem", "khong_luong")
                             d_dates_wrap.set_visibility(not is_rng)
                             d_range_wrap.set_visibility(is_rng)
                             d_reason.set_visibility(lt == "other")
+                            _d_other_quota_vis(lt == "other")
 
                         d_type.on_value_change(_on_type_change)
 
@@ -5920,6 +5978,8 @@ async def leaves_page(open_id: Optional[int] = None):
                                     ui.notify("Vui lòng nhập lý do khi chọn loại Khác", type="warning"); return
                                 body = {"staff_id": d_staff.value, "start_date": dates[0], "end_date": dates[-1],
                                         "spread_dates": dates, "leave_type": lt, "reason": d_reason.value or None}
+                                if lt == "other":
+                                    body["other_deduct_quota"] = d_other_quota.value
                                 confirm_lbl = f"Khai báo nghỉ cho {staff_name} ({len(dates)} ngày). Đơn sẽ được duyệt ngay."
 
                             # Inline dialog → không dùng shared _ask_confirm
@@ -5956,6 +6016,9 @@ async def leaves_page(open_id: Optional[int] = None):
                                         d_reason.value = ""
 
                                         d_reason.set_visibility(False)
+
+                                        d_other_quota.value = True
+                                        _d_other_quota_vis(False)
 
                                         _nav_pending()
 

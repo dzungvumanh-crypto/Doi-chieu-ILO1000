@@ -14216,6 +14216,58 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">123</span>
+      <span class="card-title">Nghỉ phép — Loại "Khác": người tạo đơn tự chọn có tính vào hạn mức phép năm hay không (2026-09-06)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Trước đây</span> "Khác" luôn trừ hạn mức, không phân biệt được lý do</div>
+      <p><code>leave_type="other"</code> là hộp lý do tự do (không giống 4 loại có/không tính hạn
+        mức đã cố định sẵn: <code>annual</code>/<code>bat_buoc</code> luôn trừ,
+        <code>thai_san</code>/<code>bao_hiem</code>/<code>khong_luong</code>/<code>hop_cong_tac</code>
+        luôn miễn) — nhưng code cũ xử lý "Khác" y hệt "Nghỉ phép năm", luôn trừ hạn mức bất kể lý do
+        thật là gì. Một số lý do "Khác" trong thực tế (vd nghỉ theo luật lao động không tính vào
+        phép năm) đáng lẽ phải được miễn, nhưng hệ thống không có chỗ nào cho người tạo đơn nói rõ
+        điều đó.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Cột mới <code>other_deduct_quota</code> + nút gạt kèm giải thích rõ 2 chiều</div>
+      <p><code>ALTER TABLE leave_records ADD COLUMN other_deduct_quota INTEGER DEFAULT 1</code> —
+        mặc định 1 (có trừ) để khớp đúng hành vi cũ cho dữ liệu đã có. Cột này CHỈ có ý nghĩa khi
+        <code>leave_type='other'</code>. Thêm hàm dùng chung <code>_is_no_quota_row(leave_type,
+        other_deduct_quota)</code> (<code>backend/api/leaves.py</code>) — trả về True cho 4 loại
+        miễn sẵn có HOẶC "Khác" kèm cờ tắt; dùng thay <code>leave_type in _NO_QUOTA_TYPES</code> ở
+        toàn bộ 6 điểm liên quan: <code>_check_quota_or_borrow</code> (chặn lúc tạo đơn),
+        <code>_apply_status_transition</code> (cộng/trừ <code>used_leave_days</code> khi duyệt/huỷ),
+        <code>delete_leave</code>, <code>approve_recall</code>, <code>_build_form_ctx</code> (ẩn ô
+        hạn mức trên phiếu in). 5 câu SQL tính <code>_calc_used_days</code>/
+        <code>_calc_used_days_bulk</code>/<code>_carry_over_bulk</code>/<code>_calc_occurred_days</code>
+        (leaves.py) + <code>compute_carry_over</code> (database.py) thêm điều kiện
+        <code>AND NOT (leave_type='other' AND other_deduct_quota=0)</code> cạnh điều kiện
+        <code>NOT IN (...)</code> có sẵn.</p>
+
+      <p>Frontend (<code>frontend/pages/leaves.py</code>): hàm dùng chung
+        <code>_make_other_quota_toggle()</code> dựng 1 <code>ui.switch</code> "Trừ vào hạn mức phép
+        năm" + 1 dòng giải thích đổi màu/nội dung theo trạng thái bật/tắt (đọc rõ được hệ quả của
+        từng lựa chọn, không chỉ đoán qua tên nút) — dùng chung cho cả 3 nơi tạo đơn: dialog "Tạo
+        đơn", "Sửa & Nộp lại", "Khai báo hộ". Chỉ hiện khi chọn loại "Khác".</p>
+
+      <div class="note">Verify thật qua API (tạo/nộp lại/xoá đơn thật trên DB dev, dọn sạch sau khi
+        xong, không đoán từ đọc code): "Khác" tắt trừ hạn mức — tạo được đơn 30 ngày dù hạn mức chỉ
+        12 (không hề bị chặn), <code>used_days</code>/báo cáo năm không đổi trước/sau; "Khác" bật
+        trừ hạn mức — <code>used_days</code> tăng đúng số ngày, báo cáo năm đếm đúng, y hệt hành vi
+        đơn "Nghỉ phép năm"; nộp lại đơn đổi cờ từ bật sang tắt cập nhật đúng trong DB
+        (<code>other_deduct_quota: 1 → 0</code>); xoá đơn khai báo hộ loại "Khác tắt" không hoàn
+        nhầm <code>used_leave_days</code> (vì bản thân nó chưa từng bị trừ lúc tạo). 135 test liên
+        quan nghỉ phép/hạn mức/chấm công/bàn giao pass đủ sau khi thêm cột này vào 3 schema test viết
+        tay còn thiếu (<code>tests/test_leave_signature.py</code>,
+        <code>test_nghi_phep_buoc_th_va_gd.py</code>, <code>test_nghi_phep_ngay_lam_bu.py</code>).</div>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-06</footer>
 </div>
 </body>

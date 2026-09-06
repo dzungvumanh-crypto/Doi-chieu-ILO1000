@@ -49,6 +49,23 @@ _VALID_LEAVE_TYPES = frozenset(LEAVE_TYPE_LABELS.keys())
 # không dùng tới hạn mức phép năm (nghỉ hẳn không lương, không phải trừ phép).
 _NO_QUOTA_TYPES = frozenset({"thai_san", "bao_hiem", "khong_luong", "hop_cong_tac"})
 
+# leave_type="other" (Khác) không cố định miễn/trừ quota như các loại trên —
+# người tạo đơn tự chọn qua cột other_deduct_quota (mặc định 1 = có trừ,
+# giống "annual", khớp hành vi cũ trước khi có lựa chọn này). Chọn "Không" thì
+# ghi nhận y hệt các loại trong _NO_QUOTA_TYPES — không tính toán gì thêm.
+# Dùng ở nơi đã có sẵn 2 giá trị Python (leave_type, other_deduct_quota); các
+# câu SQL tự thêm điều kiện tương đương "AND NOT (leave_type='other' AND
+# other_deduct_quota=0)" cạnh mọi chỗ có "leave_type NOT IN (...)" ở trên.
+def _is_no_quota_row(leave_type: str, other_deduct_quota) -> bool:
+    if leave_type in _NO_QUOTA_TYPES:
+        return True
+    if leave_type == "other":
+        return not bool(other_deduct_quota if other_deduct_quota is not None else True)
+    return False
+
+
+_OTHER_NO_QUOTA_SQL = "AND NOT (leave_type='other' AND other_deduct_quota=0)"
+
 ACTION_LABELS = {
     "create":         ("Nộp đơn",            "blue"),
     "ksv_approve":    ("KSV phê duyệt",      "green"),
@@ -126,6 +143,7 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
         f"""SELECT spread_dates, start_date, end_date, borrow_next_year_days FROM leave_records
             WHERE staff_id=? {excl} AND status IN ({statuses})
               AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              {_OTHER_NO_QUOTA_SQL}
               AND start_date <= ? AND end_date >= ?
               {_NO_ACTIVE_ADJ_SQL}""",
         params,
@@ -190,6 +208,7 @@ def _calc_used_days_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
         f"""SELECT staff_id, spread_dates, start_date, end_date, borrow_next_year_days FROM leave_records
             WHERE staff_id IN ({placeholders}) AND status IN ({statuses})
               AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              {_OTHER_NO_QUOTA_SQL}
               AND start_date <= ? AND end_date >= ?
               {_NO_ACTIVE_ADJ_SQL}""",
         list(staff_ids) + [f"{year}-12-31", f"{year}-01-01"],
@@ -259,6 +278,7 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
         f"""SELECT staff_id, start_date, end_date, spread_dates, borrow_next_year_days FROM leave_records
            WHERE staff_id IN ({placeholders}) AND status='approved'
              AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+             {_OTHER_NO_QUOTA_SQL}
              AND start_date <= ? AND end_date >= ?""",
         list(staff_ids) + [f"{prev_year}-12-31", f"{prev_year}-01-01"],
     ).fetchall():
@@ -297,13 +317,16 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
 
 def _check_quota_or_borrow(staff_id: int, join_industry_date: Optional[str], leave_type: str,
                            leave_days: float, ref_year: int, confirm_borrow: bool,
-                           db: sqlite3.Connection, eff_start: Optional[date] = None) -> float:
+                           db: sqlite3.Connection, eff_start: Optional[date] = None,
+                           other_deduct_quota: bool = True) -> float:
     """Kiểm tra hạn mức phép năm — thay cho khối kiểm tra copy-paste ở
     create_leave/resubmit_leave/create_direct_leave.
 
     Trả về số ngày cần "ứng" trước vào hạn mức năm sau (0.0 nếu không vượt
     hạn mức năm nay). bat_buoc/thai_san/bao_hiem không áp dụng — trả về 0.0
     ngay, không đọc gì thêm (khớp _NO_QUOTA_TYPES + "!= bat_buoc" cũ).
+    leave_type="other" kèm other_deduct_quota=False cũng miễn hệt vậy — người
+    tạo đơn tự chọn "Khác" không tính vào hạn mức phép năm (xem _is_no_quota_row).
 
     confirm_borrow=False mà vượt hạn mức: 409 kèm code "quota_exceeded_borrow"
     để FE hiện popup hỏi "ứng phép năm sau" — KHÔNG phải lỗi cứng 400, người
@@ -311,7 +334,7 @@ def _check_quota_or_borrow(staff_id: int, join_industry_date: Optional[str], lea
     confirm_borrow=True mà năm sau CŨNG không đủ chỗ ứng: 400 cứng, không cho
     tạo đơn dù đã đồng ý ứng (không ứng được "khống").
     """
-    if leave_type in _NO_QUOTA_TYPES or leave_type == "bat_buoc":
+    if leave_type == "bat_buoc" or _is_no_quota_row(leave_type, other_deduct_quota):
         return 0.0
 
     # ref_date=eff_start (ngày BẮT ĐẦU NGHỈ, không phải ngày bấm nộp đơn) — quy
@@ -445,15 +468,17 @@ def _apply_status_transition(
     old_status == new_status.
     """
     if days is None:
-        rec = db.execute("SELECT spread_dates, leave_type FROM leave_records WHERE id=?", (leave_id,)).fetchone()
+        rec = db.execute("SELECT spread_dates, leave_type, other_deduct_quota FROM leave_records WHERE id=?", (leave_id,)).fetchone()
         if rec and rec["spread_dates"]:
             days = len(json.loads(rec["spread_dates"]))
         else:
             days = calculate_leave_days(start, end, lich)
         leave_type = rec["leave_type"] if rec else None
+        other_deduct_quota = rec["other_deduct_quota"] if rec else True
     else:
-        rec2 = db.execute("SELECT leave_type FROM leave_records WHERE id=?", (leave_id,)).fetchone()
+        rec2 = db.execute("SELECT leave_type, other_deduct_quota FROM leave_records WHERE id=?", (leave_id,)).fetchone()
         leave_type = rec2["leave_type"] if rec2 else None
+        other_deduct_quota = rec2["other_deduct_quota"] if rec2 else True
 
     # Khoá lạc quan: chỉ chuyển trạng thái nếu status hiện tại trong DB đúng
     # bằng old_status — chặn 2 request duyệt trùng cùng lúc (double-click, 2
@@ -466,7 +491,7 @@ def _apply_status_transition(
         raise HTTPException(409, "Đơn đã được xử lý bởi một yêu cầu khác, vui lòng tải lại trang")
 
     # Chỉ điều chỉnh used_leave_days khi leave_type xác định và không miễn quota
-    if leave_type is not None and leave_type not in _NO_QUOTA_TYPES:
+    if leave_type is not None and not _is_no_quota_row(leave_type, other_deduct_quota):
         if (is_new or old_status != LeaveStatus.APPROVED) and new_status == LeaveStatus.APPROVED:
             db.execute(
                 "UPDATE user_tttt SET used_leave_days = COALESCE(used_leave_days, 0) + ? WHERE id = ?",
@@ -633,6 +658,7 @@ def _leave_row_to_dict(r, lich: LichLamViec, is_resubmitted: bool,
         "spread_dates":           json.loads(r["spread_dates"]) if r["spread_dates"] else None,
         "recall_reason":          r["recall_reason"],
         "borrow_next_year_days":  r["borrow_next_year_days"] or 0.0,
+        "other_deduct_quota":     bool(r["other_deduct_quota"]) if r["other_deduct_quota"] is not None else True,
         "created_at":             r["created_at"],
         "rejected_step":          (
             "GĐ"  if r["status"] == "rejected" and r["gd_approved_at"]
@@ -769,7 +795,7 @@ def _create_leave_core(body: LeaveCreate, current: dict, db: sqlite3.Connection,
     borrow_days = _check_quota_or_borrow(
         current["id"], current.get("join_industry_date"), body.leave_type,
         leave_days, eff_start.year, body.confirm_borrow_next_year, db,
-        eff_start=eff_start,
+        eff_start=eff_start, other_deduct_quota=body.other_deduct_quota,
     )
 
     if body.leave_type == "bat_buoc" and leave_days < 5:
@@ -851,12 +877,12 @@ def _create_leave_core(body: LeaveCreate, current: dict, db: sqlite3.Connection,
         """INSERT INTO leave_records
                (staff_id, start_date, end_date, leave_type, reason, status,
                 ksv_approver_id, gd_approver_id, gd_approved_at, spread_dates,
-                adjusts_leave_id, borrow_next_year_days, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                adjusts_leave_id, borrow_next_year_days, other_deduct_quota, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (current["id"], eff_start.isoformat(), eff_end.isoformat(),
          body.leave_type, body.reason, initial_status, ksv_approver_id,
          gd_approver_id, gd_approved_at, spread_json, adjusts_leave_id,
-         borrow_days, str(_vn_now()), str(_vn_now())),
+         borrow_days, int(body.other_deduct_quota), str(_vn_now()), str(_vn_now())),
     )
     leave_id = cur.lastrowid
     if body.signature:
@@ -1501,7 +1527,7 @@ def delete_leave(
     if leave["direct_by"] != current["id"] and current["role"] != "admin":
         raise HTTPException(403, "Không có quyền xóa đơn này")
     # Hoàn trả used_leave_days nếu đơn đã approved và không phải loại miễn quota
-    if leave["status"] == "approved" and leave["leave_type"] not in _NO_QUOTA_TYPES:
+    if leave["status"] == "approved" and not _is_no_quota_row(leave["leave_type"], leave["other_deduct_quota"]):
         if leave["spread_dates"]:
             days = len(json.loads(leave["spread_dates"]))
         else:
@@ -1726,7 +1752,7 @@ def resubmit_leave(
     borrow_days = _check_quota_or_borrow(
         current["id"], current.get("join_industry_date"), body.leave_type,
         leave_days, eff_start.year, body.confirm_borrow_next_year, db,
-        eff_start=eff_start,
+        eff_start=eff_start, other_deduct_quota=body.other_deduct_quota,
     )
 
     # Kiểm tra trùng ngày theo spread_dates thực tế
@@ -1801,10 +1827,10 @@ def resubmit_leave(
                tong_hop_approver_id=NULL, tong_hop_approved_at=NULL, tong_hop_comment=NULL,
                gd_approver_id=?, gd_approved_at=?, gd_comment=NULL,
                leave_type=?, start_date=?, end_date=?, reason=?, spread_dates=?,
-               borrow_next_year_days=?
+               borrow_next_year_days=?, other_deduct_quota=?
            WHERE id=?""",
         (ksv_approver_id, new_gd_approver_id, new_gd_approved_at, body.leave_type, eff_start.isoformat(),
-         eff_end.isoformat(), body.reason, spread_json, borrow_days, leave_id),
+         eff_end.isoformat(), body.reason, spread_json, borrow_days, int(body.other_deduct_quota), leave_id),
     )
     # Đơn quay lại từ đầu → chữ ký của người duyệt cũ không còn giá trị. Ngày tháng
     # và số ngày phép trên phiếu đã đổi, giữ lại là để chữ ký thật nằm trên tờ đơn khác.
@@ -2070,6 +2096,7 @@ def _draft_form_row(body: LeaveCreate, current: dict, db: sqlite3.Connection) ->
         # Đơn chưa tạo — chưa thể biết có phải ứng phép năm sau không (chỉ xác
         # định lúc gửi thật, xem _check_quota_or_borrow), luôn coi như 0 ở đây.
         "borrow_next_year_days": 0,
+        "other_deduct_quota": body.other_deduct_quota,
     }
 
 
@@ -2351,7 +2378,7 @@ def _build_form_ctx(r, leave_id: Optional[int], db: sqlite3.Connection) -> tuple
         "khong_luong": "không lương", "hop_cong_tac": "họp/công tác",
         "other": "phép khác",
     }
-    is_no_quota = r["leave_type"] in _NO_QUOTA_TYPES
+    is_no_quota = _is_no_quota_row(r["leave_type"], r["other_deduct_quota"])
     ctx["is_no_quota"]    = is_no_quota
     ctx["leave_type_vn"]  = _LEAVE_TYPE_VN.get(r["leave_type"], r["leave_type"] or "")
     # thai_san / bao_hiem không tính hạn mức — để trống các ô quota trên phiếu
@@ -3350,9 +3377,10 @@ def _calc_occurred_days(staff_id: int, year: int, db: sqlite3.Connection, today:
     y hệt _NO_QUOTA_TYPES — bat_buoc vẫn tính (mang tính bắt buộc nhưng vẫn
     trừ vào quỹ phép năm khi báo cáo, xem export_all_leaves_annual)."""
     rows = db.execute(
-        """SELECT spread_dates, start_date, end_date FROM leave_records
+        f"""SELECT spread_dates, start_date, end_date FROM leave_records
             WHERE staff_id=? AND status='approved'
               AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              {_OTHER_NO_QUOTA_SQL}
               AND start_date <= ? AND end_date >= ?""",
         (staff_id, f"{year}-12-31", f"{year}-01-01"),
     ).fetchall()
@@ -4266,20 +4294,20 @@ def create_direct_leave(
     borrow_days = _check_quota_or_borrow(
         body.staff_id, staff["join_industry_date"], body.leave_type,
         leave_days, eff_start.year, body.confirm_borrow_next_year, db,
-        eff_start=eff_start,
+        eff_start=eff_start, other_deduct_quota=body.other_deduct_quota,
     )
 
     cur = db.execute(
         """INSERT INTO leave_records
                (staff_id, start_date, end_date, leave_type, reason, status,
-                is_direct, direct_by, spread_dates, borrow_next_year_days, created_at, updated_at)
-           VALUES (?,?,?,?,?,'approved',1,?,?,?,?,?)""",
+                is_direct, direct_by, spread_dates, borrow_next_year_days, other_deduct_quota, created_at, updated_at)
+           VALUES (?,?,?,?,?,'approved',1,?,?,?,?,?,?)""",
         (body.staff_id, eff_start.isoformat(), eff_end.isoformat(),
          body.leave_type, body.reason,
-         current["id"], spread_json, borrow_days, str(_vn_now()), str(_vn_now())),
+         current["id"], spread_json, borrow_days, int(body.other_deduct_quota), str(_vn_now()), str(_vn_now())),
     )
     leave_id = cur.lastrowid
-    if body.leave_type not in _NO_QUOTA_TYPES:
+    if not _is_no_quota_row(body.leave_type, body.other_deduct_quota):
         db.execute(
             "UPDATE user_tttt SET used_leave_days = COALESCE(used_leave_days,0) + ? WHERE id=?",
             (leave_days, body.staff_id),
@@ -4361,7 +4389,7 @@ def approve_recall(
         raise HTTPException(409, "Đơn đã được xử lý bởi một yêu cầu khác, vui lòng tải lại trang")
     # Trừ used_leave_days khi xác nhận rút (approved → cancelled) — trừ thai_san/bao_hiem
     # vì loại này chưa từng được cộng vào used_leave_days lúc duyệt.
-    if leave["leave_type"] not in _NO_QUOTA_TYPES:
+    if not _is_no_quota_row(leave["leave_type"], leave["other_deduct_quota"]):
         start = date.fromisoformat(leave["start_date"])
         end   = date.fromisoformat(leave["end_date"])
         _lich = _load_lich(db, start, end)

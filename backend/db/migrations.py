@@ -1573,6 +1573,16 @@ def _ensure_indexes():
                     updated_at = datetime('now','+7 hours')
                 WHERE attendances.status = 'auto';
             END""",
+
+        # ── Nghỉ phép "Khác": tự chọn có tính vào hạn mức phép năm hay không —
+        # 2026-09-06 ─────────────────────────────────────────────────────────
+        # leave_type="other" trước nay LUÔN trừ hạn mức (giống "annual") — không
+        # đúng cho mọi lý do "Khác" (vd nghỉ theo luật lao động không tính vào
+        # phép năm). Cột này CHỈ có ý nghĩa khi leave_type='other'; NULL/1 (mặc
+        # định) = có tính (giữ nguyên hành vi cũ cho dữ liệu đã có từ trước),
+        # 0 = không tính — ghi nhận ngày nghỉ như các loại miễn quota sẵn có
+        # (_NO_QUOTA_TYPES). Xem _check_quota_or_borrow trong backend/api/leaves.py.
+        "ALTER TABLE leave_records ADD COLUMN other_deduct_quota INTEGER DEFAULT 1",
     ]
     _mig_log = logging.getLogger(__name__)
 
