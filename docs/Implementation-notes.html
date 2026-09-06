@@ -14035,7 +14035,310 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
-  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-04</footer>
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">119</span>
+      <span class="card-title">Nghỉ phép — 3 lỗi tính hạn mức phép cùng một họ nguyên nhân: bẫy NULL trong SQL loại trừ, đếm trùng lúc đơn điều chỉnh NPBB còn treo, và đơn vắt ranh giới năm bị trừ "ứng phép năm sau" hai lần (2026-09-05)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Lỗi 1</span> Đơn nghỉ phép không ghi lý do biến mất khỏi MỌI danh sách/báo cáo</div>
+      <p>Mọi câu truy vấn danh sách đơn (Đơn của tôi, Chờ duyệt, Khai báo hộ, Phòng tôi, toàn
+        trung tâm, báo cáo bàn giao...) đều có 1 điều kiện ẩn để loại đơn "giả" (dữ liệu tổng hợp
+        khi nhập hạn mức bằng Excel — xem card cũ về nhãn <code>[Import]</code>/<code>[Điều chỉnh]</code>):
+        <code>NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')</code>. Theo logic 3 giá
+        trị của SQL, khi <code>reason IS NULL</code> (đơn thật không nhập lý do — <code>reason</code>
+        vốn optional), <code>NULL LIKE 'x'</code> ra <code>NULL</code> chứ không phải <code>FALSE</code>,
+        nên <code>NOT (NULL OR NULL)</code> = <code>NULL</code>, và <code>WHERE NULL</code> loại
+        luôn cả đơn thật — đúng khớp cảnh báo "⚠️ CHƯA DÙNG ĐƯỢC Báo cáo NPBB" ở card #118 (liệt kê
+        nhầm gần như toàn bộ nhân sự do quét trúng dòng tổng hợp NHƯNG đồng thời bỏ sót đơn thật
+        không có lý do — cùng 1 gốc rễ).</p>
+
+      <div class="note"><b>Bẫy này đã từng bị "vá" một lần rồi tái phát:</b> 3 trigger đồng bộ chấm
+        công trong <code>backend/db/migrations.py</code> (<code>trg_leave_approved_sync_attendance</code>,
+        <code>trg_leave_direct_insert_sync_attendance</code>, <code>trg_leave_delete_revert_attendance</code>)
+        đã được sửa đúng bẫy này từ trước (thêm <code>reason IS NOT NULL AND</code>, có hẳn đoạn
+        comment giải thích cơ chế) — nhưng cùng lỗi lại xuất hiện ở các câu query dựng danh sách
+        trong <code>leaves.py</code>, viết sau và không đối chiếu lại chỗ đã sửa.</p></div>
+
+      <div class="label"><span class="pill pill-green">Fix 1</span> <code>(reason IS NULL OR NOT (...))</code> ở toàn bộ 11 chỗ</div>
+      <p>10 chỗ trong <code>backend/api/leaves.py</code> + 1 chỗ trong
+        <code>backend/services/handover_report_service.py</code>. Verify thật: gọi
+        <code>GET /api/leaves/?scope=declared</code> cho 1 đơn khai báo hộ không nhập lý do — trước
+        sửa trả về rỗng, sau sửa trả đúng đơn.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 2</span> Hạn mức "đã dùng" đội gấp đôi ảo khi đơn điều chỉnh NPBB còn đang chờ duyệt</div>
+      <p>Đơn nghỉ phép bắt buộc "Đã hoàn thành" có thể tạo <b>đơn điều chỉnh</b> (ngày mới, đi lại
+        đủ 3 bước duyệt, xem card #118) — đơn gốc chỉ chuyển "Đã hủy" khi đơn điều chỉnh duyệt xong
+        HẲN (<code>_cancel_adjusted_original</code>). Trong lúc đơn điều chỉnh còn <code>pending_*</code>,
+        <code>_calc_used_days</code>/<code>_calc_used_days_bulk</code> (gọi với <code>include_pending=True</code>
+        — nguồn cho tab "Hạn mức phép", <code>get_my_balance</code>, <code>export_quotas</code>) đếm
+        <b>CẢ HAI</b>: đơn gốc (vẫn "approved") lẫn đơn điều chỉnh (đang "pending") — khớp đúng cảnh
+        báo "⚠️ Số Đã nghỉ hiển thị có thể lớn hơn thực tế" ở card #118.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 2</span> Loại đơn gốc đang có điều chỉnh còn hiệu lực khỏi tổng</div>
+      <p>Thêm <code>AND NOT EXISTS (SELECT 1 FROM leave_records adj WHERE adj.adjusts_leave_id =
+        leave_records.id AND adj.status NOT IN ('rejected','cancelled'))</code> vào 4 câu SELECT
+        trong <code>_calc_used_days</code>/<code>_calc_used_days_bulk</code>. Verify thật (staff
+        "Trưởng phòng Thanh toán", đơn 5 ngày): trước khi tạo đơn điều chỉnh <code>used_days=13</code>;
+        tạo đơn điều chỉnh (còn <code>pending_tong_hop</code>) → <code>used_days=18</code> (❌ đội
+        thêm 5 ngày ảo); sau khi thêm điều kiện trên, gọi lại y hệt tình huống → <code>used_days=13</code>
+        (✅ đúng lại). Dọn đơn test sau khi verify.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 3</span> Đơn vắt ranh giới năm (29/12→02/01) có ứng phép năm sau bị hụt đúng số ngày đã ứng</div>
+      <p>Khi hạn mức năm gốc không đủ, phần vượt được "ứng" (<code>borrow_next_year_days</code>) từ
+        hạn mức năm sau (<code>_check_quota_or_borrow</code>). <code>_calc_used_days</code> trừ
+        <code>borrow</code> cho <b>MỌI năm mà đơn chồng lấn khoảng ngày tới</b>, không chỉ năm gốc
+        (năm chứa <code>start_date</code>). Đơn vắt ranh giới năm khớp overlap ở CẢ năm gốc lẫn năm
+        sau trong 2 câu SELECT riêng, nên bị trừ nhầm 2 lần — tổng "đã dùng" cộng dồn qua 2 năm hụt
+        mất đúng bằng số ngày đã ứng.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 3</span> Chỉ trừ <code>borrow</code> ở đúng năm chứa <code>start_date</code></div>
+      <p>Áp dụng ở cả <code>_calc_used_days</code>/<code>_calc_used_days_bulk</code>
+        (<code>backend/api/leaves.py</code>) và <code>compute_carry_over</code>/<code>_carry_over_bulk</code>
+        (<code>backend/database.py</code> + <code>backend/api/leaves.py</code>) — 4 hàm cùng 1 kiểu
+        bug, cùng 1 cách sửa. Verify thật (Python gọi trực tiếp <code>_calc_used_days</code> qua DB
+        dev, chèn rồi xoá 1 đơn test <code>reason='TEST-AUDIT-DELETE-ME'</code>): đơn
+        29/12/2025→02/01/2026, 5 ngày làm việc thật, <code>borrow_next_year_days=2</code>. Trước
+        sửa: <code>used(2025)+used(2026) = 1.0+2.0 = 3.0</code> (hụt 2 ngày ảo). Sau sửa:
+        <code>1.0+4.0 = 5.0</code> — khớp đúng 5 ngày thực tế. Xác nhận 0 dòng test còn sót lại
+        sau khi xoá.</p>
+
+      <div class="note">Cả 3 lỗi được tìm bằng 1 agent rà soát riêng (đọc toàn bộ
+        <code>backend/api/leaves.py</code>, <code>database.py</code>, trigger trong
+        <code>migrations.py</code>, <code>handover_report_service.py</code>, đối chiếu từng chỗ
+        <code>include_pending=True</code>/so sánh nullable-column), verify từng lỗi bằng cách gọi
+        thẳng hàm thật trên DB dev (không đoán từ đọc code) trước khi sửa.</div>
+
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">120</span>
+      <span class="card-title">Nghỉ phép — 4 lệch nhỏ giữa nút bấm và quyền backend thật, phát hiện cùng đợt rà soát (2026-09-05)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Lệch 1</span> Nút "Hủy đơn" đòi quyền <code>leaves.cancel</code> cho cả đơn đang chờ duyệt</div>
+      <p>Backend (<code>cancel_leave</code>) chỉ đòi quyền riêng <code>leaves.cancel</code> khi đơn
+        đã <code>approved</code> — đơn còn <code>pending_ksv/pending_tong_hop/pending_gd</code> thì
+        chủ đơn (hoặc admin) huỷ được ngay, không cần quyền đó. Frontend (<code>_can_cancel_now</code>)
+        trước đây đòi quyền này cho <b>mọi</b> trạng thái — người chưa được nhóm quyền cấp
+        <code>leaves.cancel</code> không thấy nút dù backend cho phép huỷ ngay nếu gọi thẳng API.
+        <span class="pill pill-green">Fix</span>: bỏ điều kiện quyền riêng khi đơn còn đang chờ duyệt,
+        khớp lại đúng backend.</p>
+
+      <div class="label"><span class="pill pill-red">Lệch 2</span> Nút Phê duyệt/Từ chối của GĐ/PGĐ vẫn hiện dù giấy uỷ quyền hết hạn</div>
+      <p><code>_LEAVE_JOIN_SQL</code> đã tính sẵn <code>gd_can_review</code> (0 khi PGĐ được chỉ
+        định duyệt hết hiệu lực uỷ quyền hôm nay) và có banner cảnh báo dùng field này — nhưng điều
+        kiện hiện 2 nút Phê duyệt/Từ chối (<code>gd_act</code>) không đọc field đó, nên nút vẫn hiện,
+        bấm vào mới nhận 403 từ <code>gd_review</code>/<code>_can_gd_review</code>.
+        <span class="pill pill-green">Fix</span>: thêm <code>and leave.get("gd_can_review", True)</code>
+        vào <code>gd_act</code> — ẩn hẳn nút, khớp đúng banner đã có.</p>
+
+      <div class="label"><span class="pill pill-red">Lệch 3</span> <code>approve_recall</code> không khoá lạc quan, 2 request trùng có thể trừ hạn mức 2 lần</div>
+      <p><code>_apply_status_transition</code> (dùng ở hầu hết chỗ đổi trạng thái đơn) có khoá lạc
+        quan (<code>UPDATE ... WHERE id=? AND status=?</code>, kiểm <code>rowcount==0</code> → 409)
+        để chặn 2 request duyệt trùng cùng lúc cộng/trừ <code>used_leave_days</code> 2 lần —
+        <code>approve_recall</code> (Phòng Tổng hợp xác nhận rút đơn) tự làm riêng, dùng
+        <code>UPDATE ... WHERE id=?</code> trần không có điều kiện khoá.
+        <span class="pill pill-green">Fix</span>: thêm đúng khoá lạc quan, đổi trạng thái TRƯỚC rồi
+        mới trừ hạn mức — request thua cuộc dừng lại ở bước khoá, không chạm bước trừ hạn mức nữa.</p>
+
+      <div class="label"><span class="pill pill-gray">Dọn luôn</span> <code>LeaveOut</code> (schemas/leaves.py) là schema chết, thiếu field thật</div>
+      <p>Không endpoint nào trong <code>leaves.py</code> khai <code>response_model=LeaveOut</code>
+        (<code>list_leaves</code>/<code>_leave_to_out</code> trả dict thô) — nên trước đây thiếu 5
+        field thật (<code>staff_role</code>, <code>gd_can_review</code>, <code>declarer_name</code>,
+        <code>rejected_step</code>, <code>is_resubmitted</code>) không lỗi ngay, nhưng là bẫy: thêm
+        <code>response_model=LeaveOut</code> sau này (vd để có docs) sẽ ÂM THẦM cắt các field đó
+        khỏi response. Bổ sung đủ field, verify bằng cách validate schema trực tiếp trên 3 đơn thật
+        lấy từ API — cả 3 qua.</p>
+
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">121</span>
+      <span class="card-title">Nghỉ phép — 2 cảnh báo cuối cùng của đợt "Ứng phép năm sau": mốc hết hạn 31/03 bị hard-code sai, và "Sửa &amp; Nộp lại" chưa hỏi ứng phép dù backend đã hỗ trợ sẵn (2026-09-05)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Lỗi 1</span> Ngày phép chuyển kỳ không bao giờ thực sự hết hạn 31/03</div>
+      <p><code>compute_carry_over(effective=True, ref_date=...)</code> chỉ trả 0 khi
+        <code>ref_date &gt; 31/03/năm</code> — đúng thiết kế. Nhưng <code>_check_quota_or_borrow</code>
+        (hàm kiểm tra hạn mức lúc tạo/nộp lại/khai báo hộ đơn) gọi hàm này với
+        <code>ref_date=date(ref_year, 1, 1)</code> — HARD-CODE CỨNG thành 01/01, không phải ngày
+        tạo đơn thật (<code>_vn_now()</code>). Vì 01/01 không bao giờ &gt; 31/03 cùng năm, điều
+        kiện hết hạn <b>không bao giờ đúng</b> — carry-over luôn được tính là còn hiệu lực, bất kể
+        đơn được tạo tháng 6 hay tháng 10.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Bỏ hard-code, để mặc định lấy ngày hôm nay</div>
+      <p>Xoá tham số <code>ref_date=date(ref_year, 1, 1)</code>, để hàm tự lấy <code>_vn_now().date()</code>
+        (mặc định của <code>compute_carry_over</code> khi <code>ref_date=None</code>) — đúng ngữ nghĩa
+        "carry-over còn dùng được hay không phụ thuộc ngày TẠO ĐƠN, không phải ngày nghỉ dự kiến".
+        2 chỗ gọi khác (<code>_build_form_ctx</code> dùng <code>ref_date=start</code> để in phiếu
+        đúng thời điểm nghỉ, <code>export_all_leaves_annual</code> dùng <code>ref_date=today</code>
+        để xuất báo cáo đúng thời điểm xuất) vốn đã đúng, không đụng tới.</p>
+
+      <p>Verify thật (hôm nay 05/09/2026, đã qua 31/03 từ lâu): gọi trực tiếp
+        <code>compute_carry_over(staff_id=5, year=2026, effective=True)</code> — trước sửa (giả lập
+        lại bằng <code>ref_date=date(2026,1,1)</code>) ra <code>12.0</code> (❌ vẫn còn hiệu lực);
+        sau sửa (không truyền <code>ref_date</code>, để mặc định hôm nay) ra <code>0.0</code> (✅ đã
+        hết hạn đúng). Số ngày chuyển kỳ thực tế (không tính hạn) vẫn đúng <code>12.0</code> —
+        không phải do tính sai số ngày, chỉ riêng mốc hết hạn không bao giờ kích hoạt.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 2</span> "Sửa &amp; Nộp lại" vượt hạn mức báo lỗi cứng thay vì hỏi ứng phép</div>
+      <p>Backend (<code>resubmit_leave</code>) đã gọi đúng <code>_check_quota_or_borrow(...,
+        body.confirm_borrow_next_year, db)</code> từ trước — hoàn toàn tương đương
+        <code>create_leave</code>/<code>create_direct_leave</code>, kể cả <code>frontend/api_client.py</code>
+        cũng đã raise đúng <code>QuotaExceededBorrowError</code> cho <code>PUT</code> (dùng chung
+        <code>_raise_http_error</code> với <code>POST</code>). Chỉ riêng dialog "Sửa &amp; Nộp lại"
+        ở frontend (<code>do_resubmit</code>) bắt lỗi bằng <code>except Exception</code> chung chung
+        — 409 <code>quota_exceeded_borrow</code> rơi vào nhánh đó, hiện thông báo lỗi rồi dừng luôn,
+        không có đường hỏi lại như 2 dialog kia.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Thêm nhánh <code>except api.QuotaExceededBorrowError</code>, dùng lại đúng popup</div>
+      <p>Tách logic gửi request trong <code>do_resubmit</code> ra hàm con <code>_send()</code> nhận
+        tham số <code>_body</code> (để gọi lại được khi xác nhận ứng phép) — giống hệt mẫu
+        <code>do_create</code>. Verify thật qua API: tạo đơn (ứng trước để vượt qua chặn ban đầu do
+        hạn mức đã hết sẵn), từ chối ở bước KSV, nộp lại với ngày mới KHÔNG kèm
+        <code>confirm_borrow_next_year</code> → nhận đúng <code>HTTP 409</code> kèm
+        <code>{"code":"quota_exceeded_borrow","year":2026,"next_year":2027,"remaining":-3.0,"borrow_days":3.0}</code>;
+        gọi lại kèm <code>confirm_borrow_next_year=true</code> → <code>HTTP 200</code>, đơn quay về
+        <code>pending_ksv</code> với <code>borrow_next_year_days=3.0</code> đúng số đã ứng. Dọn đơn
+        test sau khi verify.</p>
+
+      <div class="note">Cả 2 lỗi này đã được <b>chính đội phát triển ghi nhận sẵn</b> là "đang sửa
+        ở đợt tới" ngay trong <code>Logs_update.md</code> của đợt "Ứng phép năm sau" (05/09/2026,
+        cùng với lỗi #119 về ranh giới năm) — phát hiện lại khi merge nhánh và đối chiếu log, không
+        phải phát hiện mới từ rà soát.</div>
+
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">122</span>
+      <span class="card-title">Nghỉ phép — 5 lỗi từ review PR #77 (Người 1): ký hiệu chấm công đụng độ, báo cáo NPBB mất đường tải dự phòng, "Còn lại" ra số âm, mốc 31/03 tính sai theo ngày nộp đơn thay vì ngày nghỉ (2026-09-06)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Lỗi 1</span> "Họp/Công tác" chấm công tự động thành 0 công thay vì đủ công</div>
+      <p>2 trigger đồng bộ <code>attendances</code> khi đơn nghỉ được duyệt
+        (<code>trg_leave_approved_sync_attendance</code>, <code>trg_leave_direct_insert_sync_attendance</code>
+        trong <code>backend/db/migrations.py</code>, tạo từ PR #22) map <code>leave_type</code>→ký
+        hiệu qua <code>CASE</code> chỉ liệt kê <code>thai_san/bao_hiem/sick</code>. Loại nghỉ
+        <code>hop_cong_tac</code> (thêm ở đợt "Ứng phép năm sau", <b>SAU</b> khi 2 trigger này đã
+        viết xong) rơi vào <code>ELSE 'P'</code> = "Nghỉ phép" <code>work_value=0.0</code> — nhân
+        viên Phòng Kế toán đi họp/công tác (vẫn đang làm việc, chỉ không có mặt tại trụ sở) bị chấm
+        công y hệt nghỉ phép không lương.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 1</span> Thêm nhánh <code>WHEN 'hop_cong_tac' THEN 'CT'</code></div>
+      <p>Bảng <code>attendance_symbols</code> đã có sẵn ký hiệu <code>CT</code> = "Công tác"
+        (<code>work_value=1.0</code>) từ trước, chỉ chưa trigger nào dùng tới. Thêm 1 migration mới
+        (DROP + CREATE lại đúng khuôn mẫu mọi lần sửa 2 trigger này trước đây) đưa nhánh
+        <code>hop_cong_tac</code>→<code>'CT'</code> vào cả chỗ chọn symbol lẫn chỗ tra
+        <code>work_value</code> theo symbol đó, ở cả 2 trigger (4 điểm sửa).
+        <code>khong_luong</code> CỐ Ý vẫn rơi <code>ELSE 'P'</code>/<code>0.0</code> công — đúng bản
+        chất (nghỉ không lương), chỉ riêng nhãn "P"="Nghỉ phép" hơi rộng nghĩa, để nguyên (Phòng
+        Tổng hợp quyết nếu muốn tách nhãn sau). Verify thật: gán tạm 1 tài khoản test vào Phòng Kế
+        toán, tạo rồi duyệt 1 đơn <code>hop_cong_tac</code> qua thẳng UPDATE mô phỏng đúng trigger
+        thật → dòng <code>attendances</code> sinh ra đúng <code>symbol='CT'</code>,
+        <code>work_value=1.0</code>. Dọn dữ liệu test, trả lại phòng ban gốc.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 5</span> Ký hiệu <code>H</code> đụng độ giữa báo cáo chấm công mới và hệ chấm công thật</div>
+      <p><code>_ATTENDANCE_SYMBOL</code> (<code>backend/api/leaves.py</code>, dựng báo cáo chấm công
+        tháng theo mẫu TCNS — tính năng mới đợt "Ứng phép năm sau") gán <code>hop_cong_tac→'H'</code>
+        — trùng ký hiệu <code>H</code> đã có sẵn trong <code>attendance_symbols</code> với nghĩa
+        <b>khác hẳn</b> ("Đi học", dùng bởi hệ chấm công thật của Phòng Kế toán ở Lỗi 1). 2 hệ độc
+        lập nhau nhưng dùng chung 1 ký hiệu cho 2 nghĩa khác nhau — đọc báo cáo dễ hiểu nhầm.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 5</span> Đổi sang <code>'CT'</code>, khớp luôn với Fix 1</div>
+      <p>Đổi <code>_ATTENDANCE_SYMBOL["hop_cong_tac"]</code> từ <code>"H"</code> sang
+        <code>"CT"</code> — vừa gỡ đụng độ, vừa dùng chung đúng 1 ký hiệu với hệ chấm công thật
+        (Lỗi 1) cho cùng 1 khái niệm "Công tác".</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 2</span> Báo cáo NPBB mất hẳn đường tải nếu dựng bản xem trước PDF lỗi</div>
+      <p><code>_open_npbb_preview</code> (<code>frontend/pages/leaves.py</code>) gọi API kèm
+        <code>preview=true</code> (máy chủ dùng Word COM chuyển .docx→PDF để xem trước — tính năng
+        mới đợt này). Nếu bước chuyển đó lỗi (Word chưa cài/treo trên máy chủ), nhánh
+        <code>except</code> trước đây chỉ báo lỗi rồi dừng — hàm tải file .docx gốc
+        (<code>_tai_ban_word</code>, KHÔNG phụ thuộc Word chút nào) chỉ được gắn vào nút "Tải xuống"
+        <b>bên trong dialog xem trước</b>, mà dialog đó chưa từng mở ra do bước xem trước đã lỗi từ
+        đầu. Trước đợt "xem trước PDF" này, tải báo cáo NPBB vốn là .docx thuần, không phụ thuộc
+        Word — đây là hồi quy (regression) do tính năng mới gây ra.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 2</span> Dựng <code>_tai_ban_word</code> trước, gọi làm phương án dự phòng</div>
+      <p>Chuyển định nghĩa <code>_tai_ban_word</code> lên trước khối <code>try/except</code>; nhánh
+        <code>except</code> (khi không phải lỗi hết phiên đăng nhập) đổi thành: báo cảnh warning rồi
+        tự gọi <code>await _tai_ban_word()</code> ngay, không cần người dùng bấm gì thêm — đúng
+        khuôn mẫu <code>_download_pdf</code> (phiếu nghỉ phép) đã dùng sẵn cho đúng tình huống PDF
+        hỏng của nó. Verify thật qua API (máy này có Word, không tạo được tình huống Word treo thật):
+        cả 2 đường <code>/export/npbb-batch</code> (.docx thường) và
+        <code>/export/npbb-batch?preview=true</code> (PDF) đều trả đúng <code>200</code> sau khi sửa
+        — xác nhận đường chính không hồi quy; nhánh dự phòng khớp đúng pattern
+        <code>_download_pdf</code> đã chạy thật trong sản phẩm.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 3</span> Cột "Còn lại" trong báo cáo tổng hợp năm ra số âm sau 31/03</div>
+      <p><code>export_all_leaves_annual</code>: <code>chuyen_nam = compute_carry_over(...,
+        ref_date=today)</code> đúng đắn zero hoá phép chuyển kỳ sau 31/03 — nhưng
+        <code>da_nghi = _calc_occurred_days(...)</code> vẫn đếm ĐỦ những ngày quý I đã nghỉ, kể cả
+        phần từng được phép chuyển kỳ (nay bị coi là 0) tài trợ. <code>con_lai = tong_phep - da_nghi</code>
+        có thể ra ÂM cho bất kỳ ai từng dùng phép chuyển kỳ trong quý I mà xuất báo cáo sau 31/03 —
+        cùng 1 người, cùng 1 dữ liệu, xuất ngày 20/03 ra "Còn lại"=10, xuất ngày 15/06 ra "Còn lại"=-2.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 3</span> Kẹp về 0, khớp đúng cách <code>get_quotas</code>/<code>stats_annual</code> đang làm</div>
+      <p>Đổi thành <code>con_lai = max(0.0, tong_phep - da_nghi)</code> — 2 màn hình khác đã hiển
+        thị hạn mức còn lại theo đúng cách này từ trước (gốc rễ kế toán vẫn còn đó — "hạn mức bị
+        cắt xuống 0 nhưng ngày thật đã nghỉ" là 2 con số vênh nhau — 3 lựa chọn đều không sửa tận
+        gốc, chỉ chọn cách không in số âm ra giấy đưa lãnh đạo, khớp 2 màn còn lại). Verify thật:
+        tạo 1 đơn phép năm 20 ngày làm việc trong quý I 2026 (dùng hết 12 ngày chuyển kỳ + 8/12
+        ngày hạn mức năm, không cần ứng) cho 1 nhân viên sạch dữ liệu, xuất báo cáo năm 2026 (hôm
+        nay đã qua 31/03 từ lâu) → hàng của người đó ra đúng <code>Hạn mức=12, Chuyển năm=0,
+        Tổng phép=12, Đã nghỉ=20, Còn lại=0</code> (không phải <code>-8</code>). Dọn đơn test.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 4</span> Mốc hết hạn 31/03 tính theo ngày BẤM NỘP ĐƠN thay vì ngày NGHỈ THẬT</div>
+      <p>Fix của lỗi #121 (đợt trước) bỏ hard-code <code>ref_date=date(ref_year,1,1)</code>, thay
+        bằng để <code>compute_carry_over</code> tự lấy mặc định "hôm nay" — nhưng review chỉ ra quy
+        định "phép chuyển kỳ hết hạn sau 31/03" nói về ngày NGHỈ THẬT phải rơi trước mốc đó, không
+        phải ngày nộp đơn. Nộp đơn ngày 25/03 (còn trong hạn) xin nghỉ ngày 15/06 (đã qua hạn) với
+        cách tính "hôm nay" sẽ SAI cho phép dùng phép chuyển kỳ (đáng lẽ phải hết hạn); ngược lại
+        nộp đơn ngày 06/09 (đã qua hạn) xin nghỉ bù cho đợt phép quý I dở dang cũng SAI theo hướng
+        ngược lại. <code>_build_form_ctx</code> (in phiếu) từ trước đã đúng dùng
+        <code>ref_date=start</code> (ngày bắt đầu nghỉ) — <code>_check_quota_or_borrow</code> lẽ ra
+        phải khớp đúng quy ước đó.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 4</span> Truyền <code>eff_start</code> (ngày bắt đầu nghỉ thật) thay vì mặc định "hôm nay"</div>
+      <p>Thêm tham số <code>eff_start: Optional[date] = None</code> vào
+        <code>_check_quota_or_borrow</code>, gọi <code>compute_carry_over(..., ref_date=eff_start)</code>;
+        cập nhật cả 3 nơi gọi (<code>create_leave</code>, <code>resubmit_leave</code>,
+        <code>create_direct_leave</code>) truyền đúng <code>eff_start</code> (ngày bắt đầu nghỉ đã
+        có sẵn ở cả 3 chỗ, chỉ trước đó chưa được truyền xuống). Verify thật qua API "khai báo hộ"
+        (staff sạch dữ liệu, hạn mức 12 + chuyển kỳ quý I 12 = 24, đã dùng 0): nộp hôm nay
+        (06/09/2026, đã qua 31/03 rất lâu) xin nghỉ 5 ngày làm việc rơi <b>trong quý I</b>
+        (16-20/02/2026) → tạo thành công ngay, <code>borrow_next_year_days=0</code> (❌ nếu còn bug
+        cũ dùng "hôm nay" sẽ tính chuyển kỳ=0, hạn mức=12, đã dùng nơi khác cộng vào &gt; còn lại,
+        phải hỏi ứng phép năm sau mới tạo được — cùng số liệu, khác kết quả tuỳ theo dùng ngày nào).
+        Dọn đơn test.</p>
+
+      <div class="note">Cả 5 lỗi tìm được qua review thật của Người 1 trên PR #77 (không phải rà
+        soát tự động) — review có kèm số liệu chạy thật trên DB dựng từ đúng migrations của nhánh
+        này, không đọc code đoán. Sau khi sửa: 1543 test hiện có (57 test liên quan
+        nghỉ phép/hạn mức/chấm công/bàn giao) pass đủ; 33 test fail còn lại thuộc nhóm Đối chiếu
+        ACH/hồ sơ lưu trữ, không liên quan — fail do thiếu biến môi trường
+        <code>DOI_CHIEU_ZIP_PASSWORD</code> trong <code>.env</code> của máy chạy test, không phải
+        lỗi từ các fix này.</div>
+
+    </div>
+  </div>
+
+  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-06</footer>
 </div>
 </body>
 </html>

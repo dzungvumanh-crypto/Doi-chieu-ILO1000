@@ -328,6 +328,10 @@ Truy cập:
 - Banner "Phép còn lại" tính đủ hạn mức nhập tay + ngày chuyển kỳ, khớp đúng tab Hạn mức phép
 - Đơn nghỉ vắt qua ranh giới năm (vd 29/12 → 02/01) được chia đúng cho từng năm khi tính hạn mức
 - Nghỉ thai sản / bảo hiểm (không trừ vào hạn mức phép năm), chọn khoảng ngày bằng lịch cuộn
+- **Nghỉ không lương** và **Họp/Công tác** — đi đủ 3 bước duyệt như đơn thường nhưng **không trừ hạn
+  mức phép năm**. *Nghỉ không lương* chọn khoảng ngày liên tục; *Họp/Công tác* chọn lẻ từng ngày như
+  phép năm. Ở bảng công phòng Kế toán, Họp/Công tác vào ký hiệu **`CT` = đủ 1 công** (đang đi làm, chỉ
+  không có mặt tại trụ sở), nghỉ không lương vào `P` = 0 công
 - Nhập hạn mức phép hàng loạt từ file Excel (xem trước / áp dụng / hoàn tác); sửa tay số ngày "Đã dùng" của từng người — cả hai cách đều thay thế lẫn nhau, không cộng dồn
 - Bản ghi hạn mức nhập từ Excel / sửa tay không phải đơn nghỉ thật: bị ẩn khỏi danh sách đơn, lịch, kiểm tra trùng ngày, số liệu Dashboard, Trang chủ và Báo cáo bàn giao
 - Khai báo hộ; ngày nghỉ lẻ không liên tục (`spread_dates`)
@@ -341,11 +345,10 @@ Truy cập:
   Đơn của GĐ kính gửi **Tổng Giám đốc Agribank**, không phải Giám đốc TTTT; mẫu NPBB của diện HĐTV
   gửi **Ban Tổ chức Nhân sự**
 - Mẫu đơn cá nhân NPBB (đăng ký / điều chỉnh — "Mẫu 1 TCNS") và báo cáo tổng hợp
-  **Mẫu 18** (nội bộ) / **Mẫu 19** (gửi TCNS): `GET /api/leaves/export/npbb-batch?year=&mau=18|19`
-  > ⚠️ **Báo cáo Mẫu 18/19 chưa dùng được**: truy vấn chưa lọc bản ghi tổng hợp `[Import]` /
-  > `[Điều chỉnh]` của màn *Nhập hạn mức phép* — vốn cũng mang `leave_type='bat_buoc'` — nên in ra
-  > gần như toàn bộ nhân sự kèm ngày giả lập. Xem card **NP1** trong
-  > [`docs/Implementation-notes.html`](docs/Implementation-notes.html)
+  **Mẫu 18** (nội bộ) / **Mẫu 19** (gửi TCNS):
+  `GET /api/leaves/export/npbb-batch?year=&mau=18|19[&month=][&preview=true]`.
+  Bỏ trống `month` = cả năm. Bấm vào mẫu sẽ **mở xem trước** (PDF do Word chuyển tạm) rồi mới tải;
+  máy chủ không chuyển được PDF thì **tự tải thẳng bản `.docx` gốc** — báo cáo này không phụ thuộc Word
 
 - **Ứng phép năm sau khi vượt hạn mức**: vượt quỹ năm nay mà năm sau còn chỗ thì API trả **409**
   `{"code":"quota_exceeded_borrow", ...}` thay vì chặn cứng 400; frontend hỏi xác nhận rồi gọi lại với
@@ -355,17 +358,23 @@ Truy cập:
 - **KSV thay thế**: Trưởng/Phó phòng **cùng phòng** với người nộp đơn duyệt được bước KSV dù không phải
   `ksv_approver_id` (`_is_alt_ksv`) — đơn không còn kẹt khi người được chỉ định vắng mặt. Đây là *bước
   duyệt của hồ sơ*, không phải quyền truy cập; xem mục **Phân quyền** trong `docs/DESIGN.md`
-- Tab **Báo cáo tổng hợp** (tên cũ: Báo cáo năm) — thêm **Báo cáo chấm công tháng**
-  `GET /api/leaves/export/attendance-monthly?year=&month=`: nhóm theo phòng, `X` = đi làm, `P` = nghỉ
-  phép suy từ đơn đã duyệt, để trống = T7/CN/lễ. Họp/tập huấn/công tác và xếp loại thi đua **không có
-  nguồn dữ liệu** nên để trống cho phòng Tổng hợp điền tay
+- Tab **Báo cáo tổng hợp** (tên cũ: Báo cáo năm) — **Báo cáo chấm công**
+  `GET /api/leaves/export/attendance-monthly?year=[&month=]`: bỏ trống `month` = cả năm, mỗi tháng một
+  sheet (chỉ tới tháng hiện tại). Nhóm theo phòng; `X` = đi làm, `P` = nghỉ phép, `BB` = phép bắt buộc,
+  `CT` = họp/công tác — tất cả suy từ đơn đã duyệt. Ô tô màu để trống = T7/CN/lễ, ô **không tô màu** để
+  trống = ngày chưa tới. Riêng cột xếp loại thi đua không có nguồn dữ liệu, phòng Tổng hợp điền tay
+- **Báo cáo nghỉ phép năm** `GET /api/leaves/export/annual?year=`: theo đúng mẫu giấy phòng Tổng hợp
+  đang dùng — nhóm theo phòng (dòng tổng đứng trước danh sách nhân sự), cột *Đã nghỉ* tính đến **đúng
+  ngày bấm xuất file**. Sau 31/03 phép chuyển kỳ hết hiệu lực nên cột *Tổng phép* tụt về hạn mức gốc
+  trong khi *Đã nghỉ* vẫn đếm cả ngày quý I đã tiêu bằng phép chuyển kỳ — *Còn lại* kẹp về 0 (khớp tab
+  Hạn mức phép), nên dòng đó có thể hiện *Đã nghỉ* lớn hơn *Tổng phép*
   > ⚠️ **Số ngày phép năm đổi mốc thâm niên 4 → 5 năm** (`compute_annual_leave()`, đúng Điều 114 BLLĐ:
   > khớp 67/72 người trên báo cáo thật 2026, mốc 4 năm cũ khớp 12/72). Người vào ngành đủ 4/8/12… năm
   > **giảm 1 ngày**; chưa có bước rà ai đã nghỉ quá hạn mức mới — xem card **NP2** trong
   > [`docs/Implementation-notes.html`](docs/Implementation-notes.html)
-  > ⚠️ **Ngày chuyển năm chưa hết hạn 31/03**: `_check_quota_or_borrow()` truyền
-  > `ref_date=date(ref_year,1,1)` nên `compute_carry_over(effective=True)` không bao giờ hết hiệu lực.
-  > Cùng card NP2 còn 2 lỗi quỹ phép khác chưa sửa
+  > Mốc hết hạn phép chuyển kỳ **31/03** so theo **ngày bắt đầu nghỉ** của đơn, không phải ngày bấm
+  > nộp đơn (`_check_quota_or_borrow(eff_start=...)`) — nộp 25/03 xin nghỉ 15/06 thì không còn được
+  > cộng phép chuyển kỳ. Cùng mốc với chỗ in phiếu (`_build_form_ctx`)
 
 ### Module Chứng từ Hậu kiểm
 - **Bàn giao**: GDV nhập số tờ theo ngày, HKV/KSV xác nhận từng ô

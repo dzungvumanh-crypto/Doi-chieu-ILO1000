@@ -73,11 +73,13 @@ _UNKNOWN = {"label": "", "chip": "bg-gray-100 text-gray-500 border-gray-300", "d
 # Loại nghỉ phép — đặt ở đây thay vì trong leaves.py vì sidebar cũng cần đọc,
 # mà shared.py không import được leaves.py (leaves.py đã import shared.py).
 LEAVE_TYPE = {
-    "bat_buoc": "Nghỉ phép bắt buộc",
-    "annual":   "Nghỉ phép năm",
-    "thai_san": "Nghỉ thai sản",
-    "bao_hiem": "Nghỉ bảo hiểm",
-    "other":    "Khác",
+    "bat_buoc":    "Nghỉ phép bắt buộc",
+    "annual":      "Nghỉ phép năm",
+    "thai_san":    "Nghỉ thai sản",
+    "bao_hiem":    "Nghỉ bảo hiểm",
+    "khong_luong":  "Nghỉ không lương",
+    "hop_cong_tac": "Họp/Công tác",
+    "other":        "Khác",
 }
 
 

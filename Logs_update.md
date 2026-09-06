@@ -4,6 +4,28 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 06/09/2026 Nghỉ phép - **Sửa 5 lỗi từ review thật của Người 1 trên PR #77**
+    + ✅ **"Họp/Công tác" chấm công tự động thành 0 công thay vì đủ công** — 2 trigger đồng bộ
+      `attendances` (tạo từ PR #22, trước khi loại nghỉ `hop_cong_tac` ra đời) rơi đúng loại này vào
+      `ELSE 'P'` (0 công) thay vì dùng ký hiệu `CT` = "Công tác" (1 công) đã có sẵn trong
+      `attendance_symbols` nhưng chưa trigger nào dùng. Thêm migration cho cả 2 trigger. Xem
+      [Implementation Notes #122](docs/Implementation-notes.html)
+    + ✅ **Ký hiệu `H` đụng độ giữa báo cáo chấm công mới và hệ chấm công thật** — đổi
+      `hop_cong_tac` sang dùng chung `CT` với hệ chấm công thật thay vì tự đặt `H` (đã có nghĩa khác
+      là "Đi học"). Xem #122
+    + ✅ **Báo cáo NPBB mất hẳn đường tải nếu bản xem trước PDF lỗi** (Word chưa cài/treo trên máy
+      chủ) — trước đây dừng luôn ở bước báo lỗi; giờ tự động tải thẳng file .docx gốc (không phụ
+      thuộc Word) làm phương án dự phòng, khớp đúng cách phiếu nghỉ phép đã xử lý PDF hỏng. Xem #122
+    + ✅ **Cột "Còn lại" trong báo cáo tổng hợp năm ra số âm sau 31/03** — phép chuyển kỳ hết hạn bị
+      trừ về 0 nhưng số ngày đã nghỉ (gồm cả phần từng dùng phép chuyển kỳ) không trừ theo, có thể ra
+      âm. Kẹp về 0, khớp đúng cách 2 màn hình khác đang làm. Xem #122
+    + ✅ **Mốc hết hạn 31/03 tính theo ngày bấm nộp đơn thay vì ngày nghỉ thật** — fix đợt trước
+      (#121) bỏ hard-code nhưng lại mặc định dùng "hôm nay" (ngày nộp đơn); quy định thật nói về
+      ngày NGHỈ phải rơi trước 31/03, không phải ngày nộp. Đổi sang truyền đúng ngày bắt đầu nghỉ.
+      Xem #122
+    + *Toàn bộ 5 lỗi verify bằng dữ liệu thật (không đoán từ đọc code) trước/sau cho từng lỗi, dọn
+      sạch dữ liệu test sau khi xong — xem #122*
+
 - 06/09/2026 Bàn giao chứng từ - **Cột ngày nghỉ lễ tô vàng như hai ngày cuối tuần**
     + Trước đây bảng nhập chứng từ chỉ tô vàng **thứ Bảy và Chủ nhật**. Ngày nghỉ lễ giữa tuần
       trông y hệt ngày đi làm, không có gì nhắc người nhập rằng hôm đó lẽ ra không có chứng từ
@@ -15,6 +37,54 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       mượn). Chứng từ phát sinh đúng ngày lễ là chuyện có thật, trạng thái quan trọng hơn màu ngày nghỉ
     + ⚠️ **Thứ Bảy đi làm bù vẫn tô vàng** — chưa đổi ở màn này. Bảng chấm công thì đã bỏ vàng cho
       ngày làm bù, vì ở đó cột Tổng có cộng công của hôm ấy nên để vàng là mâu thuẫn nhìn thấy được
+
+- 05/09/2026 Nghỉ phép - **Sửa hết 5 cảnh báo còn treo của 2 đợt trước + thêm loạt báo cáo/phiếu in + rà soát tìm thêm 2 lỗi quyền/khoá**
+    + ✅ **Đã sửa "Báo cáo NPBB liệt kê nhầm gần như toàn bộ nhân sự"** (cảnh báo ở mục dưới) — nguyên
+      nhân là 1 lỗi SQL rộng hơn nhiều so với tưởng ban đầu: mọi danh sách/báo cáo đơn nghỉ phép đều
+      **âm thầm bỏ sót đơn thật không nhập lý do** (không riêng gì báo cáo NPBB). Xem chi tiết ở
+      [Implementation Notes #119](docs/Implementation-notes.html)
+    + ✅ **Đã sửa "Số Đã nghỉ hiển thị lớn hơn thực tế"** (cảnh báo ở mục dưới) — tab Hạn mức phép/số
+      "Phép còn lại"/xuất Excel hạn mức trước đây đếm trùng đơn gốc **và** đơn điều chỉnh NPBB cùng
+      lúc trong thời gian đơn điều chỉnh còn chờ duyệt. Xem #119
+    + ✅ **Đã sửa "Đơn nghỉ vắt qua Tết dương lịch có ứng phép bị đếm thiếu ngày"** (cảnh báo ở đợt
+      "Ứng phép năm sau" bên dưới) — trừ nhầm số ngày đã ứng ở cả 2 năm thay vì đúng 1 năm gốc. Xem #119
+    + ✅ **Đã sửa "Ngày phép chuyển kỳ chưa hết hạn 31/03 như quy định"** (cảnh báo ở đợt "Ứng phép
+      năm sau" bên dưới) — mốc so sánh hạn 31/03 bị hard-code cứng thành 01/01 nên phép chuyển kỳ
+      **không bao giờ hết hạn thật sự**; đơn nghỉ tạo tháng 6, tháng 10 vẫn cộng thêm ngày chuyển
+      năm. Xem #121
+    + ✅ **Đã sửa "Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép"** (cảnh báo ở đợt
+      "Ứng phép năm sau" bên dưới) — backend vốn đã hỗ trợ sẵn, chỉ riêng màn "Sửa & Nộp lại" chưa
+      bắt tín hiệu để hỏi, nên vượt hạn mức là báo lỗi rồi dừng luôn. Xem #121
+    + **Rà soát thêm phát hiện 2 lỗi quyền/khoá không liên quan tới hạn mức**: nút "Hủy đơn" bị ẩn
+      nhầm cho đơn đang chờ duyệt ở tài khoản chưa được cấp quyền riêng; nút Phê duyệt/Từ chối của
+      Phó Giám đốc vẫn hiện dù giấy uỷ quyền đã hết hạn. Toàn bộ 7 lỗi (5 ở trên + 2 lỗi này) đã
+      sửa, verify bằng dữ liệu thật trước/sau cho từng lỗi — xem #119, #120, #121
+    + **Thêm 2 loại nghỉ mới**: *Nghỉ không lương* và *Họp/Công tác* — đi qua đúng quy trình duyệt
+      (KSV → Tổng hợp → Giám đốc) như đơn thường, nhưng **không trừ vào hạn mức phép năm** (vẫn hiện
+      trong chấm công/báo cáo để theo dõi). Họp/Công tác cho chọn lẻ từng ngày (giống phép năm) thay
+      vì chọn khoảng liên tục
+    + **Điều chỉnh nghỉ phép bắt buộc giờ có thêm lối tạo trực tiếp** từ nút "Tạo đơn" (trước đây chỉ
+      tạo được từ nút "Điều chỉnh ngày NPBB" trong chi tiết 1 đơn cụ thể) — chọn loại "Điều chỉnh
+      nghỉ phép bắt buộc", tìm và chọn đơn gốc cần đổi ngày, sau đó vào đúng màn nhập ngày mới +
+      chọn KSV/Ban lãnh đạo phê duyệt như luồng cũ. Chi tiết đơn (cả gốc lẫn điều chỉnh) có link bấm
+      mở tab mới sang đơn liên quan
+    + **Báo cáo chấm công tháng** (theo đúng mẫu TCNS): chọn 1 tháng hoặc "Chọn cả năm" (dừng đúng ở
+      tháng hiện tại nếu đang xem năm nay, không sinh sheet tương lai); ký hiệu P/BB/H theo đúng loại
+      nghỉ; dữ liệu quét lại thật mỗi lần xuất, không cache
+    + **Báo cáo nghỉ phép năm viết lại theo đúng mẫu giấy thật**: nhóm theo phòng ban (dòng tổng
+      trước, chi tiết từng người sau), cột "Đã nghỉ" tính đến đúng thời điểm bấm xuất file
+    + **Tải phiếu nghỉ phép**: cho chọn PDF (có chữ ký, mặc định) hoặc Word (không có chữ ký — ghi rõ
+      trên nút để không nhầm là bản tương đương); PDF mở xem trước toàn màn hình trước khi tải, có
+      nút "Tải xuống"/"Đóng" riêng thay vì tải thẳng
+    + **Bảng danh sách đơn nghỉ phép**: sắp lại thứ tự cột (Họ và tên/Phòng lên ngay sau Ngày tạo),
+      kéo dãn được từng cột bằng chuột, khung viền đậm rõ hơn; thêm bộ lọc theo "Ngày tạo" (chọn 1
+      ngày) và ô "Tìm theo tên" giờ gõ ra danh sách nhân sự thật để bấm chọn (tự cập nhật theo danh
+      sách nhân sự hiện tại, không phải gõ mù)
+    + **Popup nhắc đơn quá hạn chưa duyệt**: đơn của chính mình đã tới/qua ngày nghỉ mà vẫn còn
+      "chờ duyệt" sẽ tự nhắc khi mở trang, ghi rõ đang kẹt ở cấp nào
+    + *Lưu ý vận hành*: nhóm quyền "QA-all" (tài khoản test nội bộ) thiếu sẵn quyền "Hủy đơn nghỉ
+      phép"/"Rút đơn nhiều cấp" — đã cấp bổ sung; nếu nhóm quyền khác của đơn vị cũng thiếu 2 quyền
+      này thì cấp thêm tương tự qua màn Quản lý nhóm quyền
 
 - 05/09/2026 Đối chiếu CITAD - **Nhiều người cùng chấm một ngày, khoá nguồn Napas/PSS-MDP, tách bảng chênh lệch VNĐ / Ngoại tệ**
     + **Hết cảnh "một ngày chỉ một người chấm được".** Trước đây một ngày chỉ có đúng một bảng
@@ -72,12 +142,14 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       chỉ khớp **12/72**. Ai vào ngành đủ 4, 8, 12… năm sẽ **giảm 1 ngày** so với con số phần mềm
       hiển thị trước đây. Người nào đã nghỉ hết số cũ thì lần xin nghỉ tới sẽ báo hết phép —
       **báo lại cho phòng Tổng hợp chỉnh tay ở tab Hạn mức phép**, đừng tự đoán
-    + ⚠️ **Ngày phép chuyển từ năm trước hiện chưa hết hạn 31/03 như quy định** — đơn nghỉ vào
-      tháng 6, tháng 10 vẫn được cộng thêm số ngày chuyển năm. Đang sửa ở đợt tới
-    + ⚠️ **Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép**, vẫn báo lỗi và dừng.
-      Tạo đơn mới và khai báo hộ thì đã có. Đang sửa ở đợt tới
-    + ⚠️ **Đơn nghỉ vắt qua Tết dương lịch mà có ứng phép sẽ bị đếm thiếu ngày.** Chỉ ảnh hưởng
-      đơn bắt đầu năm này kết thúc năm sau **và** đồng thời vượt hạn mức. Đang sửa ở đợt tới
+    + ⚠️→✅ **~~Ngày phép chuyển từ năm trước hiện chưa hết hạn 31/03 như quy định~~ — đã sửa, xem
+      entry mới nhất ở trên cùng.** Trước đây đơn nghỉ vào tháng 6, tháng 10 vẫn được cộng thêm
+      số ngày chuyển năm
+    + ⚠️→✅ **~~Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép~~ — đã sửa, xem entry
+      mới nhất ở trên cùng.** Trước đây vẫn báo lỗi và dừng (tạo đơn mới và khai báo hộ thì đã có)
+    + ⚠️→✅ **~~Đơn nghỉ vắt qua Tết dương lịch mà có ứng phép sẽ bị đếm thiếu ngày~~ — đã sửa,
+      xem entry mới nhất ở trên cùng.** Trước đây chỉ ảnh hưởng đơn bắt đầu năm này kết thúc năm
+      sau và đồng thời vượt hạn mức
 - 05/09/2026 Nghỉ phép - **Nghỉ phép bắt buộc: đăng ký, điều chỉnh ngày, và mẫu đơn riêng theo chức danh**
     + **Điều chỉnh ngày nghỉ phép bắt buộc sau khi đơn đã duyệt xong.** Đơn đã "Hoàn thành" nay có
       nút *"Điều chỉnh ngày NPBB"*. Bấm vào sẽ tạo **một đơn mới**, đi lại đủ ba bước duyệt như đơn
@@ -92,14 +164,15 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       chính mình. Đối chiếu mẫu giấy thật, nay sửa thành **Tổng Giám đốc Agribank**
     + **Thêm 2 mẫu đơn cá nhân** (đăng ký / điều chỉnh nghỉ phép bắt buộc, "Mẫu 1 TCNS") và
       **báo cáo tổng hợp Mẫu 18 (nội bộ) / Mẫu 19 (gửi TCNS)** cho phòng Tổng hợp
-    + ⚠️ **CHƯA DÙNG ĐƯỢC "Báo cáo NPBB" (Mẫu 18/19).** Báo cáo này đang **liệt kê nhầm gần như
-      toàn bộ nhân sự** kèm khoảng ngày không có thật. Nguyên nhân: mỗi lần nhập hạn mức phép bằng
-      file Excel, phần mềm ghi lại một dòng tổng hợp *"đã nghỉ bao nhiêu ngày"* mang cùng nhãn với
-      đơn nghỉ phép bắt buộc — mọi màn hình khác đều bỏ qua các dòng này, riêng báo cáo mới thì
-      chưa. **Đừng gửi file đó đi**, đang sửa ở đợt tới
-    + ⚠️ **Số "Đã nghỉ" hiển thị có thể lớn hơn thực tế** với người đã điều chỉnh ngày NPBB — đơn
-      cũ bị thay chưa được trả lại ngày phép. Số trên **tab Hạn mức phép vẫn đúng** (chỗ đó đếm
-      lại từ đầu chứ không lấy số đã cộng sẵn). Cũng đang sửa ở đợt tới
+    + ⚠️→✅ **~~CHƯA DÙNG ĐƯỢC "Báo cáo NPBB" (Mẫu 18/19)~~ — đã sửa, xem entry mới nhất ở trên.**
+      Báo cáo này từng **liệt kê nhầm gần như toàn bộ nhân sự** kèm khoảng ngày không có thật.
+      Nguyên nhân thật rộng hơn tưởng ban đầu: không phải riêng báo cáo NPBB bỏ sót lọc dòng tổng
+      hợp, mà là lỗi SQL khiến MỌI danh sách/báo cáo đơn nghỉ phép âm thầm bỏ sót đơn thật không
+      nhập lý do — xem chi tiết ở entry mới nhất
+    + ⚠️→✅ **~~Số "Đã nghỉ" hiển thị có thể lớn hơn thực tế~~ — đã sửa, xem entry mới nhất ở trên.**
+      Ghi chú lúc đó "*tab Hạn mức phép vẫn đúng*" **hoá ra chưa chính xác** — chính tab đó cũng bị
+      đếm trùng đơn gốc/đơn điều chỉnh trong lúc đơn điều chỉnh còn chờ duyệt, chỉ là bug khác với
+      bug ban đầu nghi ngờ. Đã sửa cả 2
     + ✅ **Màn hình danh sách đơn nghỉ phép nhanh hơn** — trước đây mỗi đơn hiện ra tốn 4 lượt hỏi
       cơ sở dữ liệu riêng, danh sách 1.000 đơn là hơn 4.000 lượt. Nay gộp lại còn 6 lượt cho cả
       danh sách, bất kể bao nhiêu đơn (đo được: 118 ms → 33 ms cho 991 đơn)
