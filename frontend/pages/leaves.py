@@ -363,6 +363,24 @@ async def leaves_page(open_id: Optional[int] = None):
     <style>
       .hl-col-active { background-color: rgba(220,38,38,0.10) !important; }
       body.hl-resizing, body.hl-resizing * { cursor: col-resize !important; user-select: none !important; }
+      /* Nháy đỏ liên tục dòng đơn gốc/đơn điều chỉnh khi mở từ link "Xem đơn
+         gốc"/"Xem đơn điều chỉnh" (tab mới, ?open_id=) — xem khối áp dụng
+         class này ở cuối leaves_page() (_row_elements_by_id).
+         Animate background-color KHÔNG ăn thua: dòng đã có sẵn bg-white/
+         bg-red-50 (Tailwind, ép !important — xem .hl-col-active cũng phải
+         !important mới đè được), mà !important lại KHÔNG hợp lệ bên trong
+         @keyframes (browser âm thầm bỏ qua theo đúng spec CSS Animations) —
+         verify thật bằng Playwright: animation-name lên đúng tên nhưng
+         background-color đứng yên suốt vòng lặp, không đổi màu 1 lần nào.
+         Đổi sang animate box-shadow inset (phủ lớp màu đỏ mờ lên trên) —
+         khác hẳn property background-color nên không đụng độ với bg-* của
+         Tailwind, không cần !important vẫn thắng vì Tailwind không set
+         box-shadow cho các dòng này. */
+      @keyframes leave-row-flash {
+        0%, 100% { box-shadow: inset 0 0 0 9999px rgba(220,38,38,0.35); }
+        50%      { box-shadow: inset 0 0 0 9999px rgba(220,38,38,0); }
+      }
+      .leave-row-flash { animation: leave-row-flash 1s ease-in-out infinite; position: relative; }
     </style>
     <script>
     (function() {
@@ -1312,6 +1330,12 @@ async def leaves_page(open_id: Optional[int] = None):
             _npbb_orig_opts = {}
             for _ol in my_leaves:
                 if _ol.get("leave_type") != "bat_buoc" or _ol.get("status") != "approved":
+                    continue
+                # Chỉ liệt kê đơn NPBB GỐC (adjusts_leave_id rỗng) — khớp đúng
+                # điều kiện hiện nút "Điều chỉnh ngày NPBB" trong chi tiết đơn
+                # (open_detail) và điều kiện chặn ở backend (npbb_adjust_leave):
+                # không cho điều chỉnh chồng lên 1 đơn vốn đã là đơn điều chỉnh.
+                if _ol.get("adjusts_leave_id"):
                     continue
                 _oadj = _ol.get("npbb_adjustment")
                 if _oadj and _oadj.get("status") not in ("rejected", "cancelled"):
@@ -2359,11 +2383,17 @@ async def leaves_page(open_id: Optional[int] = None):
                         # Điều chỉnh ngày NPBB — chỉ đơn bat_buoc đã "Hoàn thành", tạo
                         # đơn MỚI liên kết qua adjusts_leave_id (POST /npbb-adjust), KHÔNG
                         # ghi đè đơn gốc — xem npbb_adjust_leave() ở backend. Ẩn nếu đã có
-                        # đơn điều chỉnh đang xử lý (chưa bị từ chối/hủy).
+                        # đơn điều chỉnh đang xử lý (chưa bị từ chối/hủy), VÀ ẩn nếu chính
+                        # đơn đang xem ĐÃ LÀ 1 đơn điều chỉnh (adjusts_leave_id có giá trị)
+                        # — backend chặn điều chỉnh chồng lên điều chỉnh (chỉ 1 cấp cha-con,
+                        # báo cáo NPBB chỉ dò đúng 1 cấp). Muốn điều chỉnh tiếp phải rút đơn
+                        # điều chỉnh này trước (nút "Hủy đơn"/rút đơn), đơn gốc tự khôi phục
+                        # "Hoàn thành" rồi mới bấm "Điều chỉnh ngày NPBB" lại từ đơn gốc đó.
                         _pending_adj = leave.get("npbb_adjustment")
                         _has_active_adj = bool(_pending_adj) and _pending_adj.get("status") not in ("rejected", "cancelled")
                         if (is_owner and status == "approved" and leave.get("leave_type") == "bat_buoc"
-                                and not _has_active_adj and api.has_feature("leaves.create")):
+                                and not _has_active_adj and not leave.get("adjusts_leave_id")
+                                and api.has_feature("leaves.create")):
 
                             async def _open_npbb_adjust(lv=leave):
                                 await _load_resubmit_fields(lv, "Điều chỉnh ngày nghỉ phép bắt buộc",
@@ -2590,6 +2620,14 @@ async def leaves_page(open_id: Optional[int] = None):
         # trong khi thực ra rỗng (hoặc ngược lại, Xuất Excel/Phê duyệt lặng lẽ
         # dùng nhầm phạm vi khác vì tưởng chưa chọn gì).
         _all_sel_checkboxes: list = []
+
+        # Mọi dòng (ui.row) từng vẽ ra trong _draw_table, gộp theo leave id —
+        # dùng để "nháy đỏ" đúng dòng khi mở trang qua link "Xem đơn gốc"/"Xem
+        # đơn điều chỉnh" (?open_id=), xem khối áp dụng ở cuối leaves_page().
+        # Đặt Ở CUỐI hàm (không phải ngay chỗ đọc open_id ở trên) vì lúc đó
+        # các tab/bảng chứa dòng cần nháy CHƯA được vẽ (Python chạy tuần tự,
+        # _draw_table_paged của từng tab nằm ở những đoạn code phía sau).
+        _row_elements_by_id: dict = {}
 
         _approve_btn: list = []
 
@@ -3202,7 +3240,9 @@ async def leaves_page(open_id: Optional[int] = None):
                     )
                     _row_bg = "bg-red-50 border-red-300" if _needs_action else "bg-white border-gray-300"
 
-                    with ui.row().classes(f"hl-row w-full {_row_bg} border-b-2 border-gray-600 px-3 py-1.5 items-center gap-0 hover:bg-red-100"):
+                    _row_el = ui.row().classes(f"hl-row leave-row-id-{lv['id']} w-full {_row_bg} border-b-2 border-gray-600 px-3 py-1.5 items-center gap-0 hover:bg-red-100")
+                    _row_elements_by_id.setdefault(lv["id"], []).append(_row_el)
+                    with _row_el:
 
                         if show_checkbox:
 
@@ -3389,6 +3429,9 @@ async def leaves_page(open_id: Optional[int] = None):
             try:
                 _opened = await asyncio.to_thread(api.get, f"/api/leaves/{open_id}")
                 await open_detail(_opened)
+                # Nháy đỏ dòng tương ứng trong bảng phía sau drawer — áp dụng ở
+                # CUỐI leaves_page() (sau khi mọi tab/bảng đã vẽ xong), xem khối
+                # "_row_elements_by_id" gần cuối hàm.
             except Exception as e:
                 _handle_api_error(e)
 
@@ -6283,6 +6326,35 @@ async def leaves_page(open_id: Optional[int] = None):
             _focus_lv = next((lv for lv in pending_leaves if lv.get("id") == _focus_id), None)
             if _focus_lv:
                 await open_detail(_focus_lv)
+
+        # ── Nháy đỏ dòng đơn gốc/đơn điều chỉnh khi ĐÓNG drawer chi tiết vừa mở
+        # từ link ?open_id= ────────────────────────────────────────────────
+        # Không nháy ngay lúc mở — drawer đang che gần hết chú ý, nháy lúc đó
+        # vô ích. Thay vào đó bắt sự kiện đóng drawer (detail_drawer chuyển
+        # value → False, dù đóng bằng cách nào: bấm nền mờ, phím Esc, hay 1
+        # trong hơn chục chỗ gọi .hide() rải rác) — đúng lúc người dùng nhìn
+        # lại bảng phía sau, chỉ ngay dòng vừa xem cho họ biết đó là dòng nào.
+        # Chỉ bắn ĐÚNG 1 LẦN cho đơn mở từ open_id — KHÔNG áp dụng cho mọi lần
+        # mở/đóng drawer khác trong phiên xem trang (click dòng khác, duyệt...).
+        if open_id:
+            _flash_pending_id = [open_id]
+
+            def _flash_on_drawer_close(e):
+                if e.value or _flash_pending_id[0] is None:
+                    return
+                _fid = _flash_pending_id[0]
+                _flash_pending_id[0] = None
+                _flash_rows = _row_elements_by_id.get(_fid, [])
+                for _fr in _flash_rows:
+                    _fr.classes(add="leave-row-flash")
+                    _fr.on("click", lambda _r=_fr: _r.classes(remove="leave-row-flash"))
+                if _flash_rows:
+                    ui.run_javascript(
+                        f'var _e = getHtmlElement({_flash_rows[0].id}); '
+                        f'if (_e) _e.scrollIntoView({{behavior: "smooth", block: "center"}});'
+                    )
+
+            detail_drawer.on_value_change(_flash_on_drawer_close)
 
 
 

@@ -14268,6 +14268,63 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">124</span>
+      <span class="card-title">Nghỉ phép — Điều chỉnh NPBB: chặn xếp chuỗi nhiều cấp, đơn gốc tự khôi phục khi rút đơn điều chỉnh (2026-09-06)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Phát hiện</span> Điều chỉnh 1 đơn vốn đã là đơn điều chỉnh làm nhân sự biến mất khỏi báo cáo NPBB</div>
+      <p><code>npbb_adjust_leave</code> trước đây không chặn việc gọi lại chính nó trên 1 đơn mà bản
+        thân đã là đơn điều chỉnh (<code>adjusts_leave_id IS NOT NULL</code>) — miễn đơn đó đang
+        "Hoàn thành". Tạo được chuỗi: gốc → điều chỉnh 1 (đã duyệt) → điều chỉnh 2 (đang xử lý). Khi
+        điều chỉnh 2 duyệt xong, điều chỉnh 1 tự chuyển "Đã hủy" (<code>_cancel_adjusted_original</code>)
+        — nhưng <code>export_npbb_batch</code> (Báo cáo tổng hợp → NPBB) chỉ dò ĐÚNG 1 CẤP cha-con
+        (<code>WHERE adjusts_leave_id = <đơn gốc>.id AND status='approved'</code>) để tìm "đơn điều
+        chỉnh còn hiệu lực" — điều chỉnh 2 (cấp cháu, trỏ về điều chỉnh 1 chứ không phải đơn gốc) lọt
+        khỏi tầm dò, và điều kiện hiện dòng của đơn gốc (<code>status='approved' OR EXISTS(điều chỉnh
+        approved)</code>) cũng cùng lúc sai luôn — nhân sự đó <b>biến mất hoàn toàn</b> khỏi báo cáo.</p>
+      <p>Verify thật: tạo điều chỉnh cấp 2 qua API thật cho 1 đơn NPBB đang có sẵn 1 đơn điều chỉnh
+        đã duyệt, mô phỏng duyệt xong (điều chỉnh 1 → "Đã hủy", điều chỉnh 2 → "Hoàn thành") — nhân
+        sự đó biến mất khỏi bảng Excel Mẫu 19 xuất ra thật (trước đó có 4 dòng, sau còn 3, đúng thiếu
+        1 người). Dọn sạch, khôi phục lại đúng dữ liệu gốc.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Luôn chỉ 1 cấp: chặn điều chỉnh chồng, đơn gốc tự khôi phục khi rút đơn điều chỉnh</div>
+      <p>Thay vì sửa <code>export_npbb_batch</code> để dò được nhiều cấp (phức tạp, dễ phát sinh
+        thêm lỗi ở những chỗ khác cũng giả định 1 cấp), chốt lại đúng theo yêu cầu thực tế: <b>mỗi
+        đơn NPBB gốc chỉ có ĐÚNG 1 đơn điều chỉnh hiệu lực tại 1 thời điểm</b>, muốn điều chỉnh lại
+        thì phải rút/hủy đơn điều chỉnh hiện tại trước (đơn gốc tự khôi phục "Hoàn thành"), rồi mới
+        lập đơn điều chỉnh MỚI từ đúng đơn gốc đó — không giới hạn số lần, miễn làm tuần tự.</p>
+      <ul>
+        <li><code>npbb_adjust_leave</code>: thêm chặn <code>orig["adjusts_leave_id"] is not None</code>
+          → 400 kèm hướng dẫn rõ ("rút/hủy đơn điều chỉnh này trước").</li>
+        <li>Hàm mới <code>_restore_adjusted_original</code> (đối xứng <code>_cancel_adjusted_original</code>)
+          — khôi phục đơn gốc CANCELLED → APPROVED, có log riêng
+          (<code>npbb_adjustment_recalled</code>).</li>
+        <li>Gọi từ 2 nơi đơn điều chỉnh đã duyệt có thể bị đưa về "Đã hủy": <code>_apply_status_transition</code>
+          (dùng bởi <code>cancel_leave</code> — đường "Hủy đơn" trực tiếp, ai có quyền
+          <code>leaves.cancel</code>) và <code>approve_recall</code> (đường "Rút đơn" 2 bước cần
+          Phòng Tổng hợp xác nhận). Thêm tham số <code>actor_id</code> cho
+          <code>_apply_status_transition</code> để log đúng người thao tác thay vì mặc định chủ đơn.</li>
+        <li>Frontend: ẩn nút "Điều chỉnh ngày NPBB" trong chi tiết đơn khi chính đơn đó đã là đơn
+          điều chỉnh (<code>leave.get("adjusts_leave_id")</code>); ô tìm-chọn đơn ở dialog "Tạo đơn"
+          (loại "Điều chỉnh nghỉ phép bắt buộc") cũng lọc bỏ, khớp đúng điều kiện backend.</li>
+      </ul>
+
+      <div class="note">Verify thật qua API (không đoán từ đọc code): thử điều chỉnh lên chính đơn
+        điều chỉnh → 400 đúng thông báo mới; thử điều chỉnh lại đơn gốc khi đơn điều chỉnh còn hiệu
+        lực → vẫn đúng chặn cũ ("Chỉ điều chỉnh được đơn đã hoàn thành"); rút đơn điều chỉnh qua CẢ
+        2 đường (Hủy đơn trực tiếp, Rút đơn 2 bước) → đơn gốc đều khôi phục đúng "Hoàn thành", log
+        hành động ghi đúng người thao tác; điều chỉnh lại đơn gốc sau khi khôi phục → thành công,
+        đơn mới trỏ đúng về đơn gốc (không phải đơn điều chỉnh vừa bị rút). Dropdown "Tạo đơn" xác
+        nhận đúng: trống + hiện dòng hướng dẫn khi không còn đơn gốc nào đủ điều kiện. Dọn sạch dữ
+        liệu test sau mỗi bước, khôi phục đúng nguyên trạng ban đầu. 135 test liên quan pass đủ.</div>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-06</footer>
 </div>
 </body>

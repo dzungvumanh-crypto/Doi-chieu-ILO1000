@@ -77,6 +77,7 @@ ACTION_LABELS = {
     "resubmit":       ("Nộp lại",            "orange"),
     "npbb_adjust":    ("Điều chỉnh ngày NPBB", "orange"),
     "npbb_adjusted_cancel": ("Đơn gốc bị thay bởi đơn điều chỉnh", "grey"),
+    "npbb_adjustment_recalled": ("Đơn gốc được khôi phục do đơn điều chỉnh bị rút/hủy", "grey"),
     "cancel":         ("Hủy đơn",            "grey"),
     "direct_create":  ("Khai báo hộ",        "purple"),
     "recall_request": ("Yêu cầu rút đơn",    "orange"),
@@ -459,6 +460,7 @@ def _apply_status_transition(
     db: sqlite3.Connection,
     days: Optional[int] = None,
     is_new: bool = False,
+    actor_id: Optional[int] = None,
 ):
     """Cập nhật status và điều chỉnh used_leave_days (idempotent).
 
@@ -466,19 +468,27 @@ def _apply_status_transition(
     truyền vào phải là status THẬT sự đang có trong DB (để khoá lạc quan khớp),
     còn is_new mới là cờ báo "coi như mới approved" để cộng used_leave_days dù
     old_status == new_status.
+
+    actor_id: người thực hiện thao tác gây ra chuyển trạng thái này — chỉ cần
+    khi transition approved→cancelled có thể là đơn điều chỉnh NPBB (để ghi
+    đúng actor cho log khôi phục đơn gốc, xem _restore_adjusted_original).
+    Mặc định lấy staff_id (chủ đơn) nếu người gọi không truyền — đủ dùng cho
+    các luồng tự huỷ, chỉ cancel_leave (admin/GĐ huỷ hộ) cần truyền rõ.
     """
     if days is None:
-        rec = db.execute("SELECT spread_dates, leave_type, other_deduct_quota FROM leave_records WHERE id=?", (leave_id,)).fetchone()
+        rec = db.execute("SELECT spread_dates, leave_type, other_deduct_quota, adjusts_leave_id FROM leave_records WHERE id=?", (leave_id,)).fetchone()
         if rec and rec["spread_dates"]:
             days = len(json.loads(rec["spread_dates"]))
         else:
             days = calculate_leave_days(start, end, lich)
         leave_type = rec["leave_type"] if rec else None
         other_deduct_quota = rec["other_deduct_quota"] if rec else True
+        adjusts_leave_id = rec["adjusts_leave_id"] if rec else None
     else:
-        rec2 = db.execute("SELECT leave_type, other_deduct_quota FROM leave_records WHERE id=?", (leave_id,)).fetchone()
+        rec2 = db.execute("SELECT leave_type, other_deduct_quota, adjusts_leave_id FROM leave_records WHERE id=?", (leave_id,)).fetchone()
         leave_type = rec2["leave_type"] if rec2 else None
         other_deduct_quota = rec2["other_deduct_quota"] if rec2 else True
+        adjusts_leave_id = rec2["adjusts_leave_id"] if rec2 else None
 
     # Khoá lạc quan: chỉ chuyển trạng thái nếu status hiện tại trong DB đúng
     # bằng old_status — chặn 2 request duyệt trùng cùng lúc (double-click, 2
@@ -489,6 +499,13 @@ def _apply_status_transition(
     )
     if cur.rowcount == 0:
         raise HTTPException(409, "Đơn đã được xử lý bởi một yêu cầu khác, vui lòng tải lại trang")
+
+    # Đơn điều chỉnh NPBB đã duyệt bị huỷ thẳng (vd admin/GĐ dùng cancel_leave
+    # thay vì luồng Rút đơn) — đơn gốc từng bị _cancel_adjusted_original
+    # chuyển "Đã hủy" lúc đơn điều chỉnh này duyệt xong phải được khôi phục
+    # lại, nếu không sẽ kẹt vĩnh viễn không điều chỉnh lại được nữa.
+    if old_status == LeaveStatus.APPROVED and new_status == LeaveStatus.CANCELLED and adjusts_leave_id:
+        _restore_adjusted_original(adjusts_leave_id, actor_id or staff_id, db)
 
     # Chỉ điều chỉnh used_leave_days khi leave_type xác định và không miễn quota
     if leave_type is not None and not _is_no_quota_row(leave_type, other_deduct_quota):
@@ -532,6 +549,27 @@ def _cancel_adjusted_original(orig_leave_id: int, actor_id: int, db: sqlite3.Con
     )
     _log_action(db, orig_leave_id, actor_id, "npbb_adjusted_cancel", None,
                 LeaveStatus.APPROVED, LeaveStatus.CANCELLED)
+
+
+def _restore_adjusted_original(orig_leave_id: int, actor_id: int, db: sqlite3.Connection) -> None:
+    """Đối xứng với _cancel_adjusted_original — khôi phục đơn NPBB gốc về lại
+    "Hoàn thành" khi đơn điều chỉnh (đã duyệt) của nó bị rút/hủy sau đó
+    (approve_recall, hoặc hủy thẳng qua cancel_leave/_apply_status_transition).
+
+    Không có bước này, đơn gốc kẹt "Đã hủy" vĩnh viễn — npbb_adjust_leave chỉ
+    nhận điều chỉnh đơn đang "Hoàn thành" nên sẽ không bao giờ điều chỉnh lại
+    được nữa dù đơn điều chỉnh đã bị rút. Chỉ khôi phục khi đơn gốc ĐANG đúng
+    "Đã hủy" (khoá điều kiện, tránh khôi phục nhầm nếu đơn gốc đã bị xử lý
+    khác đi vì lý do gì đó không phải do đơn điều chỉnh này)."""
+    orig = db.execute("SELECT status FROM leave_records WHERE id=?", (orig_leave_id,)).fetchone()
+    if not orig or orig["status"] != LeaveStatus.CANCELLED:
+        return
+    db.execute(
+        "UPDATE leave_records SET status=?, updated_at=? WHERE id=?",
+        (LeaveStatus.APPROVED, str(_vn_now()), orig_leave_id),
+    )
+    _log_action(db, orig_leave_id, actor_id, "npbb_adjustment_recalled", None,
+                LeaveStatus.CANCELLED, LeaveStatus.APPROVED)
 
 
 def _validate_ksv(ksv_id: Optional[int], current: dict, db: sqlite3.Connection) -> dict:
@@ -928,6 +966,21 @@ def npbb_adjust_leave(
         raise HTTPException(403, "Chỉ chủ nhân đơn mới được điều chỉnh")
     if orig["leave_type"] != "bat_buoc":
         raise HTTPException(400, "Chỉ đơn nghỉ phép bắt buộc mới điều chỉnh được theo cách này")
+    # Không cho điều chỉnh CHỒNG lên 1 đơn điều chỉnh khác — mọi lần điều
+    # chỉnh luôn trỏ thẳng về đúng 1 đơn NPBB GỐC duy nhất (adjusts_leave_id
+    # IS NULL), không xếp chuỗi nhiều cấp. Muốn điều chỉnh tiếp thì phải rút/
+    # huỷ đơn điều chỉnh hiện tại trước — lúc đó đơn gốc tự khôi phục lại
+    # "Hoàn thành" (xem _restore_adjusted_original) và điều chỉnh lại được
+    # bình thường. Lý do: báo cáo NPBB (export_npbb_batch) chỉ dò đúng 1 cấp
+    # cha-con để tìm "đơn điều chỉnh mới nhất còn hiệu lực" — xếp chuỗi nhiều
+    # cấp sẽ khiến nhân sự biến mất khỏi báo cáo khi cấp giữa bị thay thế.
+    if orig["adjusts_leave_id"] is not None:
+        raise HTTPException(
+            400,
+            "Đây là đơn điều chỉnh — không thể điều chỉnh tiếp lên đơn điều chỉnh. "
+            "Vui lòng rút/hủy đơn điều chỉnh này trước, đơn gốc sẽ tự khôi phục "
+            "\"Hoàn thành\" để điều chỉnh lại.",
+        )
     if orig["status"] != LeaveStatus.APPROVED:
         raise HTTPException(400, "Chỉ điều chỉnh được đơn đã hoàn thành")
     _active = db.execute(
@@ -1884,7 +1937,8 @@ def cancel_leave(
     start = date.fromisoformat(leave["start_date"])
     end   = date.fromisoformat(leave["end_date"])
     _lich = _load_lich(db, start, end)
-    _apply_status_transition(leave_id, old, LeaveStatus.CANCELLED, start, end, leave["staff_id"], _lich, db)
+    _apply_status_transition(leave_id, old, LeaveStatus.CANCELLED, start, end, leave["staff_id"], _lich, db,
+                             actor_id=current["id"])
     _log_action(db, leave_id, current["id"], "cancel", None, old, LeaveStatus.CANCELLED)
     db.commit()
     return _leave_to_out(leave_id, db)
@@ -4387,6 +4441,16 @@ def approve_recall(
     )
     if cur.rowcount == 0:
         raise HTTPException(409, "Đơn đã được xử lý bởi một yêu cầu khác, vui lòng tải lại trang")
+    # Đơn điều chỉnh NPBB bị rút — đơn gốc từng bị _cancel_adjusted_original
+    # chuyển "Đã hủy" lúc đơn điều chỉnh này duyệt xong phải được khôi phục
+    # lại "Hoàn thành", nếu không sẽ kẹt vĩnh viễn không điều chỉnh lại được
+    # nữa (npbb_adjust_leave chỉ nhận điều chỉnh đơn đang "Hoàn thành"). Kiểm
+    # tra thẳng adjusts_leave_id — không cần so `old` vì luồng 2 bước của
+    # nhân viên thường có old='pending_tong_hop' (đã đổi từ request_recall)
+    # chứ không phải 'approved' lúc tới ĐÂY, dù bản chất vẫn là rút 1 đơn đã
+    # từng "Hoàn thành".
+    if leave["adjusts_leave_id"]:
+        _restore_adjusted_original(leave["adjusts_leave_id"], current["id"], db)
     # Trừ used_leave_days khi xác nhận rút (approved → cancelled) — trừ thai_san/bao_hiem
     # vì loại này chưa từng được cộng vào used_leave_days lúc duyệt.
     if not _is_no_quota_row(leave["leave_type"], leave["other_deduct_quota"]):

@@ -4,6 +4,24 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 06/09/2026 Nghỉ phép - **Điều chỉnh NPBB: chặn xếp chuỗi nhiều cấp, đơn gốc tự khôi phục khi rút đơn điều chỉnh**
+    + Phát hiện qua rà soát thực tế (tạo đơn điều chỉnh cấp 2 thật rồi kiểm tra báo cáo): điều chỉnh
+      1 đơn *vốn đã là đơn điều chỉnh* (chuỗi gốc → điều chỉnh 1 → điều chỉnh 2) khiến nhân sự đó
+      **biến mất hoàn toàn khỏi báo cáo NPBB** ở Báo cáo tổng hợp — báo cáo chỉ dò đúng 1 cấp cha-con
+      để tìm đơn điều chỉnh còn hiệu lực, không theo được chuỗi 2 cấp trở lên
+    + ✅ **Chặn hẳn điều chỉnh chồng lên điều chỉnh** — mọi đơn điều chỉnh giờ luôn trỏ thẳng về đúng
+      1 đơn NPBB GỐC duy nhất, không xếp chuỗi. Nút "Điều chỉnh ngày NPBB" ẩn trên chính đơn điều
+      chỉnh; ô tìm-chọn đơn ở dialog "Tạo đơn" cũng lọc bỏ, chỉ liệt kê đúng đơn gốc
+    + ✅ **Đơn gốc tự khôi phục "Hoàn thành"** khi đơn điều chỉnh (đã duyệt) bị rút/hủy — trước đây
+      đơn gốc kẹt "Đã hủy" vĩnh viễn, không thể điều chỉnh lại được nữa dù đơn điều chỉnh đã bị rút.
+      Áp dụng cho cả 2 đường rút đơn: "Hủy đơn" trực tiếp lẫn "Rút đơn" cần Phòng Tổng hợp xác nhận
+    + Từ nay: muốn điều chỉnh lại 1 đơn NPBB đã có đơn điều chỉnh, phải rút/hủy đơn điều chỉnh hiện
+      tại trước — đơn gốc tự về "Hoàn thành", làm điều chỉnh mới lại từ đơn gốc đó. Số lần điều chỉnh
+      không giới hạn, miễn tuần tự từng lần một
+    + Verify thật qua API (tạo đơn điều chỉnh cấp 2, rút đơn qua cả 2 đường, dọn sạch sau khi xong):
+      chặn đúng lúc điều chỉnh chồng lên điều chỉnh; đơn gốc khôi phục đúng sau khi rút; điều chỉnh
+      lại thành công sau khi khôi phục. 135 test liên quan pass đủ
+
 - 06/09/2026 Nghỉ phép - **Loại nghỉ "Khác": tự chọn có tính vào hạn mức phép năm hay không**
     + Trước đây `leave_type="other"` (Khác) LUÔN trừ vào hạn mức phép năm giống hệt "Nghỉ phép năm"
       — không đúng cho mọi lý do "Khác" (hộp lý do tự do, có thể là loại nghỉ theo luật lao động
