@@ -344,6 +344,7 @@ Truy cập:
     GDV bấm **Mượn lại** (xin → HKV duyệt), hoặc HKV/KSV bấm **Chuyển trả GDV** ở panel lịch sử để đẩy thẳng
     `đã xác nhận → đang mượn` (bắt buộc nhập lý do, feature `handovers.return_entry`, chặn cứng `chuyen_vien`).
     Cả hai đường đều kết thúc bằng GDV **Bàn giao lại** → HKV xác nhận
+  - *Cột ngày nghỉ*: T7/CN **và ngày nghỉ lễ** tô vàng ở dòng tiêu đề lẫn ô trống. Ngày lễ do backend trả về (`holidays` trong `GET /api/handovers/grid`, lấy qua `tai_lich()` — hợp `public_holidays` với `duty_special_days`), không tính lại ở frontend. Ô **đã có số** vẫn giữ màu theo trạng thái, vì chứng từ phát sinh đúng ngày lễ là chuyện có thật
   - *Cán bộ chuyển phòng*: chứng từ hiển thị theo phòng tại **ngày giao dịch** — trước ngày chuyển ở phòng cũ, từ ngày chuyển ở phòng mới (lịch sử đổi phòng lưu ở bảng `staff_department_history`). Nhập bù chứng từ tháng cũ cho cán bộ đã chuyển vẫn vào đúng phòng cũ; do giới hạn phạm vi phòng ở trên, việc nhập bù này do người hậu kiểm thực hiện
 - **Gom tập tự động**:
   - Max 350 tờ/tập
@@ -375,7 +376,15 @@ Truy cập:
   tách nhóm CN còn hoạt động với nhóm đã đóng BIC. Mặc định chỉ **thêm mới + cập nhật**; tích ô
   *"Xoá CN không có trong file"* nếu muốn đồng bộ hoàn toàn theo file
 - **Xuất Excel** theo đúng bộ lọc đang xem; file xuất ra nhập lại được (cùng định dạng file gốc)
-- Phân quyền riêng theo nhóm (`menu.ttqt_branches` + `ttqt_branches.create/edit/delete/import/export`)
+- **Lịch sử sửa đổi** (nút 🕘 ở cuối mỗi dòng): ngày giờ — người sửa — sửa mục nào — giá trị cũ →
+  giá trị mới. Ghi cho cả sửa tay lẫn nhập Excel, **mỗi trường một dòng**; nhập lại đúng file cũ
+  không sinh dòng nào vì không có gì đổi. Lịch sử giữ lại cả khi chi nhánh bị xoá, và theo được
+  sang bản ghi mới nếu chi nhánh đó được nhập lại cùng mã CN
+- Phân quyền riêng theo nhóm (`menu.ttqt_branches` +
+  `ttqt_branches.create/edit/delete/import/export/history`)
+
+  > Mã `ttqt_branches.history` là mã mới — **chưa nhóm nào được tick sẵn**. Vào
+  > **Phân quyền theo nhóm → Danh sách CN TTQT** bật lên thì nút Lịch sử mới hiện.
 
 ### Module Lịch trực
 - Xếp lịch trực tự động cho phòng Thanh toán
