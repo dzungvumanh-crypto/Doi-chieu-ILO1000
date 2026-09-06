@@ -1481,6 +1481,98 @@ def _ensure_indexes():
         # xoá — đúng tinh thần "audit trail không tính lại từ file gốc" đã ghi
         # ở đầu file này.
         "ALTER TABLE doi_chieu_citad_history ADD COLUMN session_id INTEGER REFERENCES doi_chieu_citad_sessions(id) ON DELETE SET NULL",
+
+        # ── Chấm công tự động: "hop_cong_tac" (Họp/Công tác) — 2026-09-06 ──────
+        # Review PR #77 (Người 1): 2 trigger sync attendances ở trên (tạo từ PR
+        # #22) map leave_type→ký hiệu qua CASE cứng chỉ liệt kê thai_san/
+        # bao_hiem/sick, mọi giá trị khác (kể cả "hop_cong_tac" — leave_type
+        # thêm SAU PR #22, lúc viết 2 trigger này chưa tồn tại) rơi vào ELSE
+        # 'P' = "Nghỉ phép" work_value 0.0 — nhân viên ACCT đi họp/công tác bị
+        # chấm công y hệt nghỉ phép không lương, sai hẳn bản chất (đang làm
+        # việc, chỉ không có mặt tại trụ sở). attendance_symbols đã có sẵn "CT"
+        # = "Công tác" work_value 1.0 nhưng chưa trigger nào dùng tới. Thêm
+        # nhánh WHEN 'hop_cong_tac' THEN 'CT' vào CẢ 2 trigger, cả chỗ chọn
+        # symbol lẫn chỗ tra work_value theo symbol đó (4 điểm sửa). "khong_luong"
+        # CỐ Ý vẫn rơi vào ELSE 'P' — 0.0 công là đúng bản chất (nghỉ không
+        # lương), chỉ có nhãn "P"="Nghỉ phép" là hơi rộng nghĩa, để nguyên theo
+        # ý kiến review (Phòng Tổng hợp quyết nếu muốn tách nhãn riêng sau này).
+        # DROP trước để migration chạy lại trên DB đã có trigger cũ (CREATE
+        # TRIGGER IF NOT EXISTS bỏ qua nếu trùng tên) — đúng khuôn mẫu đã dùng
+        # cho mọi lần sửa 2 trigger này trước đây (xem các khối comment phía trên).
+        "DROP TRIGGER IF EXISTS trg_leave_approved_sync_attendance",
+        """CREATE TRIGGER IF NOT EXISTS trg_leave_approved_sync_attendance
+            AFTER UPDATE OF status ON leave_records
+            WHEN NEW.status = 'approved' AND OLD.status != 'approved'
+                 AND NOT (NEW.leave_type = 'bat_buoc' AND NEW.reason IS NOT NULL
+                          AND (NEW.reason LIKE '[Import]%' OR NEW.reason LIKE '[Điều chỉnh]%'))
+                 AND EXISTS (SELECT 1 FROM user_tttt u JOIN departments d ON d.id = u.department_id
+                             WHERE u.id = NEW.staff_id AND d.code = 'ACCT' AND u.is_active = 1)
+            BEGIN
+                INSERT INTO attendances (staff_id, date, symbol, work_value, status, source_leave_id, created_at, updated_at)
+                WITH RECURSIVE d(day) AS (
+                    SELECT NEW.start_date
+                    UNION ALL
+                    SELECT date(day, '+1 day') FROM d WHERE day < NEW.end_date
+                )
+                SELECT NEW.staff_id, day,
+                       CASE NEW.leave_type WHEN 'thai_san' THEN 'T' WHEN 'bao_hiem' THEN 'T'
+                            WHEN 'sick' THEN 'O' WHEN 'hop_cong_tac' THEN 'CT' ELSE 'P' END,
+                       (SELECT work_value FROM attendance_symbols WHERE symbol =
+                           CASE NEW.leave_type WHEN 'thai_san' THEN 'T' WHEN 'bao_hiem' THEN 'T'
+                                WHEN 'sick' THEN 'O' WHEN 'hop_cong_tac' THEN 'CT' ELSE 'P' END),
+                       'auto', NEW.id, datetime('now','+7 hours'), datetime('now','+7 hours')
+                FROM d
+                WHERE (
+                    (NEW.spread_dates IS NOT NULL AND day IN (SELECT value FROM json_each(NEW.spread_dates)))
+                    OR
+                    (NEW.spread_dates IS NULL AND strftime('%w', day) NOT IN ('0','6')
+                         AND day NOT IN (SELECT date FROM public_holidays))
+                )
+                ON CONFLICT(staff_id, date) DO UPDATE SET
+                    symbol = excluded.symbol,
+                    work_value = excluded.work_value,
+                    status = 'auto',
+                    source_leave_id = excluded.source_leave_id,
+                    updated_at = datetime('now','+7 hours')
+                WHERE attendances.status = 'auto';
+            END""",
+        "DROP TRIGGER IF EXISTS trg_leave_direct_insert_sync_attendance",
+        """CREATE TRIGGER IF NOT EXISTS trg_leave_direct_insert_sync_attendance
+            AFTER INSERT ON leave_records
+            WHEN NEW.status = 'approved'
+                 AND NOT (NEW.leave_type = 'bat_buoc' AND NEW.reason IS NOT NULL
+                          AND (NEW.reason LIKE '[Import]%' OR NEW.reason LIKE '[Điều chỉnh]%'))
+                 AND EXISTS (SELECT 1 FROM user_tttt u JOIN departments d ON d.id = u.department_id
+                             WHERE u.id = NEW.staff_id AND d.code = 'ACCT' AND u.is_active = 1)
+            BEGIN
+                INSERT INTO attendances (staff_id, date, symbol, work_value, status, source_leave_id, created_at, updated_at)
+                WITH RECURSIVE d(day) AS (
+                    SELECT NEW.start_date
+                    UNION ALL
+                    SELECT date(day, '+1 day') FROM d WHERE day < NEW.end_date
+                )
+                SELECT NEW.staff_id, day,
+                       CASE NEW.leave_type WHEN 'thai_san' THEN 'T' WHEN 'bao_hiem' THEN 'T'
+                            WHEN 'sick' THEN 'O' WHEN 'hop_cong_tac' THEN 'CT' ELSE 'P' END,
+                       (SELECT work_value FROM attendance_symbols WHERE symbol =
+                           CASE NEW.leave_type WHEN 'thai_san' THEN 'T' WHEN 'bao_hiem' THEN 'T'
+                                WHEN 'sick' THEN 'O' WHEN 'hop_cong_tac' THEN 'CT' ELSE 'P' END),
+                       'auto', NEW.id, datetime('now','+7 hours'), datetime('now','+7 hours')
+                FROM d
+                WHERE (
+                    (NEW.spread_dates IS NOT NULL AND day IN (SELECT value FROM json_each(NEW.spread_dates)))
+                    OR
+                    (NEW.spread_dates IS NULL AND strftime('%w', day) NOT IN ('0','6')
+                         AND day NOT IN (SELECT date FROM public_holidays))
+                )
+                ON CONFLICT(staff_id, date) DO UPDATE SET
+                    symbol = excluded.symbol,
+                    work_value = excluded.work_value,
+                    status = 'auto',
+                    source_leave_id = excluded.source_leave_id,
+                    updated_at = datetime('now','+7 hours')
+                WHERE attendances.status = 'auto';
+            END""",
     ]
     _mig_log = logging.getLogger(__name__)
 

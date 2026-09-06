@@ -5472,13 +5472,6 @@ async def leaves_page(open_id: Optional[int] = None):
                                 params["month"] = _m
                             fname = (f"bao_cao_npbb_mau{mau}_{_m:02d}_{s_month_year_sel.value}.docx" if _m
                                      else f"bao_cao_npbb_mau{mau}_{s_month_year_sel.value}.docx")
-                            try:
-                                pdf_content = await asyncio.to_thread(
-                                    api.download, "/api/leaves/export/npbb-batch",
-                                    {**params, "preview": "true"}, 160)
-                            except Exception as e:
-                                _handle_api_error(e)
-                                return
 
                             async def _tai_ban_word():
                                 try:
@@ -5487,6 +5480,23 @@ async def leaves_page(open_id: Optional[int] = None):
                                     ui.download(content, fname)
                                 except Exception as e:
                                     _handle_api_error(e)
+
+                            try:
+                                pdf_content = await asyncio.to_thread(
+                                    api.download, "/api/leaves/export/npbb-batch",
+                                    {**params, "preview": "true"}, 160)
+                            except Exception as e:
+                                if _handle_api_error(e):
+                                    return
+                                # Máy chủ không chuyển được PDF (chưa cài Word / Word treo) —
+                                # báo cáo NPBB trước PR này là .docx thuần, không phụ thuộc
+                                # Word chút nào; không được để việc thêm bản xem trước làm
+                                # mất luôn đường tải gốc — tải thẳng bản .docx như trước,
+                                # giống hệt _download_pdf khi PDF hỏng.
+                                ui.notify(f"Không dựng được bản xem trước — đang tải thẳng file .docx. ({e})",
+                                          type="warning", timeout=6000)
+                                await _tai_ban_word()
+                                return
 
                             mau_label = "Mẫu 19 — gửi TCNS" if mau == "19" else "Mẫu 18 — nội bộ"
                             _open_pdf_preview(pdf_content, fname,

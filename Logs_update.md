@@ -4,6 +4,28 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 06/09/2026 Nghỉ phép - **Sửa 5 lỗi từ review thật của Người 1 trên PR #77**
+    + ✅ **"Họp/Công tác" chấm công tự động thành 0 công thay vì đủ công** — 2 trigger đồng bộ
+      `attendances` (tạo từ PR #22, trước khi loại nghỉ `hop_cong_tac` ra đời) rơi đúng loại này vào
+      `ELSE 'P'` (0 công) thay vì dùng ký hiệu `CT` = "Công tác" (1 công) đã có sẵn trong
+      `attendance_symbols` nhưng chưa trigger nào dùng. Thêm migration cho cả 2 trigger. Xem
+      [Implementation Notes #122](docs/Implementation-notes.html)
+    + ✅ **Ký hiệu `H` đụng độ giữa báo cáo chấm công mới và hệ chấm công thật** — đổi
+      `hop_cong_tac` sang dùng chung `CT` với hệ chấm công thật thay vì tự đặt `H` (đã có nghĩa khác
+      là "Đi học"). Xem #122
+    + ✅ **Báo cáo NPBB mất hẳn đường tải nếu bản xem trước PDF lỗi** (Word chưa cài/treo trên máy
+      chủ) — trước đây dừng luôn ở bước báo lỗi; giờ tự động tải thẳng file .docx gốc (không phụ
+      thuộc Word) làm phương án dự phòng, khớp đúng cách phiếu nghỉ phép đã xử lý PDF hỏng. Xem #122
+    + ✅ **Cột "Còn lại" trong báo cáo tổng hợp năm ra số âm sau 31/03** — phép chuyển kỳ hết hạn bị
+      trừ về 0 nhưng số ngày đã nghỉ (gồm cả phần từng dùng phép chuyển kỳ) không trừ theo, có thể ra
+      âm. Kẹp về 0, khớp đúng cách 2 màn hình khác đang làm. Xem #122
+    + ✅ **Mốc hết hạn 31/03 tính theo ngày bấm nộp đơn thay vì ngày nghỉ thật** — fix đợt trước
+      (#121) bỏ hard-code nhưng lại mặc định dùng "hôm nay" (ngày nộp đơn); quy định thật nói về
+      ngày NGHỈ phải rơi trước 31/03, không phải ngày nộp. Đổi sang truyền đúng ngày bắt đầu nghỉ.
+      Xem #122
+    + *Toàn bộ 5 lỗi verify bằng dữ liệu thật (không đoán từ đọc code) trước/sau cho từng lỗi, dọn
+      sạch dữ liệu test sau khi xong — xem #122*
+
 - 05/09/2026 Nghỉ phép - **Sửa hết 5 cảnh báo còn treo của 2 đợt trước + thêm loạt báo cáo/phiếu in + rà soát tìm thêm 2 lỗi quyền/khoá**
     + ✅ **Đã sửa "Báo cáo NPBB liệt kê nhầm gần như toàn bộ nhân sự"** (cảnh báo ở mục dưới) — nguyên
       nhân là 1 lỗi SQL rộng hơn nhiều so với tưởng ban đầu: mọi danh sách/báo cáo đơn nghỉ phép đều

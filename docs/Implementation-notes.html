@@ -14099,7 +14099,124 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
-  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-05</footer>
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">122</span>
+      <span class="card-title">Nghỉ phép — 5 lỗi từ review PR #77 (Người 1): ký hiệu chấm công đụng độ, báo cáo NPBB mất đường tải dự phòng, "Còn lại" ra số âm, mốc 31/03 tính sai theo ngày nộp đơn thay vì ngày nghỉ (2026-09-06)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Lỗi 1</span> "Họp/Công tác" chấm công tự động thành 0 công thay vì đủ công</div>
+      <p>2 trigger đồng bộ <code>attendances</code> khi đơn nghỉ được duyệt
+        (<code>trg_leave_approved_sync_attendance</code>, <code>trg_leave_direct_insert_sync_attendance</code>
+        trong <code>backend/db/migrations.py</code>, tạo từ PR #22) map <code>leave_type</code>→ký
+        hiệu qua <code>CASE</code> chỉ liệt kê <code>thai_san/bao_hiem/sick</code>. Loại nghỉ
+        <code>hop_cong_tac</code> (thêm ở đợt "Ứng phép năm sau", <b>SAU</b> khi 2 trigger này đã
+        viết xong) rơi vào <code>ELSE 'P'</code> = "Nghỉ phép" <code>work_value=0.0</code> — nhân
+        viên Phòng Kế toán đi họp/công tác (vẫn đang làm việc, chỉ không có mặt tại trụ sở) bị chấm
+        công y hệt nghỉ phép không lương.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 1</span> Thêm nhánh <code>WHEN 'hop_cong_tac' THEN 'CT'</code></div>
+      <p>Bảng <code>attendance_symbols</code> đã có sẵn ký hiệu <code>CT</code> = "Công tác"
+        (<code>work_value=1.0</code>) từ trước, chỉ chưa trigger nào dùng tới. Thêm 1 migration mới
+        (DROP + CREATE lại đúng khuôn mẫu mọi lần sửa 2 trigger này trước đây) đưa nhánh
+        <code>hop_cong_tac</code>→<code>'CT'</code> vào cả chỗ chọn symbol lẫn chỗ tra
+        <code>work_value</code> theo symbol đó, ở cả 2 trigger (4 điểm sửa).
+        <code>khong_luong</code> CỐ Ý vẫn rơi <code>ELSE 'P'</code>/<code>0.0</code> công — đúng bản
+        chất (nghỉ không lương), chỉ riêng nhãn "P"="Nghỉ phép" hơi rộng nghĩa, để nguyên (Phòng
+        Tổng hợp quyết nếu muốn tách nhãn sau). Verify thật: gán tạm 1 tài khoản test vào Phòng Kế
+        toán, tạo rồi duyệt 1 đơn <code>hop_cong_tac</code> qua thẳng UPDATE mô phỏng đúng trigger
+        thật → dòng <code>attendances</code> sinh ra đúng <code>symbol='CT'</code>,
+        <code>work_value=1.0</code>. Dọn dữ liệu test, trả lại phòng ban gốc.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 5</span> Ký hiệu <code>H</code> đụng độ giữa báo cáo chấm công mới và hệ chấm công thật</div>
+      <p><code>_ATTENDANCE_SYMBOL</code> (<code>backend/api/leaves.py</code>, dựng báo cáo chấm công
+        tháng theo mẫu TCNS — tính năng mới đợt "Ứng phép năm sau") gán <code>hop_cong_tac→'H'</code>
+        — trùng ký hiệu <code>H</code> đã có sẵn trong <code>attendance_symbols</code> với nghĩa
+        <b>khác hẳn</b> ("Đi học", dùng bởi hệ chấm công thật của Phòng Kế toán ở Lỗi 1). 2 hệ độc
+        lập nhau nhưng dùng chung 1 ký hiệu cho 2 nghĩa khác nhau — đọc báo cáo dễ hiểu nhầm.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 5</span> Đổi sang <code>'CT'</code>, khớp luôn với Fix 1</div>
+      <p>Đổi <code>_ATTENDANCE_SYMBOL["hop_cong_tac"]</code> từ <code>"H"</code> sang
+        <code>"CT"</code> — vừa gỡ đụng độ, vừa dùng chung đúng 1 ký hiệu với hệ chấm công thật
+        (Lỗi 1) cho cùng 1 khái niệm "Công tác".</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 2</span> Báo cáo NPBB mất hẳn đường tải nếu dựng bản xem trước PDF lỗi</div>
+      <p><code>_open_npbb_preview</code> (<code>frontend/pages/leaves.py</code>) gọi API kèm
+        <code>preview=true</code> (máy chủ dùng Word COM chuyển .docx→PDF để xem trước — tính năng
+        mới đợt này). Nếu bước chuyển đó lỗi (Word chưa cài/treo trên máy chủ), nhánh
+        <code>except</code> trước đây chỉ báo lỗi rồi dừng — hàm tải file .docx gốc
+        (<code>_tai_ban_word</code>, KHÔNG phụ thuộc Word chút nào) chỉ được gắn vào nút "Tải xuống"
+        <b>bên trong dialog xem trước</b>, mà dialog đó chưa từng mở ra do bước xem trước đã lỗi từ
+        đầu. Trước đợt "xem trước PDF" này, tải báo cáo NPBB vốn là .docx thuần, không phụ thuộc
+        Word — đây là hồi quy (regression) do tính năng mới gây ra.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 2</span> Dựng <code>_tai_ban_word</code> trước, gọi làm phương án dự phòng</div>
+      <p>Chuyển định nghĩa <code>_tai_ban_word</code> lên trước khối <code>try/except</code>; nhánh
+        <code>except</code> (khi không phải lỗi hết phiên đăng nhập) đổi thành: báo cảnh warning rồi
+        tự gọi <code>await _tai_ban_word()</code> ngay, không cần người dùng bấm gì thêm — đúng
+        khuôn mẫu <code>_download_pdf</code> (phiếu nghỉ phép) đã dùng sẵn cho đúng tình huống PDF
+        hỏng của nó. Verify thật qua API (máy này có Word, không tạo được tình huống Word treo thật):
+        cả 2 đường <code>/export/npbb-batch</code> (.docx thường) và
+        <code>/export/npbb-batch?preview=true</code> (PDF) đều trả đúng <code>200</code> sau khi sửa
+        — xác nhận đường chính không hồi quy; nhánh dự phòng khớp đúng pattern
+        <code>_download_pdf</code> đã chạy thật trong sản phẩm.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 3</span> Cột "Còn lại" trong báo cáo tổng hợp năm ra số âm sau 31/03</div>
+      <p><code>export_all_leaves_annual</code>: <code>chuyen_nam = compute_carry_over(...,
+        ref_date=today)</code> đúng đắn zero hoá phép chuyển kỳ sau 31/03 — nhưng
+        <code>da_nghi = _calc_occurred_days(...)</code> vẫn đếm ĐỦ những ngày quý I đã nghỉ, kể cả
+        phần từng được phép chuyển kỳ (nay bị coi là 0) tài trợ. <code>con_lai = tong_phep - da_nghi</code>
+        có thể ra ÂM cho bất kỳ ai từng dùng phép chuyển kỳ trong quý I mà xuất báo cáo sau 31/03 —
+        cùng 1 người, cùng 1 dữ liệu, xuất ngày 20/03 ra "Còn lại"=10, xuất ngày 15/06 ra "Còn lại"=-2.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 3</span> Kẹp về 0, khớp đúng cách <code>get_quotas</code>/<code>stats_annual</code> đang làm</div>
+      <p>Đổi thành <code>con_lai = max(0.0, tong_phep - da_nghi)</code> — 2 màn hình khác đã hiển
+        thị hạn mức còn lại theo đúng cách này từ trước (gốc rễ kế toán vẫn còn đó — "hạn mức bị
+        cắt xuống 0 nhưng ngày thật đã nghỉ" là 2 con số vênh nhau — 3 lựa chọn đều không sửa tận
+        gốc, chỉ chọn cách không in số âm ra giấy đưa lãnh đạo, khớp 2 màn còn lại). Verify thật:
+        tạo 1 đơn phép năm 20 ngày làm việc trong quý I 2026 (dùng hết 12 ngày chuyển kỳ + 8/12
+        ngày hạn mức năm, không cần ứng) cho 1 nhân viên sạch dữ liệu, xuất báo cáo năm 2026 (hôm
+        nay đã qua 31/03 từ lâu) → hàng của người đó ra đúng <code>Hạn mức=12, Chuyển năm=0,
+        Tổng phép=12, Đã nghỉ=20, Còn lại=0</code> (không phải <code>-8</code>). Dọn đơn test.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 4</span> Mốc hết hạn 31/03 tính theo ngày BẤM NỘP ĐƠN thay vì ngày NGHỈ THẬT</div>
+      <p>Fix của lỗi #121 (đợt trước) bỏ hard-code <code>ref_date=date(ref_year,1,1)</code>, thay
+        bằng để <code>compute_carry_over</code> tự lấy mặc định "hôm nay" — nhưng review chỉ ra quy
+        định "phép chuyển kỳ hết hạn sau 31/03" nói về ngày NGHỈ THẬT phải rơi trước mốc đó, không
+        phải ngày nộp đơn. Nộp đơn ngày 25/03 (còn trong hạn) xin nghỉ ngày 15/06 (đã qua hạn) với
+        cách tính "hôm nay" sẽ SAI cho phép dùng phép chuyển kỳ (đáng lẽ phải hết hạn); ngược lại
+        nộp đơn ngày 06/09 (đã qua hạn) xin nghỉ bù cho đợt phép quý I dở dang cũng SAI theo hướng
+        ngược lại. <code>_build_form_ctx</code> (in phiếu) từ trước đã đúng dùng
+        <code>ref_date=start</code> (ngày bắt đầu nghỉ) — <code>_check_quota_or_borrow</code> lẽ ra
+        phải khớp đúng quy ước đó.</p>
+
+      <div class="label"><span class="pill pill-green">Fix 4</span> Truyền <code>eff_start</code> (ngày bắt đầu nghỉ thật) thay vì mặc định "hôm nay"</div>
+      <p>Thêm tham số <code>eff_start: Optional[date] = None</code> vào
+        <code>_check_quota_or_borrow</code>, gọi <code>compute_carry_over(..., ref_date=eff_start)</code>;
+        cập nhật cả 3 nơi gọi (<code>create_leave</code>, <code>resubmit_leave</code>,
+        <code>create_direct_leave</code>) truyền đúng <code>eff_start</code> (ngày bắt đầu nghỉ đã
+        có sẵn ở cả 3 chỗ, chỉ trước đó chưa được truyền xuống). Verify thật qua API "khai báo hộ"
+        (staff sạch dữ liệu, hạn mức 12 + chuyển kỳ quý I 12 = 24, đã dùng 0): nộp hôm nay
+        (06/09/2026, đã qua 31/03 rất lâu) xin nghỉ 5 ngày làm việc rơi <b>trong quý I</b>
+        (16-20/02/2026) → tạo thành công ngay, <code>borrow_next_year_days=0</code> (❌ nếu còn bug
+        cũ dùng "hôm nay" sẽ tính chuyển kỳ=0, hạn mức=12, đã dùng nơi khác cộng vào &gt; còn lại,
+        phải hỏi ứng phép năm sau mới tạo được — cùng số liệu, khác kết quả tuỳ theo dùng ngày nào).
+        Dọn đơn test.</p>
+
+      <div class="note">Cả 5 lỗi tìm được qua review thật của Người 1 trên PR #77 (không phải rà
+        soát tự động) — review có kèm số liệu chạy thật trên DB dựng từ đúng migrations của nhánh
+        này, không đọc code đoán. Sau khi sửa: 1543 test hiện có (57 test liên quan
+        nghỉ phép/hạn mức/chấm công/bàn giao) pass đủ; 33 test fail còn lại thuộc nhóm Đối chiếu
+        ACH/hồ sơ lưu trữ, không liên quan — fail do thiếu biến môi trường
+        <code>DOI_CHIEU_ZIP_PASSWORD</code> trong <code>.env</code> của máy chạy test, không phải
+        lỗi từ các fix này.</div>
+
+    </div>
+  </div>
+
+  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-06</footer>
 </div>
 </body>
 </html>

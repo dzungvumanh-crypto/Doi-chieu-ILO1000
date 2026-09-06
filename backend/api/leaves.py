@@ -297,7 +297,7 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
 
 def _check_quota_or_borrow(staff_id: int, join_industry_date: Optional[str], leave_type: str,
                            leave_days: float, ref_year: int, confirm_borrow: bool,
-                           db: sqlite3.Connection) -> float:
+                           db: sqlite3.Connection, eff_start: Optional[date] = None) -> float:
     """Kiểm tra hạn mức phép năm — thay cho khối kiểm tra copy-paste ở
     create_leave/resubmit_leave/create_direct_leave.
 
@@ -314,13 +314,15 @@ def _check_quota_or_borrow(staff_id: int, join_industry_date: Optional[str], lea
     if leave_type in _NO_QUOTA_TYPES or leave_type == "bat_buoc":
         return 0.0
 
-    # ref_date=None → compute_carry_over tự lấy _vn_now().date() (HÔM NAY, lúc
-    # tạo/nộp đơn) để so mốc hết hạn 31/03 — carry-over còn dùng được hay không
-    # phụ thuộc NGÀY TẠO ĐƠN, không phải ngày nghỉ dự kiến. Trước đây hard-code
-    # ref_date=date(ref_year, 1, 1) (luôn là 01/01) nên check "> 31/03" không
-    # bao giờ đúng — carry-over hết hạn không bao giờ được áp dụng, đơn nghỉ
-    # tạo tháng 6, tháng 10 vẫn cộng thêm ngày chuyển năm dù đã hết hạn 31/03.
-    carry_eff = compute_carry_over(staff_id, ref_year, db, effective=True)
+    # ref_date=eff_start (ngày BẮT ĐẦU NGHỈ, không phải ngày bấm nộp đơn) — quy
+    # định "chuyển kỳ hết hạn sau 31/03" nói về ngày NGHỈ THẬT phải rơi trước
+    # mốc đó, không phải ngày nộp đơn (_build_form_ctx in phiếu cũng đã dùng
+    # ref_date=start từ trước — dùng "hôm nay" ở đây sẽ ra 2 con số khác nhau
+    # cho cùng 1 đơn vắt qua mốc 31/03, vd nộp 25/03 xin nghỉ 15/06). Trước đó
+    # nữa hard-code ref_date=date(ref_year, 1, 1) (luôn là 01/01) nên check
+    # "> 31/03" không bao giờ đúng — carry-over hết hạn không bao giờ được áp
+    # dụng, đơn nghỉ tạo tháng 6, tháng 10 vẫn cộng thêm ngày chuyển năm.
+    carry_eff = compute_carry_over(staff_id, ref_year, db, effective=True, ref_date=eff_start)
     _q_row = db.execute(
         "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
         (staff_id, ref_year),
@@ -767,6 +769,7 @@ def _create_leave_core(body: LeaveCreate, current: dict, db: sqlite3.Connection,
     borrow_days = _check_quota_or_borrow(
         current["id"], current.get("join_industry_date"), body.leave_type,
         leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+        eff_start=eff_start,
     )
 
     if body.leave_type == "bat_buoc" and leave_days < 5:
@@ -1723,6 +1726,7 @@ def resubmit_leave(
     borrow_days = _check_quota_or_borrow(
         current["id"], current.get("join_industry_date"), body.leave_type,
         leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+        eff_start=eff_start,
     )
 
     # Kiểm tra trùng ngày theo spread_dates thực tế
@@ -3419,7 +3423,13 @@ def export_all_leaves_annual(
         chuyen_nam = compute_carry_over(s["id"], year, db, effective=True, ref_date=today)
         tong_phep = han_muc + chuyen_nam
         da_nghi = _calc_occurred_days(s["id"], year, db, today)
-        con_lai = tong_phep - da_nghi
+        # max(0.0, ...) — khớp đúng cách get_quotas/stats_annual đang làm. Xuất
+        # báo cáo SAU 31/03: chuyen_nam về 0 (hết hiệu lực) nhưng da_nghi vẫn
+        # đếm đủ những ngày quý I đã dùng đúng bằng số chuyển kỳ đó (đơn đã
+        # duyệt, không tự xoá theo) — trừ (số hạn mức thật đã bị coi là 0) ra
+        # khỏi (số ngày thật đã nghỉ) có thể ra âm, in ra tờ giấy đưa lãnh đạo
+        # là con số vô lý. Kẹp về 0 thay vì hiện số âm.
+        con_lai = max(0.0, tong_phep - da_nghi)
         person_rows.append({
             "name": s["full_name"] or "", "dept": s["dept_name"] or "(Chưa gán phòng)",
             "chuc_vu": _ROLE_VN.get(s["role"] or "", s["role"] or ""),
@@ -3777,7 +3787,12 @@ def _build_attendance_month_sheet(ws, db: sqlite3.Connection, year: int, month: 
     # ký hiệu riêng thì dùng chung "P". "hop_cong_tac" giờ là leave_type thật
     # (đi qua đúng luồng đơn nghỉ phép bình thường) nên tự điền được từ dữ liệu
     # thật, không còn phải để trống như trước khi loại này chưa tồn tại.
-    _ATTENDANCE_SYMBOL = {"bat_buoc": "BB", "hop_cong_tac": "H"}
+    # "CT" (không phải "H") — bảng attendance_symbols có sẵn "H" = "Đi học"
+    # (dùng bởi hệ chấm công thật của Phòng Kế toán, backend/db/migrations.py
+    # ::trg_leave_*_sync_attendance) — dùng lại "H" ở đây cho "họp/công tác"
+    # sẽ đụng ký hiệu, hiểu sai bản chất khi đọc báo cáo. "CT" = "Công tác" đã
+    # có sẵn trong attendance_symbols (review PR #77, Người 1, 2026-09-06).
+    _ATTENDANCE_SYMBOL = {"bat_buoc": "BB", "hop_cong_tac": "CT"}
 
     staff_ids = [s["id"] for s in staffs]
     leave_symbol_by_staff: dict[int, dict] = {sid: {} for sid in staff_ids}
@@ -4251,6 +4266,7 @@ def create_direct_leave(
     borrow_days = _check_quota_or_borrow(
         body.staff_id, staff["join_industry_date"], body.leave_type,
         leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+        eff_start=eff_start,
     )
 
     cur = db.execute(
