@@ -4,6 +4,18 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 06/09/2026 Bàn giao chứng từ - **Cột ngày nghỉ lễ tô vàng như hai ngày cuối tuần**
+    + Trước đây bảng nhập chứng từ chỉ tô vàng **thứ Bảy và Chủ nhật**. Ngày nghỉ lễ giữa tuần
+      trông y hệt ngày đi làm, không có gì nhắc người nhập rằng hôm đó lẽ ra không có chứng từ
+    + Nay ngày lễ tô vàng **giống hệt cuối tuần** — cả ô số ngày trên đầu bảng lẫn ô trống bên dưới
+    + Danh sách ngày lễ lấy từ **cùng một chỗ** với màn Nghỉ phép và Sổ trực (ngày lễ khai ở
+      *Nghỉ phép → Ngày lễ* và *Phân lịch trực → Ngày đặc biệt*) — khai một lần, cả ba màn hình
+      hiểu giống nhau. Không phải khai riêng cho màn chứng từ
+    + Ô **đã có số** vẫn giữ màu theo trạng thái (xanh = đã chốt, cam = chờ xác nhận, tím = đang
+      mượn). Chứng từ phát sinh đúng ngày lễ là chuyện có thật, trạng thái quan trọng hơn màu ngày nghỉ
+    + ⚠️ **Thứ Bảy đi làm bù vẫn tô vàng** — chưa đổi ở màn này. Bảng chấm công thì đã bỏ vàng cho
+      ngày làm bù, vì ở đó cột Tổng có cộng công của hôm ấy nên để vàng là mâu thuẫn nhìn thấy được
+
 - 05/09/2026 Đối chiếu CITAD - **Nhiều người cùng chấm một ngày, khoá nguồn Napas/PSS-MDP, tách bảng chênh lệch VNĐ / Ngoại tệ**
     + **Hết cảnh "một ngày chỉ một người chấm được".** Trước đây một ngày chỉ có đúng một bảng
       dùng chung cả phòng: người thứ hai vào chấm cùng ngày thì bị chặn, hoặc phải sửa đè lên
@@ -108,6 +120,21 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       thật vẫn được nhận ra đầy đủ như cũ**, không mất món nào
     + ✅ **Không phải làm gì sau khi cập nhật** — không đổi giao diện, không đổi quyền, không đổi
       thao tác
+
+- 04/09/2026 Danh sách CN TTQT - **Thêm nút xem lịch sử sửa đổi của từng chi nhánh**
+    + Cuối mỗi dòng trong bảng có thêm nút hình **đồng hồ quay ngược** 🕘. Bấm vào mở bảng:
+      **ngày giờ — người sửa — sửa mục nào — giá trị cũ → giá trị mới**
+    + Ghi cho **cả hai đường**: sửa tay trên giao diện và nhập file Excel. Mỗi trường thay đổi là
+      **một dòng riêng**, không gộp — nhìn ra ngay ai đổi số điện thoại, ai đổi mã SWIFT
+    + Nhập lại **đúng file Excel cũ** thì không sinh dòng nào, vì không có gì đổi thật. Bấm Lưu mà
+      không sửa gì cũng vậy. Lịch sử chỉ chứa thay đổi thật, không có dòng rác
+    + Chi nhánh **bị xoá vẫn giữ lịch sử**; nếu sau đó nhập lại cùng mã CN thì lịch sử cũ hiện
+      tiếp trong bản ghi mới — không mất dấu vết
+    + ⚠️ **Lịch sử tính từ hôm nay trở đi.** Các lần sửa trước đây không dựng lại được: sổ nhật ký
+      cũ chỉ ghi "đã sửa trường nào", không ghi sửa thành gì. Lúc chưa có dữ liệu, bảng hiện dòng
+      *"Chưa có thay đổi nào được ghi lại"*
+    + ⚠️ **Phải bật quyền thì nút mới hiện.** Vào **Phân quyền theo nhóm → Danh sách CN TTQT**,
+      tick ô *"Xem lịch sử sửa đổi"* cho các nhóm cần dùng
 
 - 04/09/2026 Chuẩn hoá văn bản - **Sửa 4 lỗi phát hiện trên văn bản thật (TB Swift code Quảng Ninh)**
     + **Số trang in ra sai — trang 2 ghi "24", trang 3 ghi "25".** Nguyên nhân: file gốc được cắt

@@ -21,6 +21,7 @@ from backend.schemas.handovers import (
     RejectRequest, ReturnToStaffRequest,
 )
 from backend.services.handover_report_service import submitted_at_from_logs
+from backend.services.lich_lam_viec import tai_lich
 
 # `log` là tên biến lặp trong get_entry_history → logger phải mang tên khác
 log_ = logging.getLogger(__name__)
@@ -269,7 +270,14 @@ def get_handover_grid(
         )
         for e in entry_rows
     ]
-    return GridResponse(users=[dict(u) for u in user_rows], entries=grid_entries, days_in_month=days_in_month)
+    # Ngày nghỉ lễ trong tháng — lưới tô vàng như T7/CN. Ngày làm bù KHÔNG trả về:
+    # lưới chứng từ tô vàng thuần theo "hôm đó có phải ngày nghỉ không", còn T7 làm bù
+    # vẫn là ngày làm việc nhưng chưa có yêu cầu đổi màu nó.
+    lich = tai_lich(db, date(year, month, 1), date(year, month, days_in_month))
+    holidays = sorted(d.day for d in lich.ngay_le if d.year == year and d.month == month)
+
+    return GridResponse(users=[dict(u) for u in user_rows], entries=grid_entries,
+                        days_in_month=days_in_month, holidays=holidays)
 
 
 # ─── Upsert (nhập/sửa ô grid) ────────────────────────────────────────────────

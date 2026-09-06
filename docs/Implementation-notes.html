@@ -365,6 +365,128 @@
     </div>
   </div>
 
+  <!-- TQ1 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">TQ1</span>
+      <span class="card-title">Danh sách CN TTQT — lịch sử sửa đổi từng chi nhánh</span>
+      <span class="badge badge-done">Xong — 1542 test pass</span>
+    </div>
+    <div class="card-body">
+
+      <p>Yêu cầu: mỗi dòng có một nút xem <b>ngày giờ + người sửa + sửa cái gì</b>. Dữ liệu để trả
+        lời câu đó trước nay <b>không tồn tại</b>: <code>audit_logs</code> chỉ ghi một chuỗi kiểu
+        <code>"1234 — sửa: ten_cn, sdt"</code>, không có giá trị cũ/mới; còn đường nhập Excel — đường
+        thay đổi dữ liệu chính của màn này — chỉ ghi <b>một</b> dòng tổng cho cả file
+        (<code>+3 mới, ~215 cập nhật</code>), không truy được về từng chi nhánh.</p>
+
+      <div class="label"><span class="pill pill-blue">Quyết định 1</span> Bảng riêng <code>ttqt_branch_history</code>, không mở rộng <code>audit_logs</code></div>
+      <table>
+        <tr><th>Phương án</th><th>Vì sao chọn / bỏ</th></tr>
+        <tr><td><b>Bảng riêng, mỗi dòng = một trường đã đổi</b> (đã chọn)</td>
+            <td>Truy vấn theo <code>branch_id</code> là đọc thẳng một chỉ mục. Giá trị cũ/mới nằm
+                ở hai cột riêng nên hiện được thành bảng so sánh, không phải bóc chuỗi.</td></tr>
+        <tr><td>Thêm cột old/new vào <code>audit_logs</code></td>
+            <td><b>Bỏ.</b> <code>audit_logs</code> là sổ chung của toàn hệ thống — nhét cột chỉ một
+                module dùng thì mọi module khác mang theo hai cột NULL, và mỗi lần mở lịch sử một
+                chi nhánh lại phải quét cả sổ.</td></tr>
+        <tr><td>Chụp nguyên bản ghi mỗi lần đổi (snapshot)</td>
+            <td><b>Bỏ.</b> Nhập Excel 218 dòng mà chỉ 2 dòng đổi thì snapshot vẫn ghi 218 bản sao
+                10 cột. Người dùng cũng phải tự so hai bản để biết đổi cái gì — đúng thứ họ yêu cầu
+                khỏi phải làm.</td></tr>
+      </table>
+
+      <div class="label"><span class="pill pill-blue">Quyết định 2</span> Chỉ ghi khi có trường <b>thật sự</b> đổi</div>
+      <p><code>_diff()</code> so bản cũ với bản mới và chuẩn hoá <code>''</code> về <code>NULL</code>
+        trước khi so. Không có bước chuẩn hoá đó thì mỗi lần bấm Lưu trên form web (ô trống gửi lên
+        chuỗi rỗng, DB đang lưu NULL) lại đẻ một dòng "đã sửa" giả, và nhập lại đúng file Excel cũ —
+        chuyện làm hằng tuần — sẽ sinh vài trăm dòng lịch sử rác. Hai tình huống này có test canh.</p>
+      <p><code>sort_order</code> cố ý <b>đứng ngoài</b> danh sách theo dõi: nó đổi theo vị trí dòng
+        trong file Excel, ghi lại chỉ làm ngập lịch sử bằng thứ không ai tra.</p>
+
+      <div class="label"><span class="pill pill-blue">Quyết định 3</span> Lịch sử sống lâu hơn bản ghi</div>
+      <p>Bảng <b>không</b> đặt <code>FOREIGN KEY</code> sang <code>ttqt_branches</code>: xoá chi nhánh
+        mà mất luôn lịch sử thì đúng lúc cần tra "ai xoá, xoá cái gì" lại không còn gì để tra. Đổi lại,
+        <code>branch_id</code> có thể trỏ vào một id không còn tồn tại — đó là chủ ý, không phải rác.</p>
+      <p>Hệ quả phải xử: nhập Excel có tích <b>Xoá CN thiếu</b> rồi nhập lại sinh <b>id mới</b> cho
+        cùng một mã CN. Truy vấn vì thế nhận thêm dòng cũ theo <code>ma_cn</code>, nhưng
+        <b>chỉ khi</b> <code>branch_id</code> của dòng đó đã không còn trong bảng
+        (<code>LEFT JOIN … WHERE b.id IS NULL</code>).</p>
+      <div class="caution"><b>Đã cân nhắc:</b> nếu chỉ lọc theo <code>ma_cn</code> mà bỏ điều kiện
+        "id cũ đã chết", lịch sử của một chi nhánh <b>đang sống</b> từng mang mã đó sẽ bị kéo sang
+        bản ghi khác — sai mà không có lỗi nào báo. Có test canh riêng đúng cửa này.</div>
+
+      <div class="label"><span class="pill pill-gray">Đánh đổi</span> Lịch sử bắt đầu từ hôm nay</div>
+      <p>Không dựng lại quá khứ từ <code>audit_logs</code>: sổ cũ không có giá trị cũ/mới, dựng lại
+        chỉ ra được "đã từng sửa trường X" mà không nói được sửa thành gì. Bảng rỗng lúc đầu, giao
+        diện nói thẳng <i>"Chưa có thay đổi nào được ghi lại"</i> — thà vậy còn hơn hiện một danh
+        sách nửa vời rồi người đọc tưởng đó là toàn bộ.</p>
+
+      <div class="label"><span class="pill pill-blue">Phân quyền</span> Mã mới <code>ttqt_branches.history</code></div>
+      <div class="note">Đủ 4 chỗ theo <code>DESIGN.md</code>: <code>FEATURES</code>,
+        <code>FEATURE_GROUPS</code>, <code>require_feature()</code> ở route, <code>has_feature()</code>
+        ở frontend. <b>Chưa nhóm nào được tick sẵn</b> — quản trị viên phải vào màn <i>Phân quyền
+        theo nhóm</i> bật lên thì nút mới hiện. Cố ý: tự gán quyền cho các nhóm hiện có là quyết định
+        của người vận hành, không phải của migration.</div>
+
+      <p><b>Biết mà để lại:</b> lịch sử chưa có đường xoá/dọn theo tuổi. Ước lượng tăng trưởng rất
+        thấp — chỉ ghi khi có trường đổi thật, nhập lại file y hệt không sinh dòng nào — nên thêm cơ
+        chế dọn bây giờ là giải một bài chưa có. Nếu về sau bảng phình, chỗ sửa là một câu
+        <code>DELETE</code> theo <code>created_at</code> trong <code>backup_service</code>.</p>
+
+    </div>
+  </div>
+
+  <!-- BG1 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">BG1</span>
+      <span class="card-title">Bàn giao chứng từ — cột ngày nghỉ lễ tô vàng như T7/CN</span>
+      <span class="badge badge-done">Xong — 1533 test pass</span>
+    </div>
+    <div class="card-body">
+
+      <p>Lưới nhập chứng từ trước đây chỉ biết <b>thứ trong tuần</b>
+        (<code>_cal.weekday(...) &gt;= 5</code>). Ngày lễ nằm giữa tuần trông y hệt ngày làm việc,
+        người nhập không có gì nhắc rằng hôm đó lẽ ra không có chứng từ.</p>
+
+      <div class="label"><span class="pill pill-blue">Quyết định 1</span> Ngày lễ tính ở backend, không tính ở frontend</div>
+      <p><code>GET /api/handovers/grid</code> trả thêm <code>holidays</code> — danh sách <b>số ngày</b>
+        trong tháng, lấy qua <code>tai_lich()</code> của <code>lich_lam_viec.py</code>. Frontend chỉ
+        nhận và tô. Ngày lễ đến từ hai bảng (<code>public_holidays</code> +
+        <code>duty_special_days</code>) với quy tắc hợp riêng — nhân bản logic đó xuống frontend là
+        tự nhận một bản sao sẽ lệch.</p>
+
+      <div class="label"><span class="pill pill-blue">Quyết định 2</span> Vàng, không phải xanh như bảng công</div>
+      <table>
+        <tr><th>Màn hình</th><th>Ngày lễ</th><th>Vì sao</th></tr>
+        <tr><td>Chấm công</td><td><span class="pill pill-green">Xanh #DCFCE7</span></td>
+            <td>Ô dữ liệu ngày lễ cũng xanh để phân biệt "nghỉ lễ" với "quên chấm"</td></tr>
+        <tr><td>Bàn giao chứng từ</td><td><span class="pill pill-gray">Vàng #fde68a / #fef9c3</span></td>
+            <td>Người dùng yêu cầu tô <b>giống hệt</b> T7/CN; và xanh ở lưới này đã mang nghĩa
+                <b>ô đã chốt</b> (<code>entry_status = confirmed</code>) — dùng lại là hai nghĩa
+                chồng nhau trên cùng một màu</td></tr>
+      </table>
+      <p>Vàng chỉ tô ô <b>trống</b>. Ô có số vẫn giữ màu theo trạng thái — trạng thái quan trọng
+        hơn "hôm đó là ngày nghỉ", và chứng từ phát sinh đúng ngày lễ là chuyện có thật.</p>
+
+      <div class="label"><span class="pill pill-blue">Quyết định 3</span> Ngày làm bù: KHÔNG trả về, KHÔNG đổi màu</div>
+      <div class="note">Bảng công có <code>makeup_days</code> để <b>gỡ</b> màu cuối tuần khỏi T7 làm
+        bù — ở đó cột Tổng đã cộng công của hôm ấy nên tô vàng là mâu thuẫn nhìn thấy được. Lưới
+        chứng từ không có cột nào mâu thuẫn với màu vàng, và người dùng chỉ yêu cầu thêm ngày lễ.
+        Nếu sau này muốn T7 làm bù hết vàng ở đây, sửa cùng một chỗ: thêm
+        <code>lich.ngay_bu</code> vào <code>GridResponse</code> rồi trừ ra khỏi điều kiện
+        <code>nghi</code>.</div>
+
+      <div class="caution"><b>Rủi ro đã cân nhắc:</b> <code>tai_lich()</code> đọc bảng
+        <code>duty_special_days</code>. Endpoint này giờ hỏng nếu bảng đó thiếu — cố ý, đúng theo
+        mục <i>Ngày làm việc</i> trong <code>DESIGN.md</code>: bảng thiếu mà nuốt lỗi thì ngày lễ
+        biến mất âm thầm. Test nào dựng schema tối giản rồi gọi
+        <code>/api/handovers/grid</code> phải khai bảng này (hiện chưa có test nào gọi endpoint đó).</div>
+
+    </div>
+  </div>
+
   <!-- VB3 -->
   <div class="card">
     <div class="card-header">

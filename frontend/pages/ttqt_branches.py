@@ -31,6 +31,12 @@ _CSS = """<style>
 .ttqt-upload .q-uploader__header-content { padding: 2px 10px; min-height: 30px; }
 .ttqt-upload .q-uploader__title { font-size: 12px; font-weight: 500; line-height: 1.3; }
 .ttqt-upload .q-uploader__subtitle, .ttqt-upload .q-uploader__list { display: none; }
+
+/* Bảng lịch sử: giá trị cũ/mới có thể dài cả địa chỉ — cho xuống dòng, và
+   giới hạn chiều cao để hộp thoại không tràn khỏi màn hình. */
+.ttqt-hist td { white-space: normal !important; vertical-align: top; font-size: 12px; }
+.ttqt-hist .q-table__middle { max-height: 60vh; }
+.ttqt-hist thead th { position: sticky; top: 0; z-index: 2; background: #f3f4f6; font-weight: 600; }
 </style>
 <script>
 /* Đo lại chiều cao thân bảng theo vị trí thật của nó trong khung nhìn.
@@ -80,11 +86,40 @@ _COLUMNS = [
      "style": "min-width:220px;max-width:320px"},
     {"name": "ghi_chu",    "label": "Ghi chú", "field": "ghi_chu",    "align": "left",
      "style": "min-width:180px;max-width:280px"},
-    {"name": "actions",    "label": "", "field": "actions", "align": "center", "style": "width:80px"},
+    {"name": "actions",    "label": "", "field": "actions", "align": "center", "style": "width:110px"},
 ]
 
 
-def _to_row(b: dict, can_edit: bool, can_delete: bool) -> dict:
+_HIST_COLUMNS = [
+    {"name": "thoi_diem", "label": "Thời điểm", "field": "thoi_diem", "align": "left",
+     "style": "width:130px"},
+    {"name": "nguoi_sua", "label": "Người sửa", "field": "nguoi_sua", "align": "left",
+     "style": "width:150px"},
+    {"name": "thao_tac",  "label": "Thao tác",  "field": "thao_tac",  "align": "left",
+     "style": "width:90px"},
+    {"name": "noi_dung",  "label": "Sửa mục",   "field": "noi_dung",  "align": "left",
+     "style": "width:150px"},
+    {"name": "gia_tri_cu", "label": "Giá trị cũ", "field": "gia_tri_cu", "align": "left",
+     "style": "min-width:180px"},
+    {"name": "gia_tri_moi", "label": "Giá trị mới", "field": "gia_tri_moi", "align": "left",
+     "style": "min-width:180px"},
+]
+
+
+def _fmt_dt(v: str) -> str:
+    """'2026-09-04 08:15:23.4' → '04/09/2026 08:15'. Chuỗi lạ thì trả nguyên
+    văn — thà hiện hơi xấu còn hơn nuốt mất thời điểm."""
+    if not v:
+        return "—"
+    try:
+        d, t = str(v).split(" ")[0], str(v).split(" ")[1]
+        y, m, dd = d.split("-")
+        return f"{dd}/{m}/{y} {t[:5]}"
+    except Exception:
+        return str(v)
+
+
+def _to_row(b: dict, can_edit: bool, can_delete: bool, can_history: bool) -> dict:
     """Bản ghi API → dòng bảng. Ô trống hiện '—' cho dễ đọc.
     can_edit/can_delete gắn vào từng dòng vì slot Vue chỉ đọc được props.row."""
     r = {
@@ -93,6 +128,7 @@ def _to_row(b: dict, can_edit: bool, can_delete: bool) -> dict:
         "closed": bool(b.get("is_closed")),
         "can_edit": can_edit,
         "can_delete": can_delete,
+        "can_history": can_history,
     }
     for f in ("ma_cn", "ten_cn", "swift_bic", "duoc_phep", "cn_quan_ly", "sdt", "dia_chi", "ghi_chu"):
         r[f] = b.get(f) or "—"
@@ -112,6 +148,7 @@ async def ttqt_branches_page():
     can_delete = api.has_feature("ttqt_branches.delete")
     can_import = api.has_feature("ttqt_branches.import")
     can_export = api.has_feature("ttqt_branches.export")
+    can_history = api.has_feature("ttqt_branches.history")
 
     await _sidebar("ttqt_branches")
     ui.add_head_html(_CSS)
@@ -196,6 +233,55 @@ async def ttqt_branches_page():
             f_ghichu.set_value(b.get("ghi_chu") or "")
             f_closed.set_value(bool(b.get("is_closed")))
             form_dialog.open()
+
+        # ── Hộp thoại lịch sử sửa đổi ─────────────────────────────────────────
+        # Dựng MỘT lần rồi dùng lại: tạo dialog mới trong mỗi lần bấm sẽ để lại
+        # dialog cũ trong DOM, mỗi lần mở lại nặng thêm một chút.
+        with ui.dialog() as hist_dialog, ui.card().classes("w-full max-w-5xl"):
+            hist_title = ui.label("").classes("text-lg font-bold text-red-900")
+            hist_sub = ui.label("").classes("text-xs text-gray-500 mb-2")
+            hist_area = ui.column().classes("w-full")
+            with ui.row().classes("w-full justify-end mt-2"):
+                ui.button("Đóng", on_click=hist_dialog.close).props("flat").classes("text-gray-600")
+
+        async def show_history(b: dict):
+            hist_title.text = f"Lịch sử sửa đổi — {b['ma_cn']} {b.get('ten_cn') or ''}"
+            hist_sub.text = "Đang tải..."
+            hist_area.clear()
+            hist_dialog.open()
+            try:
+                data = await asyncio.to_thread(
+                    api.get, f"/api/ttqt-branches/{b['id']}/history")
+            except Exception as e:
+                if _handle_api_error(e):
+                    return
+                hist_sub.text = ""
+                with hist_area:
+                    ui.label(str(e)).classes("text-red-600 text-sm py-4")
+                return
+
+            hist_sub.text = f"{len(data)} lượt thay đổi được ghi nhận"
+            with hist_area:
+                if not data:
+                    ui.label(
+                        "Chưa có thay đổi nào được ghi lại cho chi nhánh này."
+                    ).classes("text-gray-500 text-center py-8 w-full")
+                    return
+                rows = [{
+                    "id": h["id"],
+                    "thoi_diem": _fmt_dt(h.get("created_at")),
+                    "nguoi_sua": h.get("actor_name") or "—",
+                    "thao_tac": h.get("action_label") or h.get("action"),
+                    # Thêm mới / xoá không gắn với một trường nào — ghi rõ thay
+                    # vì để trống, người đọc khỏi tưởng dữ liệu bị mất.
+                    "noi_dung": h.get("field_label") or "(cả bản ghi)",
+                    "gia_tri_cu": h.get("old_value") or "—",
+                    "gia_tri_moi": h.get("new_value") or "—",
+                } for h in data]
+                ui.table(columns=_HIST_COLUMNS, rows=rows, row_key="id",
+                         pagination={"rowsPerPage": 0}).props(
+                    'bordered dense flat separator="cell"'
+                ).classes("w-full ttqt-hist")
 
         async def do_delete(b: dict):
             with ui.dialog() as confirm, ui.card():
@@ -340,8 +426,9 @@ async def ttqt_branches_page():
                     return
 
                 by_id = {b["id"]: b for b in data}
-                rows = [_to_row(b, can_edit, can_delete) for b in data]
-                cols = [c for c in _COLUMNS if c["name"] != "actions" or can_edit or can_delete]
+                rows = [_to_row(b, can_edit, can_delete, can_history) for b in data]
+                cols = [c for c in _COLUMNS
+                        if c["name"] != "actions" or can_edit or can_delete or can_history]
                 # rowsPerPage=0 = hiện hết, không phân trang: người dùng cuộn
                 # thẳng trong thân bảng thay vì bấm sang trang. 218 dòng là mức
                 # Quasar dựng thoải mái, không cần virtual-scroll.
@@ -362,6 +449,11 @@ async def ttqt_branches_page():
                           <q-btn dense flat round size="sm" color="negative" icon="delete"
                                  v-if="props.row.can_delete"
                                  @click="() => $parent.$emit('rowDel', props.row.id)" />
+                          <q-btn dense flat round size="sm" color="grey-8" icon="history"
+                                 v-if="props.row.can_history"
+                                 @click="() => $parent.$emit('rowHist', props.row.id)">
+                            <q-tooltip>Lịch sử sửa đổi</q-tooltip>
+                          </q-btn>
                         </template>
                         <template v-else>{{ col.value }}</template>
                       </q-td>
@@ -374,7 +466,11 @@ async def ttqt_branches_page():
                 async def on_row_del(e):
                     await do_delete(by_id[int(e.args)])
 
+                async def on_row_hist(e):
+                    await show_history(by_id[int(e.args)])
+
                 table.on("rowEdit", lambda e: open_form(by_id[int(e.args)]))
                 table.on("rowDel", on_row_del)
+                table.on("rowHist", on_row_hist)
 
         await load()
