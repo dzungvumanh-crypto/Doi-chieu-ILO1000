@@ -494,6 +494,8 @@ async def handovers_page():
             users         = data["users"]
             entries       = data["entries"]
             days_in_month = data["days_in_month"]
+            # Ngày nghỉ lễ (số ngày trong tháng) — tô vàng y như T7/CN
+            holidays      = set(data.get("holidays") or [])
 
             # cell_data[uid][day] = {sheet_count, entry_id, entry_status}
             cell_data: dict = {}
@@ -545,9 +547,9 @@ async def handovers_page():
                     f'position:sticky;left:0;z-index:3;background:#dbeafe;">Họ và tên</div>'
                 )
                 for d in range(1, days_in_month + 1):
-                    dow = _cal.weekday(year, month, d)
-                    hbg = "#fde68a" if dow >= 5 else "#dbeafe"
-                    hcl = "#92400e" if dow >= 5 else "#1e40af"
+                    nghi = _cal.weekday(year, month, d) >= 5 or d in holidays
+                    hbg = "#fde68a" if nghi else "#dbeafe"
+                    hcl = "#92400e" if nghi else "#1e40af"
                     p.append(
                         f'<div style="{BB};flex:0 1 {CW}px;min-width:{MCW}px;text-align:center;'
                         f'font-size:13px;font-weight:700;color:{hcl};padding:10px 2px;'
@@ -574,10 +576,10 @@ async def handovers_page():
                         val     = info.get("sheet_count", 0)
                         eid     = info.get("entry_id")
                         status  = info.get("entry_status", "confirmed")
-                        dow     = _cal.weekday(year, month, d)
+                        nghi    = _cal.weekday(year, month, d) >= 5 or d in holidays
                         if val:
                             cbg, bdr = _SB.get(status, ("#f3f4f6", "1px solid #d1d5db"))
-                        elif dow >= 5:
+                        elif nghi:
                             cbg, bdr = "#fef9c3", "1px solid #dbeafe"
                         else:
                             cbg, bdr = rbg, "1px solid #dbeafe"
