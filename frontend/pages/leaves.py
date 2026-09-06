@@ -225,9 +225,13 @@ async def _open_sign_dialog(pv: dict, title: str, ok_label: str, ok_cls: str = "
         dlg.delete()
 
 
-def _leave_status_badge(status: str):
+def _leave_status_badge(status: str, label_override: str | None = None):
 
     label, cls = _LEAVE_STATUS.get(status, (status, "bg-gray-100 text-gray-500"))
+    # Đơn NPBB gốc đã bị đơn điều chỉnh thay thế — nhãn riêng thay nhãn chung
+    # chung, xem status_label ở backend (_leave_to_out).
+    if label_override:
+        label = label_override
 
     ui.label(label).classes(f"text-xs font-medium px-2 py-0.5 rounded border {cls}")
 
@@ -332,6 +336,46 @@ async def leaves_page():
         return
 
     await _sidebar("leaves")
+
+    # Tô sáng dòng+cột kiểu Excel khi rê chuột trên các bảng đơn nghỉ phép
+    # (Dashboard/Chờ duyệt/Khai báo hộ...) — các bảng này dựng bằng ui.row()
+    # xếp cạnh nhau (không phải <table> thật) nên CSS :hover thường chỉ tô
+    # được dòng; tô thêm cột phải dùng JS: khoanh vùng .hl-table, coi mỗi
+    # .hl-row là 1 dòng, mỗi CON TRỰC TIẾP của .hl-row là 1 "cột" theo đúng
+    # thứ tự dựng — rê vào cột nào thì tô cột đó ở MỌI dòng cùng bảng.
+    ui.add_head_html("""
+    <style>.hl-col-active { background-color: rgba(220,38,38,0.10) !important; }</style>
+    <script>
+    (function() {
+      if (window._leavesHlBound) return;
+      window._leavesHlBound = true;
+      document.addEventListener('mouseover', function(e) {
+        var row = e.target.closest ? e.target.closest('.hl-row') : null;
+        if (!row) return;
+        var table = row.closest('.hl-table');
+        if (!table) return;
+        var cell = e.target;
+        while (cell && cell.parentElement !== row) cell = cell.parentElement;
+        if (!cell) return;
+        var idx = Array.prototype.indexOf.call(row.children, cell);
+        if (idx < 0) return;
+        table.querySelectorAll('.hl-row').forEach(function(r) {
+          var c = r.children[idx];
+          if (c) c.classList.add('hl-col-active');
+        });
+      });
+      document.addEventListener('mouseout', function(e) {
+        var row = e.target.closest ? e.target.closest('.hl-row') : null;
+        if (!row) return;
+        var table = row.closest('.hl-table');
+        if (!table) return;
+        table.querySelectorAll('.hl-col-active').forEach(function(c) {
+          c.classList.remove('hl-col-active');
+        });
+      });
+    })();
+    </script>
+    """)
 
 
 
@@ -520,6 +564,32 @@ async def leaves_page():
         if box:
             payload["signature"] = box
         await send(payload)
+
+
+
+    # ── Cảnh báo đơn có ứng phép năm sau trước khi duyệt ────────────────────
+
+    def _borrow_year_label(lv: dict) -> str:
+        try:
+            return f"năm {int((lv.get('start_date') or '')[:4]) + 1}"
+        except Exception:
+            return "năm sau"
+
+    async def _borrow_confirm_or_run(lv: dict, run):
+        """`borrow_next_year_days` > 0 nghĩa là đơn đã ăn vào hạn mức phép năm
+        sau lúc tạo (xem _check_quota_or_borrow ở backend) — người duyệt phải
+        được cảnh báo trước khi hoàn tất duyệt, không âm thầm duyệt qua.
+        `run` là hàm async không tham số, thực hiện việc duyệt thật."""
+        borrow = lv.get("borrow_next_year_days") or 0
+        if not borrow:
+            await run()
+            return
+        _ask_confirm(
+            "Đơn có ứng phép năm sau",
+            f"Đơn nghỉ phép của {lv.get('staff_name', '')} ({lv.get('department_name', '')}) "
+            f"có sử dụng {borrow:.0f} ngày phép của {_borrow_year_label(lv)}. Tiếp tục duyệt?",
+            run, "Tiếp tục duyệt", "bg-orange-600",
+        )
 
 
 
@@ -1131,6 +1201,20 @@ async def leaves_page():
 
                         ui.timer(2.5, lambda: ui.navigate.to("/leaves"), once=True)
 
+                    except api.QuotaExceededBorrowError as e:
+                        # Vượt hạn mức năm nay nhưng năm sau còn đủ chỗ ứng — hỏi xác
+                        # nhận thay vì chặn cứng, xem _check_quota_or_borrow ở backend.
+                        async def _retry_with_borrow(_body2=_body):
+                            _body2["confirm_borrow_next_year"] = True
+                            await _send(_body2)
+                        _ask_confirm(
+                            "Vượt hạn mức phép",
+                            f"Đơn nghỉ phép đã vượt quá hạn mức ngày nghỉ phép năm {e.year} "
+                            f"(còn lại {e.remaining:.0f} ngày). Bạn có muốn tiếp tục ứng trước "
+                            f"{e.borrow_days:.0f} ngày phép của năm {e.next_year} không?",
+                            _retry_with_borrow, "Đồng ý ứng phép", "bg-orange-600",
+                        )
+
                     except Exception as e:
 
                         if not _handle_api_error(e):
@@ -1194,10 +1278,14 @@ async def leaves_page():
         # ── Dialog nộp lại ────────────────────────────────────────────────────
 
         _rsub_id: list = [None]
+        # "resubmit" (đơn bị từ chối, sửa & nộp lại — PUT /resubmit, ghi đè
+        # đơn cũ) hoặc "npbb_adjust" (đơn bat_buoc đã duyệt, POST /npbb-adjust
+        # tạo đơn MỚI liên kết qua adjusts_leave_id — xem _open_npbb_adjust).
+        _rsub_mode: list = ["resubmit"]
 
         with ui.dialog() as resubmit_dialog, ui.card().classes("p-6 w-[420px]"):
 
-            ui.label("Chỉnh sửa & Nộp lại").classes("text-lg font-bold text-red-900 mb-4")
+            resubmit_title = ui.label("Chỉnh sửa & Nộp lại").classes("text-lg font-bold text-red-900 mb-4")
 
             r_dates    = ui.date(value=[]).props(f"multiple mask='YYYY-MM-DD' no-header first-day-of-week='1' {_OPT_FUTURE}").classes("w-full")
 
@@ -1286,15 +1374,19 @@ async def leaves_page():
                 if show_approver:
                     body["ksv_approver_id"] = r_approver.value
 
+                _is_npbb = _rsub_mode[0] == "npbb_adjust"
                 try:
-
-                    await asyncio.to_thread(api.put, f"/api/leaves/{lid}/resubmit", body)
+                    if _is_npbb:
+                        await asyncio.to_thread(api.post, f"/api/leaves/{lid}/npbb-adjust", body)
+                    else:
+                        await asyncio.to_thread(api.put, f"/api/leaves/{lid}/resubmit", body)
 
                     resubmit_dialog.close()
 
                     detail_drawer.hide()
 
-                    ui.notify("Đã nộp lại đơn!", type="positive")
+                    ui.notify("Đã tạo đơn điều chỉnh NPBB!" if _is_npbb else "Đã nộp lại đơn!",
+                              type="positive")
 
                     ui.navigate.to("/leaves")
 
@@ -1308,7 +1400,7 @@ async def leaves_page():
 
                 ui.button("Hủy", on_click=resubmit_dialog.close).classes("text-gray-500")
 
-                ui.button("Nộp lại", on_click=do_resubmit).classes("bg-orange-600 text-white")
+                resubmit_submit_btn = ui.button("Nộp lại", on_click=do_resubmit).classes("bg-orange-600 text-white")
 
 
 
@@ -1363,7 +1455,7 @@ async def leaves_page():
 
                         ui.label("Trạng thái:").classes("text-sm text-gray-600 font-medium")
 
-                        _leave_status_badge(status)
+                        _leave_status_badge(status, leave.get("status_label"))
 
 
 
@@ -1417,6 +1509,35 @@ async def leaves_page():
 
                     _info("Lý do:", leave.get("reason") or "→")
 
+                    # NPBB — đơn NÀY là đơn điều chỉnh: hiện lại ngày ĐÃ ĐĂNG KÝ của đơn
+                    # gốc để đối chiếu (đơn gốc trỏ qua adjusts_leave, xem npbb_adjust_leave()
+                    # ở backend).
+                    _adjusts = leave.get("adjusts_leave")
+                    if _adjusts:
+                        with ui.column().classes("w-full gap-1 p-3 bg-orange-50 border border-orange-200 rounded"):
+                            ui.label("Điều chỉnh từ đơn nghỉ phép bắt buộc đã đăng ký").classes(
+                                "text-xs font-medium text-orange-700")
+                            ui.label(
+                                f"Ngày đã đăng ký: {_fmt_leave_dates(_adjusts.get('start_date') or '', _adjusts.get('end_date') or '', _adjusts.get('spread_dates'))}"
+                            ).classes("text-sm text-gray-700")
+
+                    # NPBB — đơn NÀY là đơn gốc: nếu đã có ai điều chỉnh, hiện trạng thái
+                    # đơn điều chỉnh liên kết (approved thì đơn gốc đã tự "Đã hủy - Đã điều
+                    # chỉnh", xem status_label ở backend).
+                    _npbb_adj = leave.get("npbb_adjustment")
+                    if _npbb_adj:
+                        _adj_status_vn = {
+                            "pending_ksv": "Chờ KSV duyệt", "pending_tong_hop": "Chờ Tổng hợp",
+                            "pending_gd": "Chờ Ban lãnh đạo duyệt", "approved": "Đã duyệt",
+                            "rejected": "Bị từ chối", "cancelled": "Đã hủy",
+                        }.get(_npbb_adj.get("status"), _npbb_adj.get("status"))
+                        with ui.column().classes("w-full gap-1 p-3 bg-orange-50 border border-orange-200 rounded"):
+                            ui.label(f"Có đơn điều chỉnh ngày NPBB ({_adj_status_vn})").classes(
+                                "text-xs font-medium text-orange-700")
+                            ui.label(
+                                f"Ngày đề nghị điều chỉnh: {_fmt_leave_dates(_npbb_adj.get('start_date') or '', _npbb_adj.get('end_date') or '', _npbb_adj.get('spread_dates'))}"
+                            ).classes("text-sm text-gray-700")
+
 
 
                     if leave.get("is_direct"):
@@ -1444,7 +1565,7 @@ async def leaves_page():
                                     ui.label("Bước 1 → KSV phê duyệt").classes("text-xs font-bold text-orange-700 uppercase")
                                     if _is_admin and status == "pending_ksv":
                                         with ui.row().classes("gap-1"):
-                                            async def _admin_ksv_approve(l=lid):
+                                            async def _admin_ksv_approve(lv=leave, l=lid):
                                                 async def _do(payload, _l=l):
                                                     try:
                                                         await asyncio.to_thread(api.put, f"/api/leaves/{_l}/ksv-review", payload)
@@ -1453,8 +1574,10 @@ async def leaves_page():
                                                         if updated: await open_detail(updated)
                                                     except Exception as e:
                                                         _handle_api_error(e)
-                                                await _sign_then_approve(l, "ksv", f"/api/leaves/{l}/preview",
-                                                                         "Duyệt bước KSV", _do)
+                                                async def _run(_l=l):
+                                                    await _sign_then_approve(_l, "ksv", f"/api/leaves/{_l}/preview",
+                                                                             "Duyệt bước KSV", _do)
+                                                await _borrow_confirm_or_run(lv, _run)
                                             ui.button(icon="check", on_click=_admin_ksv_approve).props("round dense flat").classes("text-green-600 bg-green-50").tooltip("Phê duyệt KSV")
                                             async def _admin_ksv_reject(l=lid):
                                                 async def _cb(reason, _l=l):
@@ -1495,7 +1618,12 @@ async def leaves_page():
                                                     if updated: await open_detail(updated)
                                                 except Exception as e:
                                                     _handle_api_error(e)
-                                            _ask_confirm("Xác nhận TH", "Xác nhận & chuyển lên Ban lãnh đạo?", _do, "Xác nhận", "bg-green-600")
+                                            _th_borrow = lv.get("borrow_next_year_days") or 0
+                                            _th_msg = "Xác nhận & chuyển lên Ban lãnh đạo?"
+                                            if _th_borrow:
+                                                _th_msg += (f" ⚠ Đơn này có sử dụng {_th_borrow:.0f} ngày phép "
+                                                            f"của {_borrow_year_label(lv)}.")
+                                            _ask_confirm("Xác nhận TH", _th_msg, _do, "Xác nhận", "bg-green-600")
                                         ui.button(icon="check", on_click=_admin_th_approve).props("round dense flat").classes("text-green-600 bg-green-50").tooltip("Xác nhận TH")
                                         async def _admin_th_reject(l=lid):
                                             async def _cb(reason, _l=l):
@@ -1539,15 +1667,17 @@ async def leaves_page():
                                 ui.label("Bước 3 → Giám đốc phê duyệt").classes("text-xs font-bold text-blue-700 uppercase")
                                 if _is_admin and status == "pending_gd":
                                     with ui.row().classes("gap-1"):
-                                        async def _admin_gd_approve(l=lid):
+                                        async def _admin_gd_approve(lv=leave, l=lid):
                                             async def _do(payload, _l=l):
                                                 try:
                                                     await asyncio.to_thread(api.put, f"/api/leaves/{_l}/gd-review", payload)
                                                     detail_drawer.hide(); ui.notify("Đã duyệt GĐ!", type="positive"); _nav_pending()
                                                 except Exception as e:
                                                     _handle_api_error(e)
-                                            await _sign_then_approve(l, "gd", f"/api/leaves/{l}/preview",
-                                                                     "Duyệt bước Giám đốc", _do)
+                                            async def _run(_l=l):
+                                                await _sign_then_approve(_l, "gd", f"/api/leaves/{_l}/preview",
+                                                                         "Duyệt bước Giám đốc", _do)
+                                            await _borrow_confirm_or_run(lv, _run)
                                         ui.button(icon="check", on_click=_admin_gd_approve).props("round dense flat").classes("text-green-600 bg-green-50").tooltip("Phê duyệt GĐ")
                                         async def _admin_gd_reject(l=lid):
                                             async def _cb(reason, _l=l):
@@ -1589,7 +1719,11 @@ async def leaves_page():
 
                         try:
 
-                            content = await asyncio.to_thread(api.download, f"/api/leaves/{l}/download")
+                            # timeout=160: backend cho Word cold-start tới 150s trước khi coi
+                            # là treo thật (leave_pdf._CONVERT_TIMEOUT) — mặc định 60s của
+                            # api.download() sẽ rớt về docx chưa ký oan dù server không lỗi.
+                            content = await asyncio.to_thread(
+                                api.download, f"/api/leaves/{l}/download", None, 160)
 
                             ui.download(content, f"phieu_nghi_phep_{l}.pdf")
 
@@ -1622,7 +1756,7 @@ async def leaves_page():
 
                         if ksv_act and api.has_feature("leaves.approve_ksv"):
 
-                            async def _ksv_approve(l=lid):
+                            async def _ksv_approve(lv=leave, l=lid):
 
                                 async def _do(payload, _l=l):
 
@@ -1640,8 +1774,10 @@ async def leaves_page():
 
                                         _handle_api_error(e)
 
-                                await _sign_then_approve(l, "ksv", f"/api/leaves/{l}/preview",
-                                                         "Xác nhận phê duyệt", _do)
+                                async def _run(_l=l):
+                                    await _sign_then_approve(_l, "ksv", f"/api/leaves/{_l}/preview",
+                                                             "Xác nhận phê duyệt", _do)
+                                await _borrow_confirm_or_run(lv, _run)
 
 
 
@@ -1700,6 +1836,10 @@ async def leaves_page():
                                          " ⚠ Người duyệt là Phó Giám đốc nhưng giấy ủy quyền chưa/không còn "
                                          "hiệu lực hôm nay — chuyển lên bây giờ thì đơn sẽ đứng lại cho tới khi "
                                          "ủy quyền được gia hạn.")
+                                _th_borrow = lv.get("borrow_next_year_days") or 0
+                                if _th_borrow:
+                                    _warn += (f" ⚠ Đơn này có sử dụng {_th_borrow:.0f} ngày phép "
+                                              f"của {_borrow_year_label(lv)}.")
                                 _ask_confirm(
                                     "Xác nhận phê duyệt",
                                     f"Xác nhận đơn của {lv.get('staff_name','')} và chuyển lên Ban lãnh đạo?{_warn}",
@@ -1747,7 +1887,7 @@ async def leaves_page():
 
                         if gd_act and api.has_feature("leaves.approve_gd"):
 
-                            async def _gd_approve(l=lid):
+                            async def _gd_approve(lv=leave, l=lid):
 
                                 async def _do(payload, _l=l):
 
@@ -1765,8 +1905,10 @@ async def leaves_page():
 
                                         _handle_api_error(e)
 
-                                await _sign_then_approve(l, "gd", f"/api/leaves/{l}/preview",
-                                                         "Xác nhận phê duyệt", _do)
+                                async def _run(_l=l):
+                                    await _sign_then_approve(_l, "gd", f"/api/leaves/{_l}/preview",
+                                                             "Xác nhận phê duyệt", _do)
+                                await _borrow_confirm_or_run(lv, _run)
 
 
 
@@ -1802,60 +1944,83 @@ async def leaves_page():
 
 
 
-                        # Resubmit
+                        # Resubmit / Điều chỉnh NPBB — dùng chung 1 dialog, khác nhau ở
+                        # tiêu đề, khả năng đổi loại nghỉ phép và endpoint gọi lúc submit
+                        # (xem _rsub_mode, do_resubmit).
+                        async def _load_resubmit_fields(lv, title="Chỉnh sửa & Nộp lại",
+                                                        lock_type=False, mode="resubmit"):
+
+                            resubmit_title.set_text(title)
+                            _rsub_mode[0] = mode
+                            resubmit_submit_btn.set_text("Tạo đơn điều chỉnh" if mode == "npbb_adjust" else "Nộp lại")
+
+                            _spread = lv.get("spread_dates")
+
+                            if _spread:
+                                r_dates.value = _spread
+                            else:
+                                # Đơn cũ là khoảng liên tục (vd thai sản/bảo hiểm) — phải nạp
+                                # ĐỦ mọi ngày từ start_date đến end_date vào picker "multiple",
+                                # nếu không chỉ giữ lại ngày đầu, mất hết các ngày còn lại.
+                                _s = (lv.get("start_date") or "")[:10]
+                                _e = (lv.get("end_date") or "")[:10]
+                                try:
+                                    _sd = _dt_mod.date.fromisoformat(_s)
+                                    _ed = _dt_mod.date.fromisoformat(_e) if _e else _sd
+                                    _all_days, _d = [], _sd
+                                    while _d <= _ed:
+                                        _all_days.append(_d.isoformat())
+                                        _d += _dt_mod.timedelta(days=1)
+                                    r_dates.value = _all_days
+                                except ValueError:
+                                    r_dates.value = [_s] if _s else []
+
+                            r_type.value   = lv.get("leave_type", "annual")
+                            r_type.set_enabled(not lock_type)
+
+                            r_reason.value = lv.get("reason") or ""
+
+                            _rsub_id[0]    = lv["id"]
+
+                            if r_approver:
+                                r_approver.value = lv.get("ksv_approver_id")
+
+                            # Load danh sách GĐ/PGĐ mỗi lần mở dialog
+                            try:
+                                lst = await asyncio.to_thread(api.get, "/api/leaves/gd-list")
+                                r_gd_select.options = {
+                                    s["id"]: f"{s['full_name']} ({s.get('role_label', '')})"
+                                    for s in (lst or [])
+                                }
+                                r_gd_select.update()
+                            except Exception:
+                                pass
+
+                            r_gd_select.value = lv.get("gd_approver_id")
+
+                            resubmit_dialog.open()
 
                         if is_owner and status == "rejected" and api.has_feature("leaves.resubmit"):
 
                             async def _open_resubmit(lv=leave):
-
-                                _spread = lv.get("spread_dates")
-
-                                if _spread:
-                                    r_dates.value = _spread
-                                else:
-                                    # Đơn cũ là khoảng liên tục (vd thai sản/bảo hiểm) — phải nạp
-                                    # ĐỦ mọi ngày từ start_date đến end_date vào picker "multiple",
-                                    # nếu không chỉ giữ lại ngày đầu, mất hết các ngày còn lại.
-                                    _s = (lv.get("start_date") or "")[:10]
-                                    _e = (lv.get("end_date") or "")[:10]
-                                    try:
-                                        _sd = _dt_mod.date.fromisoformat(_s)
-                                        _ed = _dt_mod.date.fromisoformat(_e) if _e else _sd
-                                        _all_days, _d = [], _sd
-                                        while _d <= _ed:
-                                            _all_days.append(_d.isoformat())
-                                            _d += _dt_mod.timedelta(days=1)
-                                        r_dates.value = _all_days
-                                    except ValueError:
-                                        r_dates.value = [_s] if _s else []
-
-                                r_type.value   = lv.get("leave_type", "annual")
-
-                                r_reason.value = lv.get("reason") or ""
-
-                                _rsub_id[0]    = lv["id"]
-
-                                if r_approver:
-                                    r_approver.value = lv.get("ksv_approver_id")
-
-                                # Load danh sách GĐ/PGĐ mỗi lần mở dialog
-                                try:
-                                    lst = await asyncio.to_thread(api.get, "/api/leaves/gd-list")
-                                    r_gd_select.options = {
-                                        s["id"]: f"{s['full_name']} ({s.get('role_label', '')})"
-                                        for s in (lst or [])
-                                    }
-                                    r_gd_select.update()
-                                except Exception:
-                                    pass
-
-                                r_gd_select.value = lv.get("gd_approver_id")
-
-                                resubmit_dialog.open()
-
-
+                                await _load_resubmit_fields(lv, "Chỉnh sửa & Nộp lại")
 
                             ui.button("Sửa & Nộp lại", icon="refresh", on_click=_open_resubmit).classes("bg-orange-500 text-white text-sm")
+
+                        # Điều chỉnh ngày NPBB — chỉ đơn bat_buoc đã "Hoàn thành", tạo
+                        # đơn MỚI liên kết qua adjusts_leave_id (POST /npbb-adjust), KHÔNG
+                        # ghi đè đơn gốc — xem npbb_adjust_leave() ở backend. Ẩn nếu đã có
+                        # đơn điều chỉnh đang xử lý (chưa bị từ chối/hủy).
+                        _pending_adj = leave.get("npbb_adjustment")
+                        _has_active_adj = bool(_pending_adj) and _pending_adj.get("status") not in ("rejected", "cancelled")
+                        if (is_owner and status == "approved" and leave.get("leave_type") == "bat_buoc"
+                                and not _has_active_adj and api.has_feature("leaves.create")):
+
+                            async def _open_npbb_adjust(lv=leave):
+                                await _load_resubmit_fields(lv, "Điều chỉnh ngày nghỉ phép bắt buộc",
+                                                            lock_type=True, mode="npbb_adjust")
+
+                            ui.button("Điều chỉnh ngày NPBB", icon="edit_calendar", on_click=_open_npbb_adjust).classes("bg-orange-500 text-white text-sm")
 
                         # Hủy đơn bị từ chối (không resubmit nữa)
                         if is_owner and status == "rejected":
@@ -2106,6 +2271,8 @@ async def leaves_page():
 
                 return
 
+            _bulk_lv_map = {lv["id"]: lv for lv in pending_leaves}
+
 
 
             async def _do_bulk(_ids=ids):
@@ -2171,9 +2338,20 @@ async def leaves_page():
 
 
 
+            _borrow_ids = [i for i in ids if (_bulk_lv_map.get(i, {}).get("borrow_next_year_days") or 0) > 0]
+            _bulk_msg = f"Bạn có chắc chắn muốn phê duyệt {len(ids)} đơn đã chọn?"
+            if _borrow_ids:
+                _lines = []
+                for i in _borrow_ids:
+                    _lv = _bulk_lv_map.get(i, {})
+                    _lines.append(f"{_lv.get('staff_name', '')} ({_lv.get('department_name', '')}) — "
+                                  f"{_borrow_year_label(_lv)}")
+                _bulk_msg += (f" ⚠ Trong đó có {len(_borrow_ids)} đơn sử dụng ngày phép của năm sau: "
+                              + "; ".join(_lines))
+
             _ask_confirm("Xác nhận phê duyệt",
 
-                         f"Bạn có chắc chắn muốn phê duyệt {len(ids)} đơn đã chọn?",
+                         _bulk_msg,
 
                          _do_bulk, "Phê duyệt", "bg-green-600")
 
@@ -2377,7 +2555,7 @@ async def leaves_page():
 
                     # ── C→c tab nghỉ phép ──────────────────────────────────────
 
-                    # Tab Báo cáo năm → xuất tất cả đơn trong năm
+                    # Tab Báo cáo tổng hợp → xuất tất cả đơn trong năm
                     if t_stats and _tab_match(t_stats, cur):
                         from datetime import date as _d_stats
                         _yr_stats = _d_stats.today().year
@@ -2584,11 +2762,11 @@ async def leaves_page():
 
             _hdr_cls  = "font-semibold text-red-800 text-xs shrink-0 border-r border-red-400 pr-2 mr-1"
 
-            with ui.column().classes("w-full gap-0 border-2 border-gray-400 rounded"):
+            with ui.column().classes("hl-table w-full gap-0 border-2 border-gray-400 rounded"):
 
                 # Header
 
-                with ui.row().classes("w-full bg-red-50 border-b-2 border-red-400 px-3 py-2 items-center gap-0"):
+                with ui.row().classes("hl-row w-full bg-red-50 border-b-2 border-red-400 px-3 py-2 items-center gap-0"):
 
                     if show_checkbox or export_sel is not None:
                         _all_ids = [lv["id"] for lv in leaves]
@@ -2653,6 +2831,10 @@ async def leaves_page():
                 for _row_idx, lv in enumerate(leaves, _row_offset + 1):
 
                     sg_lbl, sg_cls = _STATUS_GROUP.get(lv["status"], (lv["status"], "bg-gray-100 text-gray-500"))
+                    # Đơn NPBB gốc đã bị đơn điều chỉnh thay thế — nhãn riêng thay nhãn
+                    # chung chung, xem status_label ở backend (_leave_to_out).
+                    if lv.get("status_label"):
+                        sg_lbl = lv["status_label"]
 
                     # Highlight đỏ nhạt nếu dòng này cần user hiện tại xử lý
                     _needs_action = (
@@ -2664,7 +2846,7 @@ async def leaves_page():
                     )
                     _row_bg = "bg-red-50 border-red-300" if _needs_action else "bg-white border-gray-300"
 
-                    with ui.row().classes(f"w-full {_row_bg} border-b border-gray-300 px-3 py-1.5 items-center gap-0 hover:bg-red-100"):
+                    with ui.row().classes(f"hl-row w-full {_row_bg} border-b border-gray-300 px-3 py-1.5 items-center gap-0 hover:bg-red-100"):
 
                         if show_checkbox:
 
@@ -2810,7 +2992,7 @@ async def leaves_page():
 
             t_quota   = ui.tab("Hạn mức phép") if api.has_feature("leaves.quota_admin") else None
 
-            t_stats   = ui.tab("Báo cáo năm") if api.has_feature("leaves.stats_export") else None
+            t_stats   = ui.tab("Báo cáo tổng hợp") if api.has_feature("leaves.stats_export") else None
 
             t_direct  = ui.tab("Khai báo hộ") if api.has_feature("leaves.declare_direct") else None
 
@@ -4505,7 +4687,7 @@ async def leaves_page():
                                                  value=12, min=0, max=365,
                                                  on_change=_update_q_remaining).classes("w-full mt-2")
 
-                        ui.label("Công thức: 12 ngày + 1 ngày mỗi 4 năm công tác").classes("text-xs text-gray-500 mt-1 mb-4")
+                        ui.label("Công thức: 12 ngày + 1 ngày mỗi 5 năm công tác").classes("text-xs text-gray-500 mt-1 mb-4")
 
                         q_used_input = ui.number("Đã dùng (có thể sửa thủ công)",
                                                   value=0, min=0, max=365,
@@ -4875,6 +5057,69 @@ async def leaves_page():
 
                     ui.label("Chọn năm và nhấn 'Tải báo cáo Excel' để xuất file tổng hợp phép.").classes("text-sm text-gray-500")
 
+                    ui.separator().classes("my-4")
+
+                    with ui.row().classes("w-full items-center justify-between"):
+                        ui.label("BÁO CÁO HÀNG THÁNG").classes("text-sm font-bold text-red-800")
+                        ui.label("(Cập nhật theo mẫu chính thức của TCNS)").classes("text-xs text-gray-500 italic")
+
+                    with ui.row().classes("gap-3 mb-2 mt-2 items-center"):
+
+                        _today_month = _dt_mod.date.today().month
+
+                        s_month_year_sel = ui.select(
+                            {y: str(y) for y in range(_today_year - 2, _today_year + 2)},
+                            label="Năm", value=_today_year,
+                        ).classes("w-28")
+
+                        s_month_sel = ui.select(
+                            {m: f"Tháng {m:02d}" for m in range(1, 13)},
+                            label="Tháng", value=_today_month,
+                        ).classes("w-32")
+
+                        # Báo cáo NPBB — Phòng Tổng hợp chốt tổng gửi báo cáo (không phải
+                        # từng cá nhân tự làm), quét dữ liệu đơn nghỉ phép bắt buộc trong
+                        # năm đã chọn (export_npbb_batch chỉ lọc theo năm, chưa lọc theo
+                        # tháng — Tháng ở hàng này chỉ dùng cho "Báo cáo chấm công" bên
+                        # cạnh) — xem export_npbb_batch() ở backend.
+                        async def _download_npbb(mau: str):
+                            try:
+                                content = await asyncio.to_thread(
+                                    api.download, "/api/leaves/export/npbb-batch",
+                                    params={"year": s_month_year_sel.value, "mau": mau},
+                                )
+                                ui.download(content, f"bao_cao_npbb_mau{mau}_{s_month_year_sel.value}.docx")
+                            except Exception as e:
+                                _handle_api_error(e)
+
+                        with ui.button("Báo cáo NPBB", icon="assignment").classes("bg-orange-700 text-white"):
+                            with ui.menu():
+                                ui.menu_item("Mẫu đăng ký (Mẫu 19 — gửi TCNS)", on_click=lambda: _download_npbb("19"))
+                                ui.menu_item("Mẫu điều chỉnh (Mẫu 18 — nội bộ)", on_click=lambda: _download_npbb("18"))
+
+                        # Suy ra hoàn toàn từ đơn nghỉ phép đã duyệt — X = đi làm, P = phép.
+                        # Không có nguồn dữ liệu cho họp/tập huấn/xếp loại thi đua nên các
+                        # phần đó bỏ trống trên file tải về, xem export_attendance_monthly().
+                        async def _download_attendance():
+                            try:
+                                content = await asyncio.to_thread(
+                                    api.download, "/api/leaves/export/attendance-monthly",
+                                    params={"year": s_month_year_sel.value, "month": s_month_sel.value},
+                                )
+                                ui.download(content,
+                                             f"bao_cao_cham_cong_{s_month_sel.value:02d}_{s_month_year_sel.value}.xlsx")
+                            except Exception as e:
+                                _handle_api_error(e)
+
+                        ui.button("Báo cáo chấm công", icon="event_available",
+                                  on_click=_download_attendance).classes("bg-blue-700 text-white")
+
+                    ui.label("Báo cáo NPBB: tổng hợp đăng ký nghỉ phép bắt buộc và điều chỉnh trong năm đã chọn. "
+                             "Báo cáo chấm công: suy ra từ đơn nghỉ phép đã duyệt trong tháng — X = đi làm, "
+                             "P = nghỉ phép, để trống = T7/CN/lễ; các buổi họp/tập huấn/công tác và cột xếp loại "
+                             "thi đua KHÔNG tự điền được (không có dữ liệu), cần Phòng Tổng hợp bổ sung thủ công."
+                             ).classes("text-sm text-gray-500")
+
 
 
             # ── Tab: Khai báo hộ ─────────────────────────────────────────────
@@ -4964,9 +5209,9 @@ async def leaves_page():
                                 else:
                                     for dl in _leaves: _export_sel.discard(dl["id"])
 
-                            with ui.column().classes("w-full gap-0 border-2 border-gray-400 rounded"):
+                            with ui.column().classes("hl-table w-full gap-0 border-2 border-gray-400 rounded"):
 
-                                with ui.row().classes("w-full bg-red-50 border-b-2 border-red-400 px-3 py-2 items-center gap-0"):
+                                with ui.row().classes("hl-row w-full bg-red-50 border-b-2 border-red-400 px-3 py-2 items-center gap-0"):
 
                                     _all_sel_checkboxes.append(
                                         ui.checkbox(value=False, on_change=_decl_select_all).props("dense").classes("w-6 shrink-0 mr-2").tooltip("Chọn / Bỏ chọn tất cả")
@@ -4990,7 +5235,7 @@ async def leaves_page():
 
                                 for _di, dl in enumerate(leaves, 1):
 
-                                    with ui.row().classes("w-full bg-white border-b border-gray-100 px-3 py-1.5 items-center gap-0 hover:bg-purple-50"):
+                                    with ui.row().classes("hl-row w-full bg-white border-b border-gray-100 px-3 py-1.5 items-center gap-0 hover:bg-purple-50"):
 
                                         def _on_decl_ck(e, l=dl["id"]):
 
@@ -5270,29 +5515,13 @@ async def leaves_page():
 
                                     ui.button("Hủy", on_click=_dlg.close).props("flat").classes("text-gray-500")
 
-                                    async def _on_confirm(_b=body, _d=_dlg, _rng=is_rng):
-
-                                        _d.close()
-
-                                        try:
-
-                                            await asyncio.to_thread(api.post, "/api/leaves/direct", _b)
-
-                                        except Exception as e:
-
-                                            if not _handle_api_error(e):
-
-                                                ui.notify(f"Khai báo thất bại: {e}", type="negative", timeout=5000)
-
-                                            return
-
-                                        ui.notify("✅ Khai báo hộ thành công!", type="positive", timeout=4000)
-
+                                    def _on_direct_created(_rng=is_rng):
                                         # Đơn mới tạo phải phản ánh vào Dashboard/5 ô KPI/"Đơn của tôi"...
                                         # nhưng các dữ liệu đó chỉ fetch 1 lần lúc mở trang, không tự refetch
                                         # khi đổi tab nữa (xem _on_leave_tab_change) — phải reload thật qua
                                         # _nav_pending() giống hệt cơ chế duyệt/từ chối, quay lại đúng tab
                                         # Khai báo hộ sau khi reload xong.
+                                        ui.notify("✅ Khai báo hộ thành công!", type="positive", timeout=4000)
 
                                         d_staff.value = None
                                         if _rng:
@@ -5310,6 +5539,34 @@ async def leaves_page():
                                         d_reason.set_visibility(False)
 
                                         _nav_pending()
+
+                                    async def _send_direct(_b):
+                                        try:
+                                            await asyncio.to_thread(api.post, "/api/leaves/direct", _b)
+                                        except api.QuotaExceededBorrowError as e:
+                                            # Vượt hạn mức năm nay nhưng năm sau còn đủ chỗ ứng — hỏi
+                                            # xác nhận thay vì chặn cứng, xem _check_quota_or_borrow.
+                                            async def _retry_with_borrow(_b2=_b):
+                                                _b2["confirm_borrow_next_year"] = True
+                                                await _send_direct(_b2)
+                                            _ask_confirm(
+                                                "Vượt hạn mức phép",
+                                                f"Đơn khai báo hộ đã vượt quá hạn mức ngày nghỉ phép năm "
+                                                f"{e.year} (còn lại {e.remaining:.0f} ngày). Bạn có muốn "
+                                                f"tiếp tục ứng trước {e.borrow_days:.0f} ngày phép của năm "
+                                                f"{e.next_year} không?",
+                                                _retry_with_borrow, "Đồng ý ứng phép", "bg-orange-600",
+                                            )
+                                            return
+                                        except Exception as e:
+                                            if not _handle_api_error(e):
+                                                ui.notify(f"Khai báo thất bại: {e}", type="negative", timeout=5000)
+                                            return
+                                        _on_direct_created()
+
+                                    async def _on_confirm(_b=body, _d=_dlg):
+                                        _d.close()
+                                        await _send_direct(_b)
 
                                     ui.button("Khai báo", icon="check",
 

@@ -334,6 +334,38 @@ Truy cập:
 - Bảng nghỉ phép hôm nay trên Trang chủ theo từng phòng — **chỉ đếm đơn đã duyệt** (lịch tháng trong menu thì hiện cả đơn đang chờ, kèm nhãn trạng thái)
 - Chống duyệt trùng: hai người (hoặc hai tab) bấm duyệt cùng lúc thì chỉ lần đầu có hiệu lực, lần sau báo đơn đã được xử lý
 - Resubmit đơn bị từ chối; huỷ đơn đang chờ hoặc đã duyệt
+- **Nghỉ phép bắt buộc (NPBB)**: đơn đã "Hoàn thành" có nút *Điều chỉnh ngày NPBB* — tạo **đơn mới**
+  liên kết qua `leave_records.adjusts_leave_id`, đi lại đủ 3 bước duyệt; đơn gốc chỉ chuyển
+  *"Đã hủy - Đã điều chỉnh"* khi đơn mới duyệt xong. Màn chi tiết hiện cả hai chiều liên kết
+- Mẫu đơn xin nghỉ phép năm **riêng theo chức danh** (nhân viên / trưởng - phó phòng / GĐ / PGĐ).
+  Đơn của GĐ kính gửi **Tổng Giám đốc Agribank**, không phải Giám đốc TTTT; mẫu NPBB của diện HĐTV
+  gửi **Ban Tổ chức Nhân sự**
+- Mẫu đơn cá nhân NPBB (đăng ký / điều chỉnh — "Mẫu 1 TCNS") và báo cáo tổng hợp
+  **Mẫu 18** (nội bộ) / **Mẫu 19** (gửi TCNS): `GET /api/leaves/export/npbb-batch?year=&mau=18|19`
+  > ⚠️ **Báo cáo Mẫu 18/19 chưa dùng được**: truy vấn chưa lọc bản ghi tổng hợp `[Import]` /
+  > `[Điều chỉnh]` của màn *Nhập hạn mức phép* — vốn cũng mang `leave_type='bat_buoc'` — nên in ra
+  > gần như toàn bộ nhân sự kèm ngày giả lập. Xem card **NP1** trong
+  > [`docs/Implementation-notes.html`](docs/Implementation-notes.html)
+
+- **Ứng phép năm sau khi vượt hạn mức**: vượt quỹ năm nay mà năm sau còn chỗ thì API trả **409**
+  `{"code":"quota_exceeded_borrow", ...}` thay vì chặn cứng 400; frontend hỏi xác nhận rồi gọi lại với
+  `confirm_borrow_next_year=true`. Phần vượt lưu ở `leave_records.borrow_next_year_days` và **trừ thật**
+  vào quỹ năm sau. Vượt cả năm sau thì chặn hẳn. Cả 3 bước duyệt + duyệt lô đều cảnh báo trước khi duyệt
+  đơn có ứng phép
+- **KSV thay thế**: Trưởng/Phó phòng **cùng phòng** với người nộp đơn duyệt được bước KSV dù không phải
+  `ksv_approver_id` (`_is_alt_ksv`) — đơn không còn kẹt khi người được chỉ định vắng mặt. Đây là *bước
+  duyệt của hồ sơ*, không phải quyền truy cập; xem mục **Phân quyền** trong `docs/DESIGN.md`
+- Tab **Báo cáo tổng hợp** (tên cũ: Báo cáo năm) — thêm **Báo cáo chấm công tháng**
+  `GET /api/leaves/export/attendance-monthly?year=&month=`: nhóm theo phòng, `X` = đi làm, `P` = nghỉ
+  phép suy từ đơn đã duyệt, để trống = T7/CN/lễ. Họp/tập huấn/công tác và xếp loại thi đua **không có
+  nguồn dữ liệu** nên để trống cho phòng Tổng hợp điền tay
+  > ⚠️ **Số ngày phép năm đổi mốc thâm niên 4 → 5 năm** (`compute_annual_leave()`, đúng Điều 114 BLLĐ:
+  > khớp 67/72 người trên báo cáo thật 2026, mốc 4 năm cũ khớp 12/72). Người vào ngành đủ 4/8/12… năm
+  > **giảm 1 ngày**; chưa có bước rà ai đã nghỉ quá hạn mức mới — xem card **NP2** trong
+  > [`docs/Implementation-notes.html`](docs/Implementation-notes.html)
+  > ⚠️ **Ngày chuyển năm chưa hết hạn 31/03**: `_check_quota_or_borrow()` truyền
+  > `ref_date=date(ref_year,1,1)` nên `compute_carry_over(effective=True)` không bao giờ hết hiệu lực.
+  > Cùng card NP2 còn 2 lỗi quỹ phép khác chưa sửa
 
 ### Module Chứng từ Hậu kiểm
 - **Bàn giao**: GDV nhập số tờ theo ngày, HKV/KSV xác nhận từng ô
@@ -545,9 +577,23 @@ Truy cập:
 - Ngoài 5 cổng còn 2 kênh cộng vào tổng CITAD: **Napas** và **PSS - MDP** (chỉ 2 ô *IH Đến —
   Món/Tiền*). Kênh **Ebanking** đã ngừng: bỏ khỏi màn hình 14/08/2026, bỏ nốt khỏi file Excel
   20/08/2026 — số liệu các ngày đã chấm vẫn nằm nguyên trong DB, chỉ không hiện/in ra nữa
-- Mỗi ngày là **một bản ghi chung cả phòng** (`doi_chieu_citad_sessions`, khoá theo `ngay`) —
-  ai lưu sau cùng là bản hiện hành; mỗi lần bấm Lưu ghi thêm 1 dòng vào
-  `doi_chieu_citad_history` để xem/tải lại từng bản cũ
+- **Mỗi người một bảng riêng cho cùng một ngày** (từ 05/09/2026 — `doi_chieu_citad_sessions`
+  khoá theo `(ngay, created_by)`). Trước đây một ngày chỉ một bảng chung cả phòng nên người thứ
+  hai chấm cùng ngày bị chặn, hoặc phải sửa đè lên bảng người thứ nhất. Nay ai cũng tự lập được
+  bảng của mình; mỗi lần bấm Lưu ghi thêm 1 dòng vào `doi_chieu_citad_history` gắn đúng bảng đó
+  để xem/tải lại từng bản cũ
+- Vào bảng **tạm** của người khác (qua tab *Lịch sử*) vẫn chỉ bổ sung được Napas/PSS-MDP như cũ,
+  không sửa được ô nào khác và không chốt bản cuối hộ được
+- **Sổ trực cuối ngày** coi một ngày là *đã đối chiếu, đã khớp* nếu **bất kỳ** bảng nào của ngày
+  đó đã "Lưu bảng cuối" và khớp. ⚠️ Nghĩa là nếu người A chốt bảng khớp còn người B chốt bảng
+  lệch cho cùng ngày, Sổ trực **không** cảnh báo — cảnh báo này chỉ là nhắc phụ trợ, không chặn
+- Hai ô **Napas** / **PSS - MDP** **không gõ tay được nữa** (từ 05/09/2026), chỉ nạp qua nút
+  *"Nạp CITAD"*. Extension quét ở trang PaymentHub vẫn gửi hai mục này lên nhưng phần mềm chủ
+  động bỏ qua và báo *"Lệnh quyết toán lô bắt buộc phải quét dữ liệu từ cổng Citad"* —
+  **không phải lỗi**, và **không cần cài lại Extension** (Extension không đổi gì)
+- **Ba bảng chênh lệch** thay vì một (từ 05/09/2026): bảng *Gộp* cả 3 loại tiền như cũ, thêm
+  bảng **VNĐ** riêng và bảng **Ngoại tệ** (USD + EUR gộp chung) — nhìn ra ngay lệch nằm ở nhóm
+  tiền nào, không phải đọc dòng ghi chú cuối trang. Công thức và file Excel xuất ra không đổi
 - Xuất Excel theo mẫu *"Báo cáo đối chiếu giao dịch hệ thống thanh toán điện tử liên ngân hàng"*
   đã duyệt (`build_xlsx` — không đổi format/công thức khi sửa)
 - Kèm **Extension trình duyệt** (`extension_citad/`) tự lấy số liệu từ trang CITAD/PaymentHub:

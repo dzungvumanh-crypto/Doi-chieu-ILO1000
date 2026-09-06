@@ -171,7 +171,7 @@ def _dec(v) -> Decimal:
     `Decimal(516.6)` ra `Decimal('516.59999999999999...')`) — phải đi qua
     `str(v)` trước: `str()` của float là chuỗi thập phân NGẮN NHẤT vẫn ra
     đúng float đó (thuật toán repr của Python), nên `Decimal(str(516.6))`
-    ra đúng `Decimal('516.6')`. Dùng cho MỌI phép cộng dồn tiền (`_compute_totals()`,
+    ra đúng `Decimal('516.6')`. Dùng cho MỌI phép cộng dồn tiền (`_compute_totals_group()`,
     `cur_mismatch()`) — cộng nhiều số thực rồi so sánh trực tiếp có thể sinh
     dư nhị phân (bug thật 25/08/2026: 0,0078125 dù CITAD gốc cộng đúng khớp
     PaymentHub, khiến màn hình báo "+0,01" giả); cộng bằng Decimal thì không
@@ -186,8 +186,8 @@ def _dec(v) -> Decimal:
 
 def diff_exact(ci_val: Decimal, ph_val: Decimal) -> Decimal:
     """Chênh lệch CITAD-PaymentHub cho 1 cột — `ci_val`/`ph_val` phải là
-    Decimal đã cộng dồn qua `_dec()` (xem `_compute_totals()`), nên phép trừ
-    này chính xác tuyệt đối, không cần và không được làm tròn gì thêm."""
+    Decimal đã cộng dồn qua `_dec()` (xem `_compute_totals_group()`), nên phép
+    trừ này chính xác tuyệt đối, không cần và không được làm tròn gì thêm."""
     return ci_val - ph_val
 
 
@@ -262,7 +262,13 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         "napasE": {},
         "pssmdpE": {},
     }
+    # 3 bảng chênh lệch (04/09/2026): Gộp (cả 3 loại tiền, như trước giờ) +
+    # 2 bảng tách riêng VNĐ (kèm Napas/PSS-MDP, kênh trong nước) / Ngoại tệ
+    # (USD+EUR gộp chung 1 bảng, không tách tiếp theo từng loại ngoại tệ) —
+    # xem đủ cả tổng lẫn chi tiết từng nhóm tiền cùng lúc.
     diff_labels = {"citad": {}, "phub": {}, "diff": {}}
+    diff_labels_vnd = {"citad": {}, "phub": {}, "diff": {}}
+    diff_labels_fx = {"citad": {}, "phub": {}, "diff": {}}
     lech_cur_label = None  # ui.label ghi chú "Lệch: <loại tiền>" cuối trang — gán khi dựng UI
 
     ngay_input = None
@@ -330,12 +336,17 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
             "border-b border-blue-900 py-1 ml-2 rounded-t-lg"
         )
 
-    def _compute_totals():
-        """Tổng CITAD (5 cổng + Napas IH Đến, KHÔNG cộng Ebanking) và tổng
-        PaymentHub — đúng công thức `_calc()` gốc, xem ghi chú chi tiết
-        trong `doi_chieu_citad_service.py::build_xlsx`. Dùng chung cho cả
-        `recalc()` (hiện trên trang) và preview trước khi xuất Excel — luôn
-        khớp nhau, tính 1 nơi duy nhất."""
+    def _compute_totals_group(curs: list) -> tuple:
+        """Tổng CITAD (5 cổng + Napas/PSS-MDP IH Đến — CHỈ khi VNĐ nằm trong
+        `curs`, kênh trong nước — KHÔNG cộng Ebanking) và tổng PaymentHub,
+        CHỈ cộng các loại tiền trong `curs` — đúng công thức `_calc()` gốc,
+        xem ghi chú chi tiết trong `doi_chieu_citad_service.py::build_xlsx`.
+        Dùng cho CẢ 3 bảng chênh lệch trên màn hình (Gộp gọi với `curs=CURS`,
+        VNĐ/Ngoại tệ gọi với tập con — xem recalc()/_fill_diff_table()) lẫn
+        preview trước khi xuất Excel (`do_export()`, cũng gọi với `curs=CURS`)
+        — luôn khớp nhau, tính 1 nơi duy nhất (trước đây có 2 hàm riêng cùng
+        công thức — review Người 1 PR#76: 2 bản song song dễ lệch nhau khi
+        sau này chỉ sửa 1 bản, gộp lại còn 1 nguồn duy nhất)."""
         # Cộng dồn bằng Decimal (qua _dec()) — KHÔNG cộng bằng float trực
         # tiếp. Cộng nhiều số thực (5 Cổng × 3 loại tiền + Napas + PSS-MDP)
         # có thể sinh dư nhị phân dù về bản chất đã khớp tuyệt đối (bug thật
@@ -344,34 +355,34 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         # làm tròn/che đi, nên lệch thật dù chỉ 1 xu vẫn hiện đúng.
         ci = {f: Decimal(0) for f in FK}
         for c in CONGS:
-            for u in CURS:
+            for u in curs:
                 for f in FK:
                     ci[f] += _dec(data["gD"][c][u][f])
-        ci["den_ih_m"] += _dec(data["napas"]["den_ih_m"])
-        ci["den_ih_t"] += _dec(data["napas"]["den_ih_t"])
-        # PSS - MDP: kênh mới, cùng nguyên lý Napas (cộng vào tổng CITAD).
-        ci["den_ih_m"] += _dec(data["pssmdp"]["den_ih_m"])
-        ci["den_ih_t"] += _dec(data["pssmdp"]["den_ih_t"])
-
+        if 'VNĐ' in curs:
+            ci["den_ih_m"] += _dec(data["napas"]["den_ih_m"]) + _dec(data["pssmdp"]["den_ih_m"])
+            ci["den_ih_t"] += _dec(data["napas"]["den_ih_t"]) + _dec(data["pssmdp"]["den_ih_t"])
         ph = {f: Decimal(0) for f in FK}
-        for u in CURS:
+        for u in curs:
             for f in FK:
                 ph[f] += _dec(data["phD"][u][f])
         return ci, ph
 
-    def recalc():
-        ci, ph = _compute_totals()
+    def _fill_diff_table(labels: dict, curs: list):
+        """Đổ số liệu vào 1 trong 2 bảng chênh lệch tách VNĐ/Ngoại tệ —
+        cùng công thức hiển thị (—/✓ 0/±số) như bảng gộp cũ, chỉ khác nguồn
+        (_compute_totals_group thay vì _compute_totals)."""
+        ci, ph = _compute_totals_group(curs)
         for f in FK:
             ci_val, ph_val = ci[f], ph[f]
             df_val = diff_exact(ci_val, ph_val)
-            diff_labels["citad"][f].text = fmt(ci_val) if ci_val else '—'
-            diff_labels["phub"][f].text = fmt(ph_val) if ph_val else '—'
+            labels["citad"][f].text = fmt(ci_val) if ci_val else '—'
+            labels["phub"][f].text = fmt(ph_val) if ph_val else '—'
             if df_val == 0 and ci_val == 0 and ph_val == 0:
-                diff_labels["diff"][f].text = '—'
-                diff_labels["diff"][f].classes(remove='text-red-600 text-green-700')
+                labels["diff"][f].text = '—'
+                labels["diff"][f].classes(remove='text-red-600 text-green-700')
             elif df_val == 0:
-                diff_labels["diff"][f].text = '✓ 0'
-                diff_labels["diff"][f].classes(remove='text-red-600', add='text-green-700')
+                labels["diff"][f].text = '✓ 0'
+                labels["diff"][f].classes(remove='text-red-600', add='text-green-700')
             else:
                 # Dùng fmt() (không phải int() cắt xu trực tiếp) — âm đã tự
                 # có dấu "-" từ fmt(), chỉ cần tự thêm "+" cho dương. Trước
@@ -379,15 +390,22 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                 # kiểu 0.79 xu hiện thành "+0" dù vẫn bôi đỏ đúng — sai lệch
                 # y hệt lỗi đã sửa ở fmt()/ô nhập, chỉ khác là sót ở đây.
                 sign = '+' if df_val > 0 else ''
-                diff_labels["diff"][f].text = f'{sign}{fmt(df_val)}'
-                diff_labels["diff"][f].classes(remove='text-green-700', add='text-red-600')
+                labels["diff"][f].text = f'{sign}{fmt(df_val)}'
+                labels["diff"][f].classes(remove='text-green-700', add='text-red-600')
 
-        # Dòng "CHÊNH LỆCH" ở trên cộng gộp cả 3 loại tiền vào 1 cột (đúng
-        # _compute_totals()) nên không biết được lệch thật ra nằm ở VNĐ hay
-        # ngoại tệ — tính lại RIÊNG theo từng loại tiền chỉ để phát hiện có
-        # lệch hay không (không hiển thị số tiền lệch, chỉ nêu tên loại
-        # tiền). Napas/PSS-MDP là kênh trong nước, chỉ cộng vào VNĐ — khớp
-        # đúng cách chúng được gộp vào tổng CITAD hiện tại ở trên.
+    def recalc():
+        # 3 bảng chênh lệch (04/09/2026): Gộp cả 3 loại tiền (như cũ, gọi
+        # _compute_totals_group(CURS) — cùng 1 hàm duy nhất với 2 bảng tách,
+        # không phải công thức riêng) + tách riêng VNĐ / Ngoại tệ (USD+EUR
+        # gộp chung).
+        _fill_diff_table(diff_labels, CURS)
+        _fill_diff_table(diff_labels_vnd, ['VNĐ'])
+        _fill_diff_table(diff_labels_fx, ['USD', 'EUR'])
+
+        # Dòng ghi chú "Lệch: <loại tiền>" cuối trang — tính lại RIÊNG theo
+        # TỪNG loại tiền (khác 2 bảng trên gộp USD+EUR chung) chỉ để phát
+        # hiện có lệch hay không (không hiển thị số tiền lệch, chỉ nêu tên
+        # loại tiền). Napas/PSS-MDP là kênh trong nước, chỉ cộng vào VNĐ.
         if lech_cur_label is not None:
             lech_curs = []
             for cur in CURS:
@@ -496,8 +514,14 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                             _dd[_f] = nv(e.value)
                             _apply_cell_bg(e.sender)
                             recalc()
+                        # readonly cố định (04/09/2026) — như 5 Cổng CITAD/PaymentHub
+                        # ở build_grid(): Napas/PSS-MDP CHỈ nạp qua Extension ("Nạp
+                        # CITAD"/"Nạp PaymentHub"), không cho gõ tay nữa (trước đây
+                        # gõ tay được ở mode 'edit'/'napas_only', chỉ khoá khi
+                        # 'locked' — xem _apply_view_mode()). _set_input() gán .value
+                        # bằng code, không bị readonly chặn — chỉ chặn gõ thật.
                         inp = ui.input(value='', on_change=_on_change).props(
-                            'dense outlined input-class="text-right"'
+                            'dense outlined readonly input-class="text-right"'
                         ).classes(cell_cls)
                         inp.on('blur', lambda _, _i=inp: _set_input(_i, fmt(_i.value)))
                         entry_store[fk] = inp
@@ -570,30 +594,30 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         đầu hàm doi_chieu_citad_page(). Khoá bằng prop `readonly` của Quasar
         trên TỪNG ô — chặn gõ thật ở phía trình duyệt, không chỉ ẩn nút (phòng
         còn sót đường sửa nào khác). KHÔNG đụng `inputs["gE"]`/`inputs["phE"]`
-        (5 Cổng CITAD + PaymentHub) — các ô đó readonly CỐ ĐỊNH ngay từ lúc
-        dựng grid (chỉ nạp qua Extension). Tham chiếu `btn_nap_citad`/
-        `btn_nap_ph`/`btn_luu_tam`/`btn_luu_cuoi`/`btn_xoa`/`banner_area` —
-        các biến này gán SAU trong cùng hàm doi_chieu_citad_page(), nhưng
-        closure chỉ đọc lúc GỌI hàm này (sau khi trang đã dựng xong)."""
+        (5 Cổng CITAD + PaymentHub) lẫn `inputs["napasE"]`/`inputs["pssmdpE"]`
+        (Napas/PSS-MDP, cố định từ 04/09/2026) — cả 2 nhóm này readonly CỐ
+        ĐỊNH ngay từ lúc dựng grid (chỉ nạp qua Extension, không phân biệt
+        mode). Tham chiếu `btn_nap_citad`/`btn_nap_ph`/`btn_luu_tam`/
+        `btn_luu_cuoi`/`btn_xoa`/`banner_area` — các biến này gán SAU trong
+        cùng hàm doi_chieu_citad_page(), nhưng closure chỉ đọc lúc GỌI hàm
+        này (sau khi trang đã dựng xong)."""
         view_state["mode"] = mode
         view_state["created_by"] = created_by
         view_state["created_by_name"] = created_by_name
 
-        napas_inputs = [inputs["napasE"][f] for f in ("den_ih_m", "den_ih_t")]
-        napas_inputs += [inputs["pssmdpE"][f] for f in ("den_ih_m", "den_ih_t")]
         other_inputs = [ngay_input, lap_bang_input, kiem_soat_input]
-
-        napas_lock = mode == "locked"
         other_lock = mode != "edit"
-        for inp in napas_inputs:
-            inp.props("readonly") if napas_lock else inp.props(remove="readonly")
         for inp in other_inputs:
             inp.props("readonly") if other_lock else inp.props(remove="readonly")
 
-        # "Nạp CITAD"/"Nạp PaymentHub" vẫn hiện ở napas_only — 2 nút này là
-        # đường DUY NHẤT nạp Napas/PSS-MDP từ buffer Extension vào form (xem
-        # load_citad_buffer()/load_phub_buffer(), đã tự lọc chỉ áp 2 field
-        # đó khi mode='napas_only', bỏ qua phần 5 Cổng/PaymentHub thường).
+        # "Nạp CITAD"/"Nạp PaymentHub" vẫn hiện ở napas_only cả hai — "Nạp
+        # CITAD" là đường DUY NHẤT nạp được Napas/PSS-MDP thật (xem
+        # load_citad_buffer()). "Nạp PaymentHub" từ 04/09/2026 không còn nạp
+        # được gì ở napas_only nữa (Napas/PSS-MDP chỉ nhận từ CITAD, 5 Cổng/
+        # PaymentHub thường thì đã khoá) — CỐ Ý không ẩn nút: bấm vào vẫn
+        # phải thấy đúng thông báo "bắt buộc quét từ cổng Citad" (xem
+        # load_phub_buffer()), ẩn hẳn nút thì người quét nhầm PaymentHub
+        # không biết vì sao không nạp được, tưởng phần mềm lỗi.
         btn_nap_citad.set_visibility(mode in ("edit", "napas_only"))
         btn_nap_ph.set_visibility(mode in ("edit", "napas_only"))
         btn_xoa.set_visibility(mode == "edit")
@@ -634,6 +658,11 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
 
     async def _admin_unlock():
         ngay = view_state["ngay_dang_xem"] or ngay_input.value
+        # Bảng đang xem (mode='locked') — có thể KHÔNG phải bảng của chính
+        # Admin đang bấm nút này, nên phải mở khoá VÀ tải lại ĐÚNG bảng đó,
+        # không phải bảng của Admin (xem session_admin_unlock() trong service —
+        # created_by giờ bắt buộc vì 1 ngày có thể có nhiều bảng đã chốt).
+        owner_id = view_state["created_by"]
         with ui.dialog() as dialog, ui.card():
             ui.label(f"Mở khoá ngày {ngay}?").classes("text-base font-bold text-red-700")
             ui.label(
@@ -647,7 +676,9 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     dialog.close()
                     try:
                         await asyncio.to_thread(
-                            api.post, f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}/unlock", {}
+                            api.post,
+                            f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}/unlock?created_by={owner_id}",
+                            {},
                         )
                     except Exception as e:
                         if _handle_api_error(e):
@@ -655,7 +686,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                         ui.notify(f"Lỗi mở khoá: {e}", type="negative")
                         return
                     ui.notify(f"Đã mở khoá ngày {ngay}", type="positive")
-                    await _load_ngay_hien_hanh(ngay)
+                    await _load_ngay_hien_hanh(ngay, created_by=owner_id)
                     if history_refresh.get("fn"):
                         await history_refresh["fn"]()
 
@@ -693,6 +724,13 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
             "ebank_t": data["ebank"]["den_ih_t"],
             "pssmdp_m": data["pssmdp"]["den_ih_m"],
             "pssmdp_t": data["pssmdp"]["den_ih_t"],
+            # napas_only = đang góp vào bảng NGƯỜI KHÁC (view_state["created_by"]
+            # là id người đó) — báo cho backend biết lưu vào đúng bảng nào, thay
+            # vì bảng của chính mình. Chế độ khác (edit) luôn None — bảng của
+            # chính mình, xem session_save() trong service.
+            "target_created_by": (
+                view_state["created_by"] if view_state["mode"] == "napas_only" else None
+            ),
         }
 
     async def load_citad_buffer():
@@ -784,24 +822,23 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         napas_only = view_state["mode"] == "napas_only"
         count = 0
         skipped = 0
+        skipped_napas = 0
         for item in items:
             loai, chieu = item.get("loai", ""), item.get("chieu", "")
             tien = item.get("tien", "VNĐ")
             so_mon, so_tien = item.get("soMon", 0), item.get("soTien", 0)
             src = item.get("source", "")
-            if src == "napas":
-                data["napas"]["den_ih_m"] = nv(so_mon)
-                data["napas"]["den_ih_t"] = nv(so_tien)
-                _set_input(inputs["napasE"]["den_ih_m"], fmt(so_mon))
-                _set_input(inputs["napasE"]["den_ih_t"], fmt(so_tien))
-                count += 1
-                continue
-            if src == "pssmdp":
-                data["pssmdp"]["den_ih_m"] = nv(so_mon)
-                data["pssmdp"]["den_ih_t"] = nv(so_tien)
-                _set_input(inputs["pssmdpE"]["den_ih_m"], fmt(so_mon))
-                _set_input(inputs["pssmdpE"]["den_ih_t"], fmt(so_tien))
-                count += 1
+            # Napas/PSS-MDP CHỈ nhận từ CITAD từ 04/09/2026 (xem
+            # load_citad_buffer) — cố ý KHÔNG sửa Extension (content_
+            # paymenthub.js vẫn tự quét/gửi item này lên buffer như cũ, đỡ
+            # phải ra bản Extension mới + cài lại từng máy trạm), web app chỉ
+            # chủ động bỏ qua 2 nguồn này khi nạp từ PaymentHub — tránh 2
+            # nguồn (CITAD/PaymentHub) đè số liệu lẫn nhau. Luôn bỏ (không
+            # tính vào `skipped` chặn xoá buffer bên dưới) — khác `skipped`,
+            # đây là dữ liệu KHÔNG BAO GIỜ còn dùng nữa, giữ lại trong buffer
+            # cũng vô nghĩa.
+            if src in ("napas", "pssmdp"):
+                skipped_napas += 1
                 continue
             if napas_only:
                 skipped += 1
@@ -821,10 +858,28 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
             except Exception:
                 pass
         recalc()
+        # Buffer CHỈ có mục Napas/PSS-MDP (trường hợp thường gặp nhất — người
+        # dùng quét đúng trang PaymentHub, đúng ý cũ, nhưng giờ không còn nhận
+        # nữa) — không mở đầu bằng "Đã nạp 0 mục" (đọc như báo lỗi/phần mềm
+        # hỏng), nói thẳng luôn lý do để người dùng hiểu đây là CHỦ Ý, không
+        # phải bug, và biết chính xác phải làm gì tiếp theo.
+        if count == 0 and skipped_napas and not skipped:
+            ui.notify(
+                "Lệnh quyết toán lô bắt buộc phải quét dữ liệu từ cổng Citad — "
+                "PaymentHub không dùng được cho Napas/PSS-MDP nữa.",
+                type="warning",
+            )
+            return
         msg = f"Đã nạp {count} mục từ PaymentHub"
         if skipped:
             msg += f" — bỏ qua {skipped} mục (chỉ nạp được Napas/PSS-MDP ở đây)"
-        ui.notify(msg, type="positive" if count else "warning")
+        if skipped_napas:
+            msg += (f" — bỏ qua {skipped_napas} mục Napas/PSS-MDP. "
+                    "Lệnh quyết toán lô bắt buộc phải quét dữ liệu từ cổng Citad")
+        # skipped_napas ép cảnh báo dù count > 0 (có nạp được mục 5 Cổng khác) —
+        # đây là điều người dùng CẦN chú ý (quét nhầm cổng), không để lẫn vào
+        # thông báo "positive" chung chung của các mục nạp thành công khác.
+        ui.notify(msg, type="warning" if skipped_napas else ("positive" if count else "warning"))
 
     def _mode_for_meta(sess: dict) -> tuple[str, int | None, str]:
         """Suy ra mode xem/sửa từ _meta_status/_meta_created_by(_username) —
@@ -839,13 +894,18 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
             return "napas_only", created_by, created_by_name
         return "edit", created_by, created_by_name
 
-    async def _load_ngay_hien_hanh(ngay: str):
+    async def _load_ngay_hien_hanh(ngay: str, created_by: int | None = None):
         """Tải bản HIỆN HÀNH (session_get — khác _load_history_entry() luôn
         lấy đúng 1 dòng lịch sử cụ thể) của 1 ngày vào form, áp đúng mode
-        theo _meta_* — gọi sau khi Lưu hoặc sau khi Admin mở khoá để form
-        phản ánh đúng trạng thái mới nhất, không cần F5."""
+        theo _meta_* — gọi sau khi Lưu (bảng CỦA CHÍNH MÌNH, `created_by` bỏ
+        trống) hoặc sau khi Admin mở khoá (bảng của người vừa mở khoá — có
+        thể KHÔNG phải admin, phải truyền đúng `created_by`) để form phản
+        ánh đúng trạng thái mới nhất, không cần F5."""
+        params = {"created_by": created_by} if created_by is not None else None
         try:
-            sess = await asyncio.to_thread(api.get, f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}")
+            sess = await asyncio.to_thread(
+                api.get, f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}", params
+            )
         except Exception as e:
             if _handle_api_error(e):
                 return
@@ -860,6 +920,15 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         _apply_view_mode(mode, created_by, created_by_name)
 
     async def _save_session_now(status: str):
+        # Chốt CHỦ BẢNG đang lưu TRƯỚC khi gọi API — napas_only đang góp vào
+        # bảng NGƯỜI KHÁC (view_state["created_by"]), không phải bảng của
+        # chính mình. Bug thật (review Người 1, PR#76): tải lại sau lưu từng
+        # gọi _load_ngay_hien_hanh() KHÔNG truyền created_by → luôn lấy bảng
+        # của người gọi; với B đang góp Napas vào bảng A (B chưa có bảng riêng
+        # ngày đó), API trả rỗng → rơi vào mode='edit' trong khi số liệu CŨ
+        # của A vẫn còn nguyên trên màn hình (apply_session_data không chạy) —
+        # B bấm Lưu lần nữa sẽ tạo bảng MỚI của B chứa toàn bộ số liệu của A.
+        owner = view_state["created_by"] if view_state["mode"] == "napas_only" else None
         payload = get_session_payload()
         payload["status"] = status
         try:
@@ -874,9 +943,10 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         )
         if history_refresh.get("fn"):
             await history_refresh["fn"]()
-        # Tải lại đúng mode hiện hành — người lập bảng lưu tạm vẫn ở 'edit',
-        # người khác lưu tạm Napas vẫn ở 'napas_only', lưu bản cuối -> 'locked'.
-        await _load_ngay_hien_hanh(ngay_input.value)
+        # Tải lại ĐÚNG bảng vừa lưu — người lập bảng lưu tạm vẫn ở 'edit',
+        # người khác lưu tạm Napas vẫn ở 'napas_only' (đúng bảng của owner),
+        # lưu bản cuối -> 'locked'.
+        await _load_ngay_hien_hanh(ngay_input.value, created_by=owner)
 
     def do_save_session(status: str):
         # Phòng vệ thêm — nút tương ứng đã ẩn theo mode (_apply_view_mode),
@@ -1080,7 +1150,10 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                         _day_row(r, is_last=(i == len(rows)))
 
         def _day_row(r: dict, is_last: bool):
-            ngay = r["ngay"]
+            # `created_by` (id người lập bảng NÀY) — bắt buộc phải truyền khi
+            # gọi .../history bên dưới: 1 ngày giờ có thể có nhiều dòng (nhiều
+            # bảng của nhiều người), không còn suy được "bảng nào" chỉ từ `ngay`.
+            ngay, owner_id = r["ngay"], r["created_by"]
             nguoi_hien_thi = r.get("created_by_name") or r["created_by_username"] or "—"
             expanded = {"open": False}
             with ui.column().classes("w-full" + ("" if is_last else " border-b border-gray-200")):
@@ -1088,7 +1161,12 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     "w-full items-center gap-0 px-3 py-2 cursor-pointer hover:bg-gray-50"
                 ) as row:
                     ui.label(ngay).classes("w-28 font-bold border-r border-gray-200 pr-2 mr-2")
-                    ui.label(nguoi_hien_thi).classes("w-44 border-r border-gray-200 pr-2 mr-2")
+                    with ui.row().classes("w-44 items-center gap-1 border-r border-gray-200 pr-2 mr-2"):
+                        ui.label(nguoi_hien_thi)
+                        if r.get("status") == "final":
+                            ui.badge("Chính thức").props('color="positive"')
+                        else:
+                            ui.badge("Tạm").props('color="grey-7"')
                     ui.label(str(r["so_lan_luu"])).classes(
                         "w-24 text-center border-r border-gray-200 pr-2 mr-2"
                     )
@@ -1103,7 +1181,9 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                         return
                     try:
                         entries = await asyncio.to_thread(
-                            api.get, f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}/history"
+                            api.get,
+                            f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}/history",
+                            {"created_by": owner_id},
                         )
                     except Exception as e:
                         if _handle_api_error(e):
@@ -1173,7 +1253,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         # "LỆNH ĐI/LỆNH ĐẾN" như Excel — tên cột ĐI/ĐẾN IH/IL Món/Tiền đã
         # chứa đủ thông tin, và đồng bộ đúng kiểu header các bảng khác trên
         # trang này).
-        ci, ph = _compute_totals()
+        ci, ph = _compute_totals_group(CURS)
         cols = [
             {"name": "label", "label": "", "field": "label", "align": "left"},
             {"name": "cur", "label": "Loại tiền", "field": "cur", "align": "center"},
@@ -1548,43 +1628,52 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     # mình), thay cho banner tĩnh cố định trước đây.
                     banner_area = ui.column().classes("w-full gap-0")
 
-                    # "Bảng chênh lệch" đặt NGAY ĐẦU (trước PaymentHub/CITAD/Napas)
-                    # theo yêu cầu — đây là bảng người dùng cần nhìn trước tiên khi
-                    # mở lại 1 ngày đã chấm, không phải cuộn hết xuống dưới mới thấy.
-                    # Không ảnh hưởng logic: diff_labels/lech_cur_label chỉ cần tồn
-                    # tại TRƯỚC lúc recalc() chạy (ở cuối), không phụ thuộc thứ tự
-                    # dựng UI so với các bảng nhập liệu khác.
-                    with _section_card("Bảng chênh lệch (CITAD − PaymentHub)", icon="balance", accent="emerald",
-                                       outer_border="border-2 border-red-800"):
-                        n_cols = len(FK) + 1
-                        n_rows = 4  # 1 dòng tiêu đề + CITAD/PaymentHub/CHÊNH LỆCH
+                    # 3 "Bảng chênh lệch" (Gộp / VNĐ / Ngoại tệ) đặt NGAY ĐẦU (trước
+                    # PaymentHub/CITAD/Napas) theo yêu cầu — đây là bảng người dùng
+                    # cần nhìn trước tiên khi mở lại 1 ngày đã chấm, không phải cuộn
+                    # hết xuống dưới mới thấy. Thêm 2 bảng tách VNĐ/Ngoại tệ (USD+EUR
+                    # gộp chung, không tách tiếp) từ 04/09/2026, GIỮ NGUYÊN bảng Gộp
+                    # cả 3 loại tiền cũ — xem được cả tổng lẫn lệch nằm ở nhóm tiền
+                    # nào cùng lúc, không cần đọc thêm dòng ghi chú "Lệch: <loại
+                    # tiền>" bên dưới mới biết. Không ảnh hưởng logic: diff_labels/
+                    # _vnd/_fx/lech_cur_label chỉ cần tồn tại TRƯỚC lúc recalc() chạy
+                    # (ở cuối), không phụ thuộc thứ tự dựng UI so với các bảng nhập
+                    # liệu khác.
+                    def _build_diff_card(title: str, labels: dict):
+                        with _section_card(title, icon="balance", accent="emerald",
+                                           outer_border="border-2 border-red-800"):
+                            n_cols = len(FK) + 1
+                            n_rows = 4  # 1 dòng tiêu đề + CITAD/PaymentHub/CHÊNH LỆCH
 
-                        with ui.grid(columns=_MONEY_GRID_TEMPLATE).classes("w-full gap-0 p-4"):
-                            _group_header_row()
-                            ui.label("").classes(
-                                _grid_cell_cls(0, 0, n_rows, n_cols, "text-sm font-bold text-gray-500 text-center")
-                            )
-                            for col_idx, lbl in enumerate(FK_LBL, start=1):
-                                ui.label(lbl).classes(
-                                    _grid_cell_cls(0, col_idx, n_rows, n_cols, "text-sm font-bold text-gray-500 text-center")
+                            with ui.grid(columns=_MONEY_GRID_TEMPLATE).classes("w-full gap-0 p-4"):
+                                _group_header_row()
+                                ui.label("").classes(
+                                    _grid_cell_cls(0, 0, n_rows, n_cols, "text-sm font-bold text-gray-500 text-center")
                                 )
-                            for row_idx, (key, label, color) in enumerate([
-                                ("citad", "CITAD", "text-sky-600"),
-                                ("phub", "PaymentHub", "text-purple-600"),
-                                ("diff", "CHÊNH LỆCH", "text-red-600"),
-                            ], start=1):
-                                ui.label(label).classes(
-                                    _grid_cell_cls(row_idx, 0, n_rows, n_cols, f"text-sm font-bold self-center {color}")
-                                )
-                                for col_idx, fk in enumerate(FK, start=1):
-                                    lbl = ui.label("—").classes(
-                                        _grid_cell_cls(row_idx, col_idx, n_rows, n_cols, "text-sm text-right self-center")
+                                for col_idx, lbl in enumerate(FK_LBL, start=1):
+                                    ui.label(lbl).classes(
+                                        _grid_cell_cls(0, col_idx, n_rows, n_cols, "text-sm font-bold text-gray-500 text-center")
                                     )
-                                    diff_labels[key][fk] = lbl
+                                for row_idx, (key, label, color) in enumerate([
+                                    ("citad", "CITAD", "text-sky-600"),
+                                    ("phub", "PaymentHub", "text-purple-600"),
+                                    ("diff", "CHÊNH LỆCH", "text-red-600"),
+                                ], start=1):
+                                    ui.label(label).classes(
+                                        _grid_cell_cls(row_idx, 0, n_rows, n_cols, f"text-sm font-bold self-center {color}")
+                                    )
+                                    for col_idx, fk in enumerate(FK, start=1):
+                                        lbl = ui.label("—").classes(
+                                            _grid_cell_cls(row_idx, col_idx, n_rows, n_cols, "text-sm text-right self-center")
+                                        )
+                                        labels[key][fk] = lbl
 
-                        lech_cur_label = ui.label("").classes(
-                            "text-sm font-semibold mt-2 px-1"
-                        )
+                    _build_diff_card("Bảng chênh lệch (CITAD − PaymentHub)", diff_labels)
+                    _build_diff_card("Bảng chênh lệch VNĐ (CITAD − PaymentHub)", diff_labels_vnd)
+                    _build_diff_card("Bảng chênh lệch Ngoại tệ (CITAD − PaymentHub)", diff_labels_fx)
+                    lech_cur_label = ui.label("").classes(
+                        "text-sm font-semibold mt-1 mb-2 px-1"
+                    )
 
                     with _section_card("PaymentHub – Agribank", icon="account_balance", accent="blue",
                                        outer_border="border-2 border-red-800"):

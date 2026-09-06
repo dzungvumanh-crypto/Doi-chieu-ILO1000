@@ -204,8 +204,8 @@ def extension_version(current: dict = Depends(require_feature("menu.doi_chieu_ci
     return {"version": svc.get_extension_latest_version()}
 
 
-# ── Session theo ngày — 1 bản CHUNG cho cả phòng (không tách theo người,
-# xem docstring session_save trong service) ───────────────────────────────
+# ── Session theo (ngay, created_by) — mỗi người 1 bảng riêng/ngày, xem
+# docstring session_save trong service ────────────────────────────────────
 # QUAN TRỌNG: {ngay:path} là path converter "tham lam" (khớp cả dấu "/"
 # trong ngay=dd/mm/yyyy) — Starlette khớp route theo ĐÚNG THỨ TỰ ĐĂNG KÝ,
 # nên MỌI route có tiền tố "/session/{ngay:path}" phải đăng ký các route cụ
@@ -226,27 +226,39 @@ def get_reconciliation_days(
     db=Depends(get_db),
     current: dict = Depends(require_feature("menu.doi_chieu_citad")),
 ):
-    """1 dòng/ngày đã có ai chấm — phục vụ tab "Lịch sử" (bảng nhiều ngày,
-    lọc theo khoảng ngày + tên người chấm). tu_ngay/den_ngay dạng
-    dd/mm/yyyy, để trống = không giới hạn đầu/cuối. nguoi_cham khớp gần
-    đúng (không phân biệt hoa/thường), theo cả tên đầy đủ lẫn username."""
+    """1 dòng/bảng đã có ai chấm (1 ngày có thể nhiều dòng nếu nhiều người
+    đều tự lập bảng riêng) — phục vụ tab "Lịch sử" (bảng nhiều ngày, lọc
+    theo khoảng ngày + tên người chấm). tu_ngay/den_ngay dạng dd/mm/yyyy,
+    để trống = không giới hạn đầu/cuối. nguoi_cham khớp gần đúng (không
+    phân biệt hoa/thường), theo cả tên đầy đủ lẫn username."""
     return svc.get_reconciliation_days(db, tu_ngay, den_ngay, nguoi_cham)
 
 
 @router.get("/session/{ngay:path}/history")
 def get_reconciliation_history(
-    ngay: str, db=Depends(get_db), current: dict = Depends(require_feature("menu.doi_chieu_citad"))
+    ngay: str,
+    created_by: int,
+    db=Depends(get_db),
+    current: dict = Depends(require_feature("menu.doi_chieu_citad")),
 ):
-    """Lịch sử từng lần lưu đối chiếu của 1 ngày — mỗi dòng gắn username
-    người đã chấm, phục vụ trường hợp nhiều người cùng chấm 1 ngày."""
-    return svc.get_reconciliation_history(db, ngay)
+    """Lịch sử từng lần lưu của ĐÚNG 1 bảng (`created_by` — id người lập
+    bảng đó, lấy từ dòng tương ứng ở get_reconciliation_days) — mỗi dòng
+    gắn username người đã chấm dòng đó."""
+    return svc.get_reconciliation_history(db, ngay, created_by)
 
 
 @router.get("/session/{ngay:path}")
 def get_session(
-    ngay: str, db=Depends(get_db), current: dict = Depends(require_feature("menu.doi_chieu_citad"))
+    ngay: str,
+    created_by: int | None = None,
+    db=Depends(get_db),
+    current: dict = Depends(require_feature("menu.doi_chieu_citad")),
 ):
-    return svc.session_get(db, ngay) or {}
+    """Mặc định (`created_by` bỏ trống) trả về bảng CỦA CHÍNH người gọi cho
+    ngày này. Truyền `created_by` để xem bảng của người khác (vd sau khi
+    Admin mở khoá bảng của người khác, cần tải lại đúng bảng đó)."""
+    owner = created_by if created_by is not None else current["id"]
+    return svc.session_get(db, ngay, owner) or {}
 
 
 @router.post("/session")
@@ -254,14 +266,16 @@ def save_session(
     data: SessionIn, db=Depends(get_db), current: dict = Depends(require_feature("menu.doi_chieu_citad"))
 ):
     """"Lưu bản tạm" (status='draft') hay "Lưu bản cuối" (status='final') —
-    xem session_save() trong service cho quy tắc ai được sửa gì. 403 khi
-    ngày đã chốt (SessionLockedError) hoặc người gọi không phải người lập
-    bảng nhưng cố sửa ngoài Napas/PSS-MDP hay cố chốt bản cuối
-    (SessionForbiddenError)."""
+    xem session_save() trong service cho quy tắc ai được sửa gì.
+    `target_created_by` bỏ trống = bảng của chính người gọi; có giá trị =
+    đang góp Napas/PSS-MDP vào bảng người khác đã lập. 403 khi bảng đã chốt
+    (SessionLockedError) hoặc người gọi không phải người lập bảng nhưng cố
+    sửa ngoài Napas/PSS-MDP hay cố chốt bản cuối (SessionForbiddenError)."""
     payload = data.model_dump()
     status = payload.pop("status")
+    target_created_by = payload.pop("target_created_by")
     try:
-        svc.session_save(db, data.ngay, current["id"], payload, status)
+        svc.session_save(db, data.ngay, current["id"], payload, status, target_created_by)
     except (svc.SessionLockedError, svc.SessionForbiddenError) as e:
         raise HTTPException(403, str(e))
     return {"ok": True}
@@ -271,6 +285,8 @@ def save_session(
 def delete_session(
     ngay: str, db=Depends(get_db), current: dict = Depends(require_feature("menu.doi_chieu_citad"))
 ):
+    """Xoá bảng CỦA CHÍNH người gọi cho ngày này — không đụng bảng người
+    khác cùng ngày (nếu có)."""
     try:
         svc.session_delete(db, ngay, current["id"])
     except (svc.SessionLockedError, svc.SessionForbiddenError) as e:
@@ -280,11 +296,19 @@ def delete_session(
 
 @router.post("/session/{ngay:path}/unlock")
 def unlock_session(
-    ngay: str, db=Depends(get_db), current: dict = Depends(require_admin)
+    ngay: str,
+    created_by: int,
+    db=Depends(get_db),
+    current: dict = Depends(require_admin),
 ):
-    """Chỉ Admin — mở khoá 1 ngày đã "Lưu bản cuối" về lại bản tạm để người
-    lập bảng sửa tiếp. Không phải xoá số liệu, chỉ đổi status."""
-    svc.session_admin_unlock(db, ngay)
+    """Chỉ Admin — mở khoá ĐÚNG 1 bảng (`created_by` — id người lập bảng đó)
+    đã "Lưu bản cuối" về lại bản tạm để người lập bảng sửa tiếp.
+    `created_by` bắt buộc: 1 ngày có thể có nhiều bảng đã chốt của nhiều
+    người khác nhau. Không phải xoá số liệu, chỉ đổi status."""
+    try:
+        svc.session_admin_unlock(db, ngay, created_by)
+    except svc.SessionNotFoundError as e:
+        raise HTTPException(404, str(e))
     return {"ok": True}
 
 

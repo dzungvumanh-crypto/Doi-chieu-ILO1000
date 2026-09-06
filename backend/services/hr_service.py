@@ -228,7 +228,7 @@ PROFILE_FIELDS_TAI_KHOAN = {
 # cùng nghĩa nằm hai màn hình, nhập lệch nhau là không ai biết ô nào đúng.
 #
 # Tách khỏi nhóm "tự khai" dù cũng ghi vào user_tttt: cột này quyết định SỐ NGÀY
-# PHÉP NĂM (`compute_annual_leave()` — 12 ngày + 1 ngày mỗi 4 năm). Để cán bộ tự
+# PHÉP NĂM (`compute_annual_leave()` — 12 ngày + 1 ngày mỗi 5 năm). Để cán bộ tự
 # sửa của mình là để họ tự cộng phép cho mình. Sửa được cần `hr.edit_all`, đúng
 # như mọi số liệu công tác khác.
 PROFILE_FIELDS_TAI_KHOAN_HR = {
