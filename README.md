@@ -332,6 +332,11 @@ Truy cập:
   mức phép năm**. *Nghỉ không lương* chọn khoảng ngày liên tục; *Họp/Công tác* chọn lẻ từng ngày như
   phép năm. Ở bảng công phòng Kế toán, Họp/Công tác vào ký hiệu **`CT` = đủ 1 công** (đang đi làm, chỉ
   không có mặt tại trụ sở), nghỉ không lương vào `P` = 0 công
+- **Nghỉ "Khác"**: người tạo đơn tự chọn nút gạt *Trừ vào hạn mức phép năm* — bật thì tính y hệt đơn
+  nghỉ phép năm (trừ hạn mức, cộng vào số ngày đã nghỉ, có thể phải ứng phép năm sau); tắt thì chỉ ghi
+  nhận ngày nghỉ, không đụng tới hạn mức — giống thai sản / bảo hiểm / không lương / họp-công tác.
+  Cột `leave_records.other_deduct_quota`; đơn "Khác" tạo **trước 06/09/2026** mặc định là **có trừ**,
+  đúng bằng hành vi cũ
 - Nhập hạn mức phép hàng loạt từ file Excel (xem trước / áp dụng / hoàn tác); sửa tay số ngày "Đã dùng" của từng người — cả hai cách đều thay thế lẫn nhau, không cộng dồn
 - Bản ghi hạn mức nhập từ Excel / sửa tay không phải đơn nghỉ thật: bị ẩn khỏi danh sách đơn, lịch, kiểm tra trùng ngày, số liệu Dashboard, Trang chủ và Báo cáo bàn giao
 - Khai báo hộ; ngày nghỉ lẻ không liên tục (`spread_dates`)
@@ -340,7 +345,12 @@ Truy cập:
 - Resubmit đơn bị từ chối; huỷ đơn đang chờ hoặc đã duyệt
 - **Nghỉ phép bắt buộc (NPBB)**: đơn đã "Hoàn thành" có nút *Điều chỉnh ngày NPBB* — tạo **đơn mới**
   liên kết qua `leave_records.adjusts_leave_id`, đi lại đủ 3 bước duyệt; đơn gốc chỉ chuyển
-  *"Đã hủy - Đã điều chỉnh"* khi đơn mới duyệt xong. Màn chi tiết hiện cả hai chiều liên kết
+  *"Đã hủy - Đã điều chỉnh"* khi đơn mới duyệt xong. Màn chi tiết hiện cả hai chiều liên kết.
+  **Không điều chỉnh chồng lên một đơn điều chỉnh** — mọi đơn điều chỉnh luôn trỏ về đúng một đơn gốc
+  duy nhất, vì báo cáo Mẫu 18/19 chỉ dò một cấp cha-con (xếp chuỗi hai cấp làm nhân sự biến mất khỏi
+  báo cáo). Muốn điều chỉnh lại: rút/hủy đơn điều chỉnh hiện tại, **đơn gốc tự trở lại "Hoàn thành"**
+  rồi lập đơn điều chỉnh mới — không giới hạn số lần. Dialog điều chỉnh **để trống lịch chọn ngày**
+  (ngày đơn gốc ghi ở dòng chữ riêng phía trên để đối chiếu), tránh tưởng nhầm đã chọn xong
 - Mẫu đơn xin nghỉ phép năm **riêng theo chức danh** (nhân viên / trưởng - phó phòng / GĐ / PGĐ).
   Đơn của GĐ kính gửi **Tổng Giám đốc Agribank**, không phải Giám đốc TTTT; mẫu NPBB của diện HĐTV
   gửi **Ban Tổ chức Nhân sự**

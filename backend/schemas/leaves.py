@@ -22,6 +22,7 @@ class LeaveCreate(BaseModel):
     spread_dates: Optional[List[str]] = None  # YYYY-MM-DD list khi nghỉ ngày lẻ không liên tục
     signature: Optional[SignaturePlacement] = None  # Chữ ký người đề nghị đặt ở popup xem trước
     confirm_borrow_next_year: bool = False  # Đã đồng ý ứng phép năm sau khi vượt hạn mức năm nay
+    other_deduct_quota: bool = True  # Chỉ áp dụng khi leave_type="other" — có trừ vào hạn mức phép năm không
 
 class LeaveReview(BaseModel):
     action: Literal["approve", "reject"]
@@ -75,6 +76,7 @@ class LeaveOut(BaseModel):
     spread_dates: Optional[List[str]] = None
     recall_reason: Optional[str] = None
     borrow_next_year_days: float = 0.0
+    other_deduct_quota: bool = True      # Chỉ có ý nghĩa khi leave_type="other"
     created_at: datetime
     rejected_step: Optional[Literal["KSV", "TH", "GĐ"]] = None
     is_resubmitted: bool = False
@@ -116,6 +118,7 @@ class DirectLeaveCreate(BaseModel):
     reason: Optional[str] = None
     spread_dates: Optional[List[str]] = None
     confirm_borrow_next_year: bool = False
+    other_deduct_quota: bool = True  # Chỉ áp dụng khi leave_type="other" — có trừ vào hạn mức phép năm không
 
 class RecallCreate(BaseModel):
     reason: str

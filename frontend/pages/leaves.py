@@ -363,6 +363,24 @@ async def leaves_page(open_id: Optional[int] = None):
     <style>
       .hl-col-active { background-color: rgba(220,38,38,0.10) !important; }
       body.hl-resizing, body.hl-resizing * { cursor: col-resize !important; user-select: none !important; }
+      /* Nháy đỏ liên tục dòng đơn gốc/đơn điều chỉnh khi mở từ link "Xem đơn
+         gốc"/"Xem đơn điều chỉnh" (tab mới, ?open_id=) — xem khối áp dụng
+         class này ở cuối leaves_page() (_row_elements_by_id).
+         Animate background-color KHÔNG ăn thua: dòng đã có sẵn bg-white/
+         bg-red-50 (Tailwind, ép !important — xem .hl-col-active cũng phải
+         !important mới đè được), mà !important lại KHÔNG hợp lệ bên trong
+         @keyframes (browser âm thầm bỏ qua theo đúng spec CSS Animations) —
+         verify thật bằng Playwright: animation-name lên đúng tên nhưng
+         background-color đứng yên suốt vòng lặp, không đổi màu 1 lần nào.
+         Đổi sang animate box-shadow inset (phủ lớp màu đỏ mờ lên trên) —
+         khác hẳn property background-color nên không đụng độ với bg-* của
+         Tailwind, không cần !important vẫn thắng vì Tailwind không set
+         box-shadow cho các dòng này. */
+      @keyframes leave-row-flash {
+        0%, 100% { box-shadow: inset 0 0 0 9999px rgba(220,38,38,0.35); }
+        50%      { box-shadow: inset 0 0 0 9999px rgba(220,38,38,0); }
+      }
+      .leave-row-flash { animation: leave-row-flash 1s ease-in-out infinite; position: relative; }
     </style>
     <script>
     (function() {
@@ -648,6 +666,44 @@ async def leaves_page(open_id: Optional[int] = None):
 
         confirm_dialog.open()
 
+
+    def _make_other_quota_toggle():
+        """Switch "Trừ vào hạn mức phép năm" + dòng giải thích rõ 2 chiều —
+        chỉ hiện khi chọn loại nghỉ "Khác" (lý do tự do, không cố định sẵn có
+        tính hạn mức hay không như các loại nghỉ khác: annual/bat_buoc luôn
+        trừ, thai_san/bao_hiem/khong_luong/hop_cong_tac luôn miễn). Dùng
+        chung cho cả 3 dialog Tạo đơn/Sửa & Nộp lại/Khai báo hộ để giải
+        thích nhất quán. Trả về (switch, set_visible)."""
+        sw  = ui.switch("Trừ vào hạn mức phép năm", value=True).classes("mt-1")
+        cap = ui.label().classes("text-xs -mt-1 mb-1")
+
+        def _update_caption():
+            if sw.value:
+                cap.set_text(
+                    "Bật (Có): tính đúng như đơn Nghỉ phép năm — trừ vào hạn mức còn lại, "
+                    "cộng vào số ngày đã nghỉ trong năm, có thể phải ứng phép năm sau nếu vượt hạn mức.")
+                cap.style("color:#f97316")
+            else:
+                cap.set_text(
+                    "Tắt (Không): chỉ ghi nhận ngày nghỉ để theo dõi, KHÔNG trừ/cộng gì vào hạn mức "
+                    "phép năm — giống các loại nghỉ thai sản/bảo hiểm/không lương/họp-công tác.")
+                cap.style("color:#6b7280")
+
+        sw.on("update:model-value", _update_caption)
+        _update_caption()
+        sw.set_visibility(False)
+        cap.set_visibility(False)
+
+        def _set_visible(v: bool):
+            # Đặt .value bằng code (mở lại dialog/reset form) không tự bắn
+            # "update:model-value" như thao tác tay của người dùng — làm mới
+            # caption ở đây để không bị kẹt hiện chữ theo trạng thái cũ.
+            if v:
+                _update_caption()
+            sw.set_visibility(v)
+            cap.set_visibility(v)
+
+        return sw, _set_visible
 
 
     # ── Duyệt kèm ký ──────────────────────────────────────────────────────────
@@ -1275,6 +1331,12 @@ async def leaves_page(open_id: Optional[int] = None):
             for _ol in my_leaves:
                 if _ol.get("leave_type") != "bat_buoc" or _ol.get("status") != "approved":
                     continue
+                # Chỉ liệt kê đơn NPBB GỐC (adjusts_leave_id rỗng) — khớp đúng
+                # điều kiện hiện nút "Điều chỉnh ngày NPBB" trong chi tiết đơn
+                # (open_detail) và điều kiện chặn ở backend (npbb_adjust_leave):
+                # không cho điều chỉnh chồng lên 1 đơn vốn đã là đơn điều chỉnh.
+                if _ol.get("adjusts_leave_id"):
+                    continue
                 _oadj = _ol.get("npbb_adjustment")
                 if _oadj and _oadj.get("status") not in ("rejected", "cancelled"):
                     continue
@@ -1292,6 +1354,8 @@ async def leaves_page(open_id: Optional[int] = None):
                 c_npbb_orig.props('hint="Chưa có đơn nghỉ phép bắt buộc đã hoàn thành nào để điều chỉnh"')
 
             c_reason   = ui.textarea("Lý do (tuỳ chọn)").classes("w-full mt-2")
+
+            c_other_quota, _c_other_quota_vis = _make_other_quota_toggle()
 
             c_approver = ui.select(approver_opts, label="Người phê duyệt (KSV)").classes("w-full mt-2") if show_approver else None
 
@@ -1330,6 +1394,7 @@ async def leaves_page(open_id: Optional[int] = None):
                     return
 
                 c_reason.props(f'label="{"Lý do (bắt buộc)" if lt == "other" else "Lý do (tuỳ chọn)"}"')
+                _c_other_quota_vis(lt == "other")
 
                 if not is_range:
                     if lt in ("annual", "bat_buoc"):
@@ -1395,6 +1460,8 @@ async def leaves_page(open_id: Optional[int] = None):
                     body = {"start_date": dates[0], "end_date": dates[-1],
                             "spread_dates": dates,
                             "leave_type": lt, "reason": c_reason.value or None}
+                    if lt == "other":
+                        body["other_deduct_quota"] = c_other_quota.value
 
                 if show_approver and not c_approver.value:
                     ui.notify("Vui lòng chọn người phê duyệt (KSV)", type="warning"); return
@@ -1471,10 +1538,18 @@ async def leaves_page(open_id: Optional[int] = None):
                 _c_min[0] = _c_today_now
                 _c_cur[0], _c_cur[1] = _c_today_now.year, _c_today_now.month
                 c_type.value = "annual"
+                # Đặt .value bằng code không tự bắn "update:model-value" (chỉ
+                # bắn khi người dùng tự tay đổi dropdown) — gọi tường minh để
+                # c_hint/c_reason label không bị kẹt hiện theo loại nghỉ đã
+                # chọn ở lần mở dialog trước (vd còn "Tối thiểu 5 ngày làm
+                # việc" màu xanh của bat_buoc dù dropdown đã về "Nghỉ phép năm").
+                _c_on_type()
                 c_npbb_orig.value = None
                 c_npbb_orig.set_visibility(False)
                 c_reason.value = ""
                 c_reason.set_visibility(True)
+                c_other_quota.value = True
+                _c_other_quota_vis(False)
                 if c_approver:
                     c_approver.value = None
                     c_approver.set_visibility(True)
@@ -1514,6 +1589,15 @@ async def leaves_page(open_id: Optional[int] = None):
 
             resubmit_title = ui.label("Chỉnh sửa & Nộp lại").classes("text-lg font-bold text-red-900 mb-4")
 
+            # Chỉ hiện ở mode "npbb_adjust" — nhắc rõ ngày đơn GỐC đang đăng ký
+            # (không đụng vào lịch chọn ngày bên dưới, lịch đó dành để bấm chọn
+            # ngày MỚI). Dùng label thường thay vì đánh dấu (event) ngay trên ô
+            # lịch: đã thử qua Quasar QDate `events` prop nhưng NiceGUI không
+            # đẩy được prop kiểu hàm này lên 1 q-date đã mount sẵn (không lỗi gì
+            # cả, chỉ đơn giản không có tác dụng) — label này chắc chắn hiện đúng.
+            r_orig_dates_label = ui.label().classes("text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded px-2 py-1 mb-1 w-full")
+            r_orig_dates_label.set_visibility(False)
+
             r_dates    = ui.date(value=[]).props(f"multiple mask='YYYY-MM-DD' no-header first-day-of-week='1' {_OPT_FUTURE}").classes("w-full")
 
             r_hint     = ui.label("Click chọn từng ngày → Click lại để bỏ chọn").classes("text-xs text-orange-500 mt-0.5")
@@ -1521,6 +1605,8 @@ async def leaves_page(open_id: Optional[int] = None):
             r_type     = ui.select({k: v for k, v in _LEAVE_TYPE.items()}, label="Loại nghỉ phép", value="annual").classes("w-full mt-2")
 
             r_reason   = ui.textarea("Lý do (tuỳ chọn)").classes("w-full mt-2")
+
+            r_other_quota, _r_other_quota_vis = _make_other_quota_toggle()
 
             r_approver = ui.select(approver_opts, label="Người phê duyệt (KSV)").classes("w-full mt-2") if show_approver else None
 
@@ -1553,6 +1639,8 @@ async def leaves_page(open_id: Optional[int] = None):
                     r_hint.set_text("")
 
                     r_hint.style("color:#6b7280")
+
+                _r_other_quota_vis(lt == "other")
 
 
 
@@ -1597,6 +1685,9 @@ async def leaves_page(open_id: Optional[int] = None):
                         "leave_type": r_type.value, "reason": r_reason.value or None,
 
                         "gd_approver_id": r_gd_select.value}
+
+                if r_type.value == "other":
+                    body["other_deduct_quota"] = r_other_quota.value
 
                 if show_approver:
                     body["ksv_approver_id"] = r_approver.value
@@ -1666,26 +1757,51 @@ async def leaves_page(open_id: Optional[int] = None):
             _spread = lv.get("spread_dates")
 
             if _spread:
-                r_dates.value = _spread
+                _orig_dates = _spread
             else:
                 # Đơn cũ là khoảng liên tục (vd thai sản/bảo hiểm) — phải nạp
-                # ĐỦ mọi ngày từ start_date đến end_date vào picker "multiple",
-                # nếu không chỉ giữ lại ngày đầu, mất hết các ngày còn lại.
+                # ĐỦ mọi ngày từ start_date đến end_date, nếu không chỉ còn
+                # ngày đầu, mất hết các ngày còn lại.
                 _s = (lv.get("start_date") or "")[:10]
                 _e = (lv.get("end_date") or "")[:10]
                 try:
                     _sd = _dt_mod.date.fromisoformat(_s)
                     _ed = _dt_mod.date.fromisoformat(_e) if _e else _sd
-                    _all_days, _d = [], _sd
+                    _orig_dates, _d = [], _sd
                     while _d <= _ed:
-                        _all_days.append(_d.isoformat())
+                        _orig_dates.append(_d.isoformat())
                         _d += _dt_mod.timedelta(days=1)
-                    r_dates.value = _all_days
                 except ValueError:
-                    r_dates.value = [_s] if _s else []
+                    _orig_dates = [_s] if _s else []
 
+            # Đặt .value bằng code (mở lại dialog) KHÔNG tự bắn "update:model-value"
+            # (chỉ bắn khi người dùng tự tay đổi dropdown) nên _r_on_type() không
+            # tự chạy theo — gọi tường minh ở đây để r_hint/r_dates bounds luôn
+            # đúng loại nghỉ vừa nạp, không bị kẹt hiện chữ/màu của lần mở dialog
+            # trước đó (cùng loại lỗi đã gặp và tự sửa ở _make_other_quota_toggle).
             r_type.value   = lv.get("leave_type", "annual")
             r_type.set_enabled(not lock_type)
+            _r_on_type()
+
+            if mode == "npbb_adjust":
+                # KHÔNG tự chọn sẵn ngày của đơn gốc — điều chỉnh nghĩa là chọn
+                # hẳn ngày MỚI, chọn sẵn ngày cũ dễ khiến tưởng nhầm đã xong,
+                # không cần bấm gì thêm. Ghi rõ ngày gốc bằng 1 dòng chữ riêng
+                # phía trên lịch để đối chiếu trong lúc chọn ngày mới — ngày
+                # mới bấm chọn mới tô đậm trong lịch như bình thường. Đè lại
+                # r_hint sau _r_on_type() ở trên (hàm đó set hint chung theo
+                # loại "bat_buoc", ở đây cần câu chữ riêng cho luồng điều chỉnh).
+                r_dates.value = []
+                r_orig_dates_label.set_text(
+                    f"Đơn gốc đang đăng ký: {_fmt_leave_dates(lv.get('start_date') or '', lv.get('end_date') or '', _spread)}")
+                r_orig_dates_label.set_visibility(True)
+                r_hint.set_text("Bấm chọn ngày điều chỉnh MỚI (tối thiểu 5 ngày làm việc)")
+                r_hint.style("color:#ea580c")
+            else:
+                r_dates.value = _orig_dates
+                r_orig_dates_label.set_visibility(False)
+
+            r_other_quota.value = lv.get("other_deduct_quota", True)
 
             r_reason.value = lv.get("reason") or ""
 
@@ -2304,11 +2420,17 @@ async def leaves_page(open_id: Optional[int] = None):
                         # Điều chỉnh ngày NPBB — chỉ đơn bat_buoc đã "Hoàn thành", tạo
                         # đơn MỚI liên kết qua adjusts_leave_id (POST /npbb-adjust), KHÔNG
                         # ghi đè đơn gốc — xem npbb_adjust_leave() ở backend. Ẩn nếu đã có
-                        # đơn điều chỉnh đang xử lý (chưa bị từ chối/hủy).
+                        # đơn điều chỉnh đang xử lý (chưa bị từ chối/hủy), VÀ ẩn nếu chính
+                        # đơn đang xem ĐÃ LÀ 1 đơn điều chỉnh (adjusts_leave_id có giá trị)
+                        # — backend chặn điều chỉnh chồng lên điều chỉnh (chỉ 1 cấp cha-con,
+                        # báo cáo NPBB chỉ dò đúng 1 cấp). Muốn điều chỉnh tiếp phải rút đơn
+                        # điều chỉnh này trước (nút "Hủy đơn"/rút đơn), đơn gốc tự khôi phục
+                        # "Hoàn thành" rồi mới bấm "Điều chỉnh ngày NPBB" lại từ đơn gốc đó.
                         _pending_adj = leave.get("npbb_adjustment")
                         _has_active_adj = bool(_pending_adj) and _pending_adj.get("status") not in ("rejected", "cancelled")
                         if (is_owner and status == "approved" and leave.get("leave_type") == "bat_buoc"
-                                and not _has_active_adj and api.has_feature("leaves.create")):
+                                and not _has_active_adj and not leave.get("adjusts_leave_id")
+                                and api.has_feature("leaves.create")):
 
                             async def _open_npbb_adjust(lv=leave):
                                 await _load_resubmit_fields(lv, "Điều chỉnh ngày nghỉ phép bắt buộc",
@@ -2535,6 +2657,14 @@ async def leaves_page(open_id: Optional[int] = None):
         # trong khi thực ra rỗng (hoặc ngược lại, Xuất Excel/Phê duyệt lặng lẽ
         # dùng nhầm phạm vi khác vì tưởng chưa chọn gì).
         _all_sel_checkboxes: list = []
+
+        # Mọi dòng (ui.row) từng vẽ ra trong _draw_table, gộp theo leave id —
+        # dùng để "nháy đỏ" đúng dòng khi mở trang qua link "Xem đơn gốc"/"Xem
+        # đơn điều chỉnh" (?open_id=), xem khối áp dụng ở cuối leaves_page().
+        # Đặt Ở CUỐI hàm (không phải ngay chỗ đọc open_id ở trên) vì lúc đó
+        # các tab/bảng chứa dòng cần nháy CHƯA được vẽ (Python chạy tuần tự,
+        # _draw_table_paged của từng tab nằm ở những đoạn code phía sau).
+        _row_elements_by_id: dict = {}
 
         _approve_btn: list = []
 
@@ -3147,7 +3277,9 @@ async def leaves_page(open_id: Optional[int] = None):
                     )
                     _row_bg = "bg-red-50 border-red-300" if _needs_action else "bg-white border-gray-300"
 
-                    with ui.row().classes(f"hl-row w-full {_row_bg} border-b-2 border-gray-600 px-3 py-1.5 items-center gap-0 hover:bg-red-100"):
+                    _row_el = ui.row().classes(f"hl-row leave-row-id-{lv['id']} w-full {_row_bg} border-b-2 border-gray-600 px-3 py-1.5 items-center gap-0 hover:bg-red-100")
+                    _row_elements_by_id.setdefault(lv["id"], []).append(_row_el)
+                    with _row_el:
 
                         if show_checkbox:
 
@@ -3334,6 +3466,9 @@ async def leaves_page(open_id: Optional[int] = None):
             try:
                 _opened = await asyncio.to_thread(api.get, f"/api/leaves/{open_id}")
                 await open_detail(_opened)
+                # Nháy đỏ dòng tương ứng trong bảng phía sau drawer — áp dụng ở
+                # CUỐI leaves_page() (sau khi mọi tab/bảng đã vẽ xong), xem khối
+                # "_row_elements_by_id" gần cuối hàm.
             except Exception as e:
                 _handle_api_error(e)
 
@@ -5878,12 +6013,15 @@ async def leaves_page(open_id: Optional[int] = None):
                         d_reason = ui.textarea("Lý do (tuỳ chọn)").classes("w-full mt-2").props("rows=2")
                         d_reason.set_visibility(False)
 
+                        d_other_quota, _d_other_quota_vis = _make_other_quota_toggle()
+
                         def _on_type_change(e):
                             lt = e.value
                             is_rng = lt in ("thai_san", "bao_hiem", "khong_luong")
                             d_dates_wrap.set_visibility(not is_rng)
                             d_range_wrap.set_visibility(is_rng)
                             d_reason.set_visibility(lt == "other")
+                            _d_other_quota_vis(lt == "other")
 
                         d_type.on_value_change(_on_type_change)
 
@@ -5920,6 +6058,8 @@ async def leaves_page(open_id: Optional[int] = None):
                                     ui.notify("Vui lòng nhập lý do khi chọn loại Khác", type="warning"); return
                                 body = {"staff_id": d_staff.value, "start_date": dates[0], "end_date": dates[-1],
                                         "spread_dates": dates, "leave_type": lt, "reason": d_reason.value or None}
+                                if lt == "other":
+                                    body["other_deduct_quota"] = d_other_quota.value
                                 confirm_lbl = f"Khai báo nghỉ cho {staff_name} ({len(dates)} ngày). Đơn sẽ được duyệt ngay."
 
                             # Inline dialog → không dùng shared _ask_confirm
@@ -5956,6 +6096,9 @@ async def leaves_page(open_id: Optional[int] = None):
                                         d_reason.value = ""
 
                                         d_reason.set_visibility(False)
+
+                                        d_other_quota.value = True
+                                        _d_other_quota_vis(False)
 
                                         _nav_pending()
 
@@ -6220,6 +6363,35 @@ async def leaves_page(open_id: Optional[int] = None):
             _focus_lv = next((lv for lv in pending_leaves if lv.get("id") == _focus_id), None)
             if _focus_lv:
                 await open_detail(_focus_lv)
+
+        # ── Nháy đỏ dòng đơn gốc/đơn điều chỉnh khi ĐÓNG drawer chi tiết vừa mở
+        # từ link ?open_id= ────────────────────────────────────────────────
+        # Không nháy ngay lúc mở — drawer đang che gần hết chú ý, nháy lúc đó
+        # vô ích. Thay vào đó bắt sự kiện đóng drawer (detail_drawer chuyển
+        # value → False, dù đóng bằng cách nào: bấm nền mờ, phím Esc, hay 1
+        # trong hơn chục chỗ gọi .hide() rải rác) — đúng lúc người dùng nhìn
+        # lại bảng phía sau, chỉ ngay dòng vừa xem cho họ biết đó là dòng nào.
+        # Chỉ bắn ĐÚNG 1 LẦN cho đơn mở từ open_id — KHÔNG áp dụng cho mọi lần
+        # mở/đóng drawer khác trong phiên xem trang (click dòng khác, duyệt...).
+        if open_id:
+            _flash_pending_id = [open_id]
+
+            def _flash_on_drawer_close(e):
+                if e.value or _flash_pending_id[0] is None:
+                    return
+                _fid = _flash_pending_id[0]
+                _flash_pending_id[0] = None
+                _flash_rows = _row_elements_by_id.get(_fid, [])
+                for _fr in _flash_rows:
+                    _fr.classes(add="leave-row-flash")
+                    _fr.on("click", lambda _r=_fr: _r.classes(remove="leave-row-flash"))
+                if _flash_rows:
+                    ui.run_javascript(
+                        f'var _e = getHtmlElement({_flash_rows[0].id}); '
+                        f'if (_e) _e.scrollIntoView({{behavior: "smooth", block: "center"}});'
+                    )
+
+            detail_drawer.on_value_change(_flash_on_drawer_close)
 
 
 

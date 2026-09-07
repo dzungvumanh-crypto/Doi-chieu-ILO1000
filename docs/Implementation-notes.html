@@ -14338,6 +14338,165 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">123</span>
+      <span class="card-title">Nghỉ phép — Loại "Khác": người tạo đơn tự chọn có tính vào hạn mức phép năm hay không (2026-09-06)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Trước đây</span> "Khác" luôn trừ hạn mức, không phân biệt được lý do</div>
+      <p><code>leave_type="other"</code> là hộp lý do tự do (không giống 4 loại có/không tính hạn
+        mức đã cố định sẵn: <code>annual</code>/<code>bat_buoc</code> luôn trừ,
+        <code>thai_san</code>/<code>bao_hiem</code>/<code>khong_luong</code>/<code>hop_cong_tac</code>
+        luôn miễn) — nhưng code cũ xử lý "Khác" y hệt "Nghỉ phép năm", luôn trừ hạn mức bất kể lý do
+        thật là gì. Một số lý do "Khác" trong thực tế (vd nghỉ theo luật lao động không tính vào
+        phép năm) đáng lẽ phải được miễn, nhưng hệ thống không có chỗ nào cho người tạo đơn nói rõ
+        điều đó.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Cột mới <code>other_deduct_quota</code> + nút gạt kèm giải thích rõ 2 chiều</div>
+      <p><code>ALTER TABLE leave_records ADD COLUMN other_deduct_quota INTEGER DEFAULT 1</code> —
+        mặc định 1 (có trừ) để khớp đúng hành vi cũ cho dữ liệu đã có. Cột này CHỈ có ý nghĩa khi
+        <code>leave_type='other'</code>. Thêm hàm dùng chung <code>_is_no_quota_row(leave_type,
+        other_deduct_quota)</code> (<code>backend/api/leaves.py</code>) — trả về True cho 4 loại
+        miễn sẵn có HOẶC "Khác" kèm cờ tắt; dùng thay <code>leave_type in _NO_QUOTA_TYPES</code> ở
+        toàn bộ 6 điểm liên quan: <code>_check_quota_or_borrow</code> (chặn lúc tạo đơn),
+        <code>_apply_status_transition</code> (cộng/trừ <code>used_leave_days</code> khi duyệt/huỷ),
+        <code>delete_leave</code>, <code>approve_recall</code>, <code>_build_form_ctx</code> (ẩn ô
+        hạn mức trên phiếu in). 5 câu SQL tính <code>_calc_used_days</code>/
+        <code>_calc_used_days_bulk</code>/<code>_carry_over_bulk</code>/<code>_calc_occurred_days</code>
+        (leaves.py) + <code>compute_carry_over</code> (database.py) thêm điều kiện
+        <code>AND NOT (leave_type='other' AND other_deduct_quota=0)</code> cạnh điều kiện
+        <code>NOT IN (...)</code> có sẵn.</p>
+
+      <p>Frontend (<code>frontend/pages/leaves.py</code>): hàm dùng chung
+        <code>_make_other_quota_toggle()</code> dựng 1 <code>ui.switch</code> "Trừ vào hạn mức phép
+        năm" + 1 dòng giải thích đổi màu/nội dung theo trạng thái bật/tắt (đọc rõ được hệ quả của
+        từng lựa chọn, không chỉ đoán qua tên nút) — dùng chung cho cả 3 nơi tạo đơn: dialog "Tạo
+        đơn", "Sửa & Nộp lại", "Khai báo hộ". Chỉ hiện khi chọn loại "Khác".</p>
+
+      <div class="note">Verify thật qua API (tạo/nộp lại/xoá đơn thật trên DB dev, dọn sạch sau khi
+        xong, không đoán từ đọc code): "Khác" tắt trừ hạn mức — tạo được đơn 30 ngày dù hạn mức chỉ
+        12 (không hề bị chặn), <code>used_days</code>/báo cáo năm không đổi trước/sau; "Khác" bật
+        trừ hạn mức — <code>used_days</code> tăng đúng số ngày, báo cáo năm đếm đúng, y hệt hành vi
+        đơn "Nghỉ phép năm"; nộp lại đơn đổi cờ từ bật sang tắt cập nhật đúng trong DB
+        (<code>other_deduct_quota: 1 → 0</code>); xoá đơn khai báo hộ loại "Khác tắt" không hoàn
+        nhầm <code>used_leave_days</code> (vì bản thân nó chưa từng bị trừ lúc tạo). 135 test liên
+        quan nghỉ phép/hạn mức/chấm công/bàn giao pass đủ sau khi thêm cột này vào 3 schema test viết
+        tay còn thiếu (<code>tests/test_leave_signature.py</code>,
+        <code>test_nghi_phep_buoc_th_va_gd.py</code>, <code>test_nghi_phep_ngay_lam_bu.py</code>).</div>
+
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">124</span>
+      <span class="card-title">Nghỉ phép — Điều chỉnh NPBB: chặn xếp chuỗi nhiều cấp, đơn gốc tự khôi phục khi rút đơn điều chỉnh (2026-09-06)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Phát hiện</span> Điều chỉnh 1 đơn vốn đã là đơn điều chỉnh làm nhân sự biến mất khỏi báo cáo NPBB</div>
+      <p><code>npbb_adjust_leave</code> trước đây không chặn việc gọi lại chính nó trên 1 đơn mà bản
+        thân đã là đơn điều chỉnh (<code>adjusts_leave_id IS NOT NULL</code>) — miễn đơn đó đang
+        "Hoàn thành". Tạo được chuỗi: gốc → điều chỉnh 1 (đã duyệt) → điều chỉnh 2 (đang xử lý). Khi
+        điều chỉnh 2 duyệt xong, điều chỉnh 1 tự chuyển "Đã hủy" (<code>_cancel_adjusted_original</code>)
+        — nhưng <code>export_npbb_batch</code> (Báo cáo tổng hợp → NPBB) chỉ dò ĐÚNG 1 CẤP cha-con
+        (<code>WHERE adjusts_leave_id = <đơn gốc>.id AND status='approved'</code>) để tìm "đơn điều
+        chỉnh còn hiệu lực" — điều chỉnh 2 (cấp cháu, trỏ về điều chỉnh 1 chứ không phải đơn gốc) lọt
+        khỏi tầm dò, và điều kiện hiện dòng của đơn gốc (<code>status='approved' OR EXISTS(điều chỉnh
+        approved)</code>) cũng cùng lúc sai luôn — nhân sự đó <b>biến mất hoàn toàn</b> khỏi báo cáo.</p>
+      <p>Verify thật: tạo điều chỉnh cấp 2 qua API thật cho 1 đơn NPBB đang có sẵn 1 đơn điều chỉnh
+        đã duyệt, mô phỏng duyệt xong (điều chỉnh 1 → "Đã hủy", điều chỉnh 2 → "Hoàn thành") — nhân
+        sự đó biến mất khỏi bảng Excel Mẫu 19 xuất ra thật (trước đó có 4 dòng, sau còn 3, đúng thiếu
+        1 người). Dọn sạch, khôi phục lại đúng dữ liệu gốc.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Luôn chỉ 1 cấp: chặn điều chỉnh chồng, đơn gốc tự khôi phục khi rút đơn điều chỉnh</div>
+      <p>Thay vì sửa <code>export_npbb_batch</code> để dò được nhiều cấp (phức tạp, dễ phát sinh
+        thêm lỗi ở những chỗ khác cũng giả định 1 cấp), chốt lại đúng theo yêu cầu thực tế: <b>mỗi
+        đơn NPBB gốc chỉ có ĐÚNG 1 đơn điều chỉnh hiệu lực tại 1 thời điểm</b>, muốn điều chỉnh lại
+        thì phải rút/hủy đơn điều chỉnh hiện tại trước (đơn gốc tự khôi phục "Hoàn thành"), rồi mới
+        lập đơn điều chỉnh MỚI từ đúng đơn gốc đó — không giới hạn số lần, miễn làm tuần tự.</p>
+      <ul>
+        <li><code>npbb_adjust_leave</code>: thêm chặn <code>orig["adjusts_leave_id"] is not None</code>
+          → 400 kèm hướng dẫn rõ ("rút/hủy đơn điều chỉnh này trước").</li>
+        <li>Hàm mới <code>_restore_adjusted_original</code> (đối xứng <code>_cancel_adjusted_original</code>)
+          — khôi phục đơn gốc CANCELLED → APPROVED, có log riêng
+          (<code>npbb_adjustment_recalled</code>).</li>
+        <li>Gọi từ 2 nơi đơn điều chỉnh đã duyệt có thể bị đưa về "Đã hủy": <code>_apply_status_transition</code>
+          (dùng bởi <code>cancel_leave</code> — đường "Hủy đơn" trực tiếp, ai có quyền
+          <code>leaves.cancel</code>) và <code>approve_recall</code> (đường "Rút đơn" 2 bước cần
+          Phòng Tổng hợp xác nhận). Thêm tham số <code>actor_id</code> cho
+          <code>_apply_status_transition</code> để log đúng người thao tác thay vì mặc định chủ đơn.</li>
+        <li>Frontend: ẩn nút "Điều chỉnh ngày NPBB" trong chi tiết đơn khi chính đơn đó đã là đơn
+          điều chỉnh (<code>leave.get("adjusts_leave_id")</code>); ô tìm-chọn đơn ở dialog "Tạo đơn"
+          (loại "Điều chỉnh nghỉ phép bắt buộc") cũng lọc bỏ, khớp đúng điều kiện backend.</li>
+      </ul>
+
+      <div class="note">Verify thật qua API (không đoán từ đọc code): thử điều chỉnh lên chính đơn
+        điều chỉnh → 400 đúng thông báo mới; thử điều chỉnh lại đơn gốc khi đơn điều chỉnh còn hiệu
+        lực → vẫn đúng chặn cũ ("Chỉ điều chỉnh được đơn đã hoàn thành"); rút đơn điều chỉnh qua CẢ
+        2 đường (Hủy đơn trực tiếp, Rút đơn 2 bước) → đơn gốc đều khôi phục đúng "Hoàn thành", log
+        hành động ghi đúng người thao tác; điều chỉnh lại đơn gốc sau khi khôi phục → thành công,
+        đơn mới trỏ đúng về đơn gốc (không phải đơn điều chỉnh vừa bị rút). Dropdown "Tạo đơn" xác
+        nhận đúng: trống + hiện dòng hướng dẫn khi không còn đơn gốc nào đủ điều kiện. Dọn sạch dữ
+        liệu test sau mỗi bước, khôi phục đúng nguyên trạng ban đầu. 135 test liên quan pass đủ.</div>
+
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">125</span>
+      <span class="card-title">Nghỉ phép — Rà soát toàn bộ đợt "Khác"/điều chỉnh NPBB, sửa 2 lỗi chữ hướng dẫn kẹt theo loại nghỉ cũ (2026-09-06)</span>
+      <span class="badge badge-done">Hoàn thiện</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-green">Rà soát</span> Giao agent riêng đọc lại toàn bộ code 2 đợt trước</div>
+      <p>Rà lại toàn bộ commit "Khác tự chọn tính hạn mức" và "chặn điều chỉnh NPBB xếp chuỗi" —
+        xác nhận cả 5 câu SQL áp dụng <code>other_deduct_quota</code>, toàn bộ điểm chặn/khôi phục
+        đơn gốc (<code>_restore_adjusted_original</code>, điều kiện <code>actor_id</code>, đường
+        bypass status APPROVED→CANCELLED, nút/dropdown frontend) đều đúng, không sót chỗ nào. Cũng
+        xác nhận cơ chế nháy đỏ dòng đơn (<code>_row_elements_by_id</code> +
+        <code>detail_drawer.on_value_change</code>) không bị đăng ký trùng lặp giữa các lần tải
+        trang. Nêu thêm vài điểm có từ trước (không thuộc phạm vi 2 đợt này): race lý thuyết ở
+        <code>npbb_adjust_leave</code> khi bấm kép gần như đồng thời, và
+        <code>ksv_review</code>/<code>tong_hop_review</code>/<code>gd_review</code> ghi field phụ
+        (comment...) trước bước khoá lạc quan thật — cả 2 để tham khảo, chưa cần sửa ngay.</p>
+
+      <div class="label"><span class="pill pill-red">Phát hiện</span> Dòng chữ hướng dẫn kẹt theo loại nghỉ đã chọn ở lần mở dialog trước</div>
+      <p>Dialog "Tạo đơn" (<code>c_hint</code>) và "Sửa & Nộp lại"/"Điều chỉnh ngày NPBB"
+        (<code>r_hint</code>, dùng chung 1 widget cho cả 2 mode) chỉ cập nhật hướng dẫn qua
+        <code>_c_on_type()</code>/<code>_r_on_type()</code> — 2 hàm này CHỈ được gọi khi người dùng
+        TỰ TAY đổi dropdown loại nghỉ (<code>.on("update:model-value", ...)</code>). Gán
+        <code>c_type.value = "annual"</code>/<code>r_type.value = lv.get(...)</code> bằng code lúc
+        mở lại dialog KHÔNG kích hoạt sự kiện này — hướng dẫn giữ nguyên câu chữ/màu của loại nghỉ
+        đã chọn ở LẦN MỞ TRƯỚC cho tới khi người dùng tự bấm vào dropdown. Vd: mở "Điều chỉnh ngày
+        NPBB" (hiện đúng "Bấm chọn ngày điều chỉnh MỚI" màu cam), đóng lại, mở "Sửa & Nộp lại" cho
+        1 đơn khác — vẫn hiện nguyên câu/màu cũ của NPBB cho tới khi đổi dropdown. Lỗi "Tạo đơn" có
+        từ trước (không phải code mới của 2 đợt vừa rồi), lỗi "Sửa & Nộp lại/Điều chỉnh NPBB" phát
+        sinh từ chính code mới thêm dòng chữ riêng cho luồng điều chỉnh.</p>
+
+      <div class="label"><span class="pill pill-green">Fix</span> Gọi tường minh hàm cập nhật hướng dẫn mỗi lần mở dialog</div>
+      <p>Thêm lời gọi <code>_c_on_type()</code>/<code>_r_on_type()</code> ngay sau khi gán
+        <code>.value</code> mới trong <code>_c_open()</code>/<code>_load_resubmit_fields()</code> —
+        đúng cách đã áp dụng từ trước cho nút gạt "Trừ vào hạn mức phép năm"
+        (<code>_make_other_quota_toggle</code>, đã có comment giải thích chính hiện tượng này).
+        Luồng "Điều chỉnh NPBB" gọi <code>_r_on_type()</code> trước để có hướng dẫn/biên ngày mặc
+        định đúng loại "bat_buoc", sau đó mới đè câu chữ riêng cho luồng điều chỉnh lên trên.</p>
+
+      <div class="note">Verify: bấm thử qua Playwright — mở "Tạo đơn" hiện đúng "Chỉ chọn ngày từ
+        hôm nay trở đi" (mặc định phép năm); mở "Sửa & Nộp lại" cho 1 đơn bat_buoc bị từ chối hiện
+        đúng "Tối thiểu 5 ngày làm việc liên tiếp" — không còn dính câu chữ của lần mở dialog khác
+        trước đó. Chạy lại 135 test liên quan nghỉ phép/hạn mức/chấm công/bàn giao — pass đủ, không
+        phát sinh lỗi mới. Log server sạch trong suốt quá trình test.</div>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-06</footer>
 </div>
 </body>

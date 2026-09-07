@@ -83,6 +83,7 @@ def compute_carry_over(staff_id: int, year: int, db,
         """SELECT start_date, end_date, spread_dates, borrow_next_year_days FROM leave_records
            WHERE staff_id=? AND status='approved'
              AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+             AND NOT (leave_type='other' AND other_deduct_quota=0)
              AND start_date <= ? AND end_date >= ?""",
         (staff_id, f"{prev_year}-12-31", f"{prev_year}-01-01"),
     ).fetchall()

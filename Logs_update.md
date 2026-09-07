@@ -4,6 +4,51 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 06/09/2026 Nghỉ phép - **Rà soát toàn bộ đợt sửa "Khác"/điều chỉnh NPBB — sửa 2 lỗi hiện chữ hướng dẫn sai loại nghỉ**
+    + Giao agent rà soát riêng toàn bộ code mới của 2 đợt trước (loại "Khác" tự chọn tính hạn mức,
+      chặn điều chỉnh NPBB xếp chuỗi) — xác nhận toàn bộ 5 câu SQL + các điểm chặn/khôi phục đơn gốc
+      đều đúng, không sót chỗ nào cần sửa
+    + ✅ **Phát hiện + sửa**: dòng chữ hướng dẫn (vd "Tối thiểu 5 ngày làm việc") ở dialog "Tạo đơn"
+      và "Sửa & Nộp lại/Điều chỉnh NPBB" bị kẹt hiện theo loại nghỉ đã chọn ở LẦN MỞ DIALOG TRƯỚC —
+      do gán `.value` bằng code không tự kích hoạt sự kiện đổi loại nghỉ (chỉ kích hoạt khi người
+      dùng tự tay bấm dropdown). Gọi tường minh lại hàm cập nhật hướng dẫn mỗi lần mở dialog — cùng
+      cách đã áp dụng đúng cho nút gạt "Trừ vào hạn mức phép năm" ở đợt trước
+    + Verify: chạy lại 135 test liên quan nghỉ phép/hạn mức/chấm công/bàn giao — pass đủ; bấm thử
+      qua Playwright cả 2 dialog sau khi sửa — hiện đúng hướng dẫn theo loại nghỉ mỗi lần mở
+
+- 06/09/2026 Nghỉ phép - **Điều chỉnh NPBB: chặn xếp chuỗi nhiều cấp, đơn gốc tự khôi phục khi rút đơn điều chỉnh**
+    + Phát hiện qua rà soát thực tế (tạo đơn điều chỉnh cấp 2 thật rồi kiểm tra báo cáo): điều chỉnh
+      1 đơn *vốn đã là đơn điều chỉnh* (chuỗi gốc → điều chỉnh 1 → điều chỉnh 2) khiến nhân sự đó
+      **biến mất hoàn toàn khỏi báo cáo NPBB** ở Báo cáo tổng hợp — báo cáo chỉ dò đúng 1 cấp cha-con
+      để tìm đơn điều chỉnh còn hiệu lực, không theo được chuỗi 2 cấp trở lên
+    + ✅ **Chặn hẳn điều chỉnh chồng lên điều chỉnh** — mọi đơn điều chỉnh giờ luôn trỏ thẳng về đúng
+      1 đơn NPBB GỐC duy nhất, không xếp chuỗi. Nút "Điều chỉnh ngày NPBB" ẩn trên chính đơn điều
+      chỉnh; ô tìm-chọn đơn ở dialog "Tạo đơn" cũng lọc bỏ, chỉ liệt kê đúng đơn gốc
+    + ✅ **Đơn gốc tự khôi phục "Hoàn thành"** khi đơn điều chỉnh (đã duyệt) bị rút/hủy — trước đây
+      đơn gốc kẹt "Đã hủy" vĩnh viễn, không thể điều chỉnh lại được nữa dù đơn điều chỉnh đã bị rút.
+      Áp dụng cho cả 2 đường rút đơn: "Hủy đơn" trực tiếp lẫn "Rút đơn" cần Phòng Tổng hợp xác nhận
+    + Từ nay: muốn điều chỉnh lại 1 đơn NPBB đã có đơn điều chỉnh, phải rút/hủy đơn điều chỉnh hiện
+      tại trước — đơn gốc tự về "Hoàn thành", làm điều chỉnh mới lại từ đơn gốc đó. Số lần điều chỉnh
+      không giới hạn, miễn tuần tự từng lần một
+    + Verify thật qua API (tạo đơn điều chỉnh cấp 2, rút đơn qua cả 2 đường, dọn sạch sau khi xong):
+      chặn đúng lúc điều chỉnh chồng lên điều chỉnh; đơn gốc khôi phục đúng sau khi rút; điều chỉnh
+      lại thành công sau khi khôi phục. 135 test liên quan pass đủ
+
+- 06/09/2026 Nghỉ phép - **Loại nghỉ "Khác": tự chọn có tính vào hạn mức phép năm hay không**
+    + Trước đây `leave_type="other"` (Khác) LUÔN trừ vào hạn mức phép năm giống hệt "Nghỉ phép năm"
+      — không đúng cho mọi lý do "Khác" (hộp lý do tự do, có thể là loại nghỉ theo luật lao động
+      không tính vào phép năm). Thêm 1 nút gạt "Trừ vào hạn mức phép năm" (kèm dòng giải thích rõ 2
+      chiều) — chỉ hiện khi chọn loại "Khác", ở cả 3 nơi tạo đơn: Tạo đơn, Sửa & Nộp lại, Khai báo hộ
+    + **Bật (mặc định, giữ nguyên hành vi cũ)**: tính đúng như đơn Nghỉ phép năm — trừ hạn mức còn
+      lại, cộng vào số ngày đã nghỉ, có thể phải ứng phép năm sau nếu vượt hạn mức
+    + **Tắt**: chỉ ghi nhận ngày nghỉ để theo dõi, không tính toán gì vào hạn mức phép năm — giống
+      hệt các loại đã miễn hạn mức sẵn có (thai sản/bảo hiểm/không lương/họp-công tác)
+    + Verify thật qua API (tạo/xoá/nộp lại đơn thật, dọn sạch sau khi xong): "Khác" tắt trừ hạn mức
+      tạo được dù vượt xa hạn mức (30 ngày trên hạn mức 12), không đổi `used_leave_days`/báo cáo năm;
+      "Khác" bật trừ hạn mức tính đúng y hệt phép năm (used_days/remaining/báo cáo năm); nộp lại đơn
+      đổi từ bật sang tắt cập nhật đúng trong DB; xoá đơn khai báo hộ loại "Khác tắt" không hoàn
+      nhầm hạn mức (vì bản thân nó chưa từng bị trừ)
+
 - 06/09/2026 Nghỉ phép - **Sửa 5 lỗi từ review thật của Người 1 trên PR #77**
     + ✅ **"Họp/Công tác" chấm công tự động thành 0 công thay vì đủ công** — 2 trigger đồng bộ
       `attendances` (tạo từ PR #22, trước khi loại nghỉ `hop_cong_tac` ra đời) rơi đúng loại này vào
