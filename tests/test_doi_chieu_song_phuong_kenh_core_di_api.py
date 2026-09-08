@@ -178,3 +178,71 @@ class TestStartUploadEndpointDi:
         logs = "\n".join(prog["logs"])
         assert "[CORE T] đọc thẳng CSV đã phân loại sẵn 202_DI_dot1.csv" in logs, logs
         assert "[CORE T+1] đọc thẳng CSV đã phân loại sẵn 202_DI_dot2.csv" in logs, logs
+
+    def test_3_file_csv_core_T_va_T_cong_tru_1_qua_upload_deu_dung_duoc(
+        self, admin_client, monkeypatch, tmp_path,
+    ):
+        """Chiều đi khác chiều đến ở chỗ cửa sổ CORE rộng CẢ 2 hướng (T-3..T+3, phục vụ nhánh
+        "huỷ chéo ngày" — xem OFFSET_CORE_CAN_DOC trong core_di/config.py), không chỉ T..T+3 như
+        đến. Test này xác nhận CSV đại diện T-1 cũng được tự nhận đúng qua TRDATE thật, không chỉ
+        T/T+1 — đúng dữ liệu thật đã chạy 5 ngày 3-7/9/2026 (mỗi ngày có sẵn 3 file CSV: T-1, T,
+        T+1 trong 1 thư mục), giờ verify lại qua đúng đường API upload thay vì chạy tay."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core_di/start_upload",
+            files=[
+                *_hub_kenh_upload_files_di(ngay="20260825"),
+                _core_csv_upload_file_trdate_di("202_DI_hom_qua.csv", "20260824"),
+                _core_csv_upload_file_trdate_di("202_DI_hom_nay.csv", "20260825"),
+                _core_csv_upload_file_trdate_di("202_DI_hom_sau.csv", "20260826"),
+            ],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["hub_core_di"] is not None
+
+        logs = "\n".join(prog["logs"])
+        assert "[CORE T-1] đọc thẳng CSV đã phân loại sẵn 202_DI_hom_qua.csv" in logs, logs
+        assert "[CORE T] đọc thẳng CSV đã phân loại sẵn 202_DI_hom_nay.csv" in logs, logs
+        assert "[CORE T+1] đọc thẳng CSV đã phân loại sẵn 202_DI_hom_sau.csv" in logs, logs
+
+    def test_du_7_file_csv_core_T3_den_T_cong_3_qua_upload_deu_dung_duoc(
+        self, admin_client, monkeypatch, tmp_path,
+    ):
+        """Câu hỏi người dùng 2026-09-08: nếu chấm đủ cả T-3..T+3 (7 file CSV, đúng trọn cửa sổ
+        OFFSET_CORE_CAN_DOC của chiều đi) thì có đáp ứng được không. Cơ chế TRDATE thật không giới
+        hạn số file — dựng 1 bản đồ ngày→file rồi tra đúng offset cần, không có ngưỡng cứng nào ở
+        2-3 file. Test này xác nhận bằng dữ liệu thật thay vì chỉ suy luận."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        # T = 20260825. Offset -3..+3 -> 20260822..20260828.
+        ngay_theo_offset = {
+            -3: "20260822", -2: "20260823", -1: "20260824", 0: "20260825",
+            1: "20260826", 2: "20260827", 3: "20260828",
+        }
+        files = [*_hub_kenh_upload_files_di(ngay="20260825")]
+        for off, ngay in ngay_theo_offset.items():
+            files.append(_core_csv_upload_file_trdate_di(f"202_DI_offset_{off}.csv", ngay))
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core_di/start_upload",
+            files=files,
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["hub_core_di"] is not None
+
+        logs = "\n".join(prog["logs"])
+        for off, ngay in ngay_theo_offset.items():
+            nhan = "T" if off == 0 else f"T{off:+d}"
+            assert f"[CORE {nhan}] đọc thẳng CSV đã phân loại sẵn 202_DI_offset_{off}.csv" in logs, \
+                f"Offset {nhan} (ngày {ngay}) không được đọc đúng file:\n{logs}"
