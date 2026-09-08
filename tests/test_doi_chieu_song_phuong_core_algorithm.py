@@ -344,42 +344,77 @@ class TestTimFile:
         assert loai == "csv"
         assert p.name == "202_DEN.csv"
 
-    def test_csv_chi_dung_cho_offset_0_khong_leo_sang_ngay_khac(self, tmp_path):
-        """Bug báo bởi người dùng 2026-09-03: `{ma_nh}_DEN*.csv` KHÔNG mang ngày giao dịch trong
-        tên, mà `doi_chieu_hub_core()` lại gọi hàm này trong vòng lặp quét 4 ngày — 1 file CSV ngày
-        T bị dùng nhầm làm dữ liệu CORE cho CẢ T+1/T+2/T+3, tự nhân dữ liệu, khác hẳn hành vi ZIP
-        (tên mang đúng ngày nên tự nhiên không khớp offset khác). CSV chỉ được chấp nhận ở offset 0;
-        offset khác phải có ZIP đúng ngày của nó, không được rơi về CSV.
+    def _viet_csv_trdate(self, path, *trdates):
+        """Ghi 1 file CSV core hợp lệ, mỗi dòng 1 giá trị TRDATE trong `trdates` (nhiều giá trị →
+        file có TRDATE lẫn nhiều ngày)."""
+        rows = [{**_core_row(), "TRDATE": d} for d in trdates]
+        pd.DataFrame(rows, columns=["TRDATE"] + _CORE_COLS).to_csv(path, index=False)
 
-        Không phải lỗi do PR#70 sinh ra: `tim_file_glob()` luôn thử cả thư mục gốc, nên CSV để rời
-        ở gốc đã khớp cả 4 offset từ 2026-08-28 — xem docstring `_tim_file_core_hoac_csv`."""
-        (tmp_path / "202_DEN.csv").write_bytes(b"x")  # CSV duy nhất, không có ZIP nào cả
-        assert pipeline._tim_file_core_hoac_csv(tmp_path, "20260824", "202", 1) is None
-        assert pipeline._tim_file_core_hoac_csv(tmp_path, "20260825", "202", 2) is None
-        assert pipeline._tim_file_core_hoac_csv(tmp_path, "20260826", "202", 3) is None
-        # offset 0 (ngày gốc) vẫn phải đọc được CSV bình thường
-        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0)
-        assert loai == "csv"
-
-    def test_offset_khac_0_van_nhan_zip_dung_ngay_du_co_csv(self, tmp_path):
-        """Mặt còn lại của luật trên (thêm ở review 2026-09-03): chặn CSV ở offset ≠ 0 KHÔNG được
-        làm mất luôn ZIP đúng ngày đang nằm sẵn đó. Đây mới là ca fix cải thiện rõ nhất — trước khi
-        vá, CSV được xét TRƯỚC nên ở offset 1 nó thắng cả `GL02_{T+1}`, đọc dữ liệu ngày T trong
-        khi file đúng ngày T+1 có sẵn ngay cạnh."""
+    def test_1_file_1_offset_0_dung_duong_nhanh_khong_can_doc_noi_dung(self, tmp_path):
+        """Đúng 1 file khớp + hỏi offset 0 (ngày T) → tin luôn, KHÔNG mở đọc nội dung (đường nhanh,
+        giữ hiệu năng cho trường hợp phổ biến nhất)."""
         (tmp_path / "202_DEN.csv").write_bytes(b"x")
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0)
+        assert loai == "csv" and p.name == "202_DEN.csv"
+
+    def test_1_file_offset_khac_0_tu_gan_dung_theo_trdate_that(self, tmp_path):
+        """2026-09-08: báo lỗi thật của người dùng — module "Đối chiếu đến" không chạy được khi
+        upload CSV. Nguyên nhân: 1 thư mục có CSV riêng cho ngày T VÀ ngày T+1 (2 đợt xuất trong 1
+        phiên) — luật cũ "CSV chỉ dùng offset 0" chặn cứng, không tự nhận được CSV của T+1 dù đã có
+        sẵn. Nay đọc TRDATE thật bên trong để tự gán đúng offset, không còn bị chặn."""
+        self._viet_csv_trdate(tmp_path / "202_DEN_20260823_0900.csv", "20260823")
+        self._viet_csv_trdate(tmp_path / "202_DEN_20260824_0900.csv", "20260824")
+
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0)
+        assert loai == "csv" and p.name == "202_DEN_20260823_0900.csv"
+
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260824", "202", 1)
+        assert loai == "csv" and p.name == "202_DEN_20260824_0900.csv"
+
+        # Không file nào có TRDATE=20260825 (offset 2) → không tự nhận nhầm, trả None
+        assert pipeline._tim_file_core_hoac_csv(tmp_path, "20260825", "202", 2) is None
+
+    def test_offset_khac_0_van_nhan_zip_khi_khong_co_csv_dung_ngay(self, tmp_path):
+        """CSV có sẵn nhưng TRDATE của nó không khớp offset đang hỏi → rơi về GL02 zip đúng ngày,
+        không dùng liều CSV sai ngày (mặt còn lại của luật cũ vẫn phải giữ, thêm ở review
+        2026-09-03: trước khi vá, CSV được xét TRƯỚC nên thắng cả ZIP đúng ngày nằm sẵn đó)."""
+        self._viet_csv_trdate(tmp_path / "202_DEN.csv", "20260823")
         (tmp_path / "GL02_20260824_1000.zip").write_bytes(b"x")
         loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260824", "202", 1)
-        assert loai == "zip"
-        assert p.name == "GL02_20260824_1000.zip"
+        assert loai == "zip" and p.name == "GL02_20260824_1000.zip"
 
-    def test_nhieu_csv_cung_khop_khong_tu_chon(self, tmp_path):
-        """Quyết định 2026-08-30: nhiều người dùng có thể trỏ chung 1 thư mục server (mode 2)
-        cùng lúc — nhiều file CSV cùng khớp glob KHÔNG được tự đoán "mới nhất" như trước, phải
-        trả None (coi như chưa xác định được) để không đọc nhầm file người khác vừa thả vào."""
+    def test_nhieu_csv_cung_trdate_khong_tu_chon(self, tmp_path):
+        """2 file CSV khác tên nhưng TRDATE thật BÊN TRONG lại trùng 1 ngày — vẫn phải chặn như
+        luật cũ (không tự chọn), chỉ khác chỗ xét trên TRDATE thật thay vì xét trên việc "có nhiều
+        file cùng khớp tên" như trước (quyết định 2026-08-30: nhiều người dùng có thể trỏ chung 1
+        thư mục server cùng lúc, không tự đoán "mới nhất")."""
         (tmp_path / "23.8").mkdir()
-        (tmp_path / "23.8" / "202_DEN_20260823_0900.csv").write_bytes(b"x")
-        (tmp_path / "23.8" / "202_DEN_20260823_1400.csv").write_bytes(b"x")
-        assert pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0) is None
+        self._viet_csv_trdate(tmp_path / "23.8" / "202_DEN_20260823_0900.csv", "20260823")
+        self._viet_csv_trdate(tmp_path / "23.8" / "202_DEN_20260823_1400.csv", "20260823")
+        logs = []
+        assert pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260823", "202", 0, logs.append) is None
+        assert any("KHÔNG tự chọn" in m for m in logs)
+
+    def test_csv_trdate_lan_nhieu_ngay_trong_1_file_bi_loai_khong_crash(self, tmp_path):
+        """1 file tự nó có TRDATE lẫn nhiều ngày (dữ liệu hỏng/gộp nhầm) — loại khỏi việc gán
+        offset, log lỗi rõ, KHÔNG crash cả job và KHÔNG đoán dùng 1 trong các ngày đó."""
+        self._viet_csv_trdate(tmp_path / "202_DEN_lan_ngay.csv", "20260823", "20260824")
+        logs = []
+        assert pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260824", "202", 1, logs.append) is None
+        assert any("TRDATE lẫn" in m for m in logs)
+
+    def test_file_hong_khong_doc_duoc_thi_bo_qua_khong_crash(self, tmp_path):
+        """File rác (không đọc được cột TRDATE) gặp ở offset khác 0 — log lỗi rồi bỏ qua, không
+        làm crash toàn bộ job (job vẫn tiếp tục với các offset/nhánh khác)."""
+        (tmp_path / "202_DEN_hong.csv").write_bytes(b"khong phai csv hop le")
+        (tmp_path / "202_DEN_that.csv").write_text("TRDATE\n20260824\n", encoding="utf-8")
+        logs = []
+        loai, p = pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260824", "202", 1, logs.append)
+        assert loai == "csv" and p.name == "202_DEN_that.csv"
+        assert any("Không đọc được cột TRDATE" in m for m in logs)
 
     def test_nhieu_hub_cung_khop_khong_tu_chon(self, tmp_path):
         """Như trên, áp dụng cho `_tim_file_hub` (dùng chung ở cả 2 bước Kênh↔Hub và Hub↔Core)."""
