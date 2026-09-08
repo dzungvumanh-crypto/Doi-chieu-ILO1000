@@ -14545,18 +14545,20 @@ This may happen if you try to create UI from a background task.</pre>
         lại đúng <code>session_id</code> thật ngay sau đó trong CÙNG lượt "Tải". Chỉ "thắng" khi
         không có bước tải nào theo sau — đúng lúc người dùng tự đổi ngày.</div>
 
-      <div class="label"><span class="pill pill-amber">Thiết kế — hỏi lại Phòng Thanh toán, chưa quyết</span></div>
+      <div class="label"><span class="pill pill-green">Thiết kế — đã hỏi Phòng Thanh toán, đã chốt (08/09/2026)</span></div>
       <table>
-        <tr><th>Câu hỏi</th><th>Vì sao chưa tự quyết</th></tr>
+        <tr><th>Câu hỏi</th><th>Trả lời / xử lý</th></tr>
         <tr><td><b>C.</b> Không hề báo "ngày này bạn đã có bảng" ở tab chính</td>
-            <td>Hệ quả trực tiếp + đúng ý của model mới (không Tải → luôn bảng mới). Nhưng F5 giữa
-                chừng, hoặc mở lại hôm sau, gõ đúng ngày cũ + nạp + Lưu → đẻ bảng trùng, im lặng.
-                Đường lưu tiếp duy nhất nằm sâu 3 lớp (Lịch sử → người → bảng → Tải).</td></tr>
+            <td><b>Xác nhận cần thêm nhắc.</b> Thêm banner mềm (không chặn) ngay dưới ô ngày — gõ/chọn
+                1 ngày mà CHÍNH MÌNH đã có bảng thì hiện "Bạn đã có N bảng cho ngày này" kèm nút
+                "Tải bảng gần nhất". Không bấm vào vẫn tạo được bảng mới độc lập bình thường. Check
+                chạy lúc mở trang (mặc định = hôm nay) và mỗi khi đổi ô ngày — cùng
+                <code>on_value_change</code> handler đã thêm cho fix B. Lọc đúng người bằng
+                <code>created_by</code> (id), KHÔNG so tên — tránh đúng lỗi A ở trên.</td></tr>
         <tr><td><b>D.</b> Sổ trực dễ báo XANH nhầm hơn hẳn</td>
-            <td><code>get_reconciliation_status()</code> không đổi code, nhưng <code>any(matched)</code>
-                giờ có thể đúng vì CHÍNH người đó có 2 bảng final cùng ngày (1 chốt nhầm khớp, 1 chấm
-                lại lệch) — trước PR#80 chỉ 1 bảng final/người/ngày nên "bất kỳ bảng nào khớp" khó
-                lẫn với ý "người đó tự sửa lại". Cần xác nhận đây vẫn đúng ý nghiệp vụ.</td></tr>
+            <td><b>Xác nhận đúng ý muốn, giữ nguyên.</b> "Chỉ cần có 1 bảng chính thức của phiên hôm
+                đó cân khớp là được" — <code>any(matched)</code> đúng ý nghiệp vụ, không cần khái
+                niệm "bảng chính thức của ngày" riêng. Không sửa <code>get_reconciliation_status()</code>.</td></tr>
       </table>
 
       <div class="label"><span class="pill pill-green">Góp ý đã áp dụng</span> N+1 request khi bung Tầng 1 + lệch cột</div>

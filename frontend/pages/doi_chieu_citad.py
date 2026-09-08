@@ -1740,7 +1740,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     ):
                         ngay_input = _date_picker_input("Ngày")
 
-                        def _on_ngay_changed(_e=None):
+                        async def _on_ngay_changed(_e=None):
                             # Đổi ngày (gõ tay hoặc chọn lại lịch) khi đang
                             # tải/sửa 1 bảng (session_id != None) nghĩa là
                             # người dùng muốn chấm SANG NGÀY KHÁC — tách khỏi
@@ -1768,6 +1768,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                                     "không ghi đè bảng vừa tải",
                                     type="info",
                                 )
+                            await _check_ngay_da_co_bang()
 
                         ngay_input.on_value_change(_on_ngay_changed)
                         lap_bang_input = ui.select(
@@ -1800,6 +1801,58 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                             "bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg"
                         )
                     ui.timer(0.1, _load_payment_staff_names, once=True)
+
+                    # Banner NHẮC (không chặn) — "bạn đã có bảng cho ngày
+                    # này" khi gõ/chọn ngày mà CHÍNH MÌNH đã có ít nhất 1
+                    # bảng (bất kể ai đang xem đúng bảng đó hay đang gõ bảng
+                    # mới). Bổ sung sau khi review (07/09/2026): model mới
+                    # "không Tải thì luôn tạo bảng mới" khiến F5 giữa chừng
+                    # hoặc mở lại hôm sau rồi gõ đúng ngày cũ + nạp + Lưu sẽ
+                    # ÂM THẦM đẻ bảng trùng — đường lưu tiếp bảng cũ nằm sâu
+                    # 3 lớp trong tab Lịch sử, dễ quên. Chỉ NHẮC, không chặn:
+                    # vẫn tạo được bảng mới độc lập nếu không bấm vào banner.
+                    ngay_banner_area = ui.column().classes("w-full gap-0")
+
+                    async def _check_ngay_da_co_bang():
+                        ngay_banner_area.clear()
+                        try:
+                            ngay_dt = datetime.datetime.strptime((ngay_input.value or "").strip(), "%d/%m/%Y")
+                        except Exception:
+                            return  # ngày chưa gõ xong (vd đang gõ dở "08/0") — bỏ qua, không gọi API
+                        ngay_str = ngay_dt.strftime("%d/%m/%Y")
+                        try:
+                            rows = await asyncio.to_thread(
+                                api.get, "/api/doi-chieu-citad/reconciliation-days",
+                                {"tu_ngay": ngay_str, "den_ngay": ngay_str},
+                            )
+                        except Exception:
+                            return  # chỉ là gợi ý phụ — lỗi mạng thì bỏ qua lặng lẽ, không phải thao tác chính
+                        # Lọc đúng CHÍNH MÌNH bằng created_by (id) — KHÔNG lọc qua
+                        # `nguoi_cham` (so tên) vì 2 người trùng họ tên sẽ lẫn vào
+                        # nhau (đúng lỗi A vừa sửa ở get_reconciliation_days()).
+                        mine = [r for r in rows if r.get("created_by") == current_user.get("id")]
+                        if not mine:
+                            return
+                        latest = max(mine, key=lambda r: r.get("updated_at") or "")
+                        with ngay_banner_area:
+                            with ui.row().classes(
+                                "w-full items-center gap-2 px-4 py-2.5 rounded-xl border border-indigo-300 bg-indigo-50 mb-2"
+                            ):
+                                ui.icon("info", color="indigo-700").classes("text-lg")
+                                ui.label(
+                                    f"Bạn đã có {len(mine)} bảng cho ngày {ngay_str} — nếu muốn lưu "
+                                    "tiếp bảng cũ (thay vì tạo bảng mới), bấm tải bảng gần nhất."
+                                ).classes("text-sm text-indigo-800 flex-1")
+
+                                async def _tai_gan_nhat(_e=None, sid=latest["session_id"]):
+                                    await _load_session(sid)
+                                    tabs.set_value(tab_doi_chieu)
+
+                                ui.button(
+                                    "Tải bảng gần nhất", icon="download", on_click=_tai_gan_nhat
+                                ).props("dense outline color=indigo-8")
+
+                    ui.timer(0.1, _check_ngay_da_co_bang, once=True)
 
                     # Banner trạng thái — nội dung dựng ĐỘNG theo mode trong
                     # _apply_view_mode() (rỗng/ẩn khi mode='edit' của chính
