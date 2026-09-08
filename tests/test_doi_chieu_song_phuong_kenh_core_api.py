@@ -120,6 +120,16 @@ def _core_csv_upload_file() -> tuple:
     return ("files", ("202_DEN.csv", df.to_csv(index=False).encode("utf-8-sig"), "text/csv"))
 
 
+def _core_csv_upload_file_trdate(filename: str, trdate: str) -> tuple:
+    """Như `_core_csv_upload_file()` nhưng có thêm cột TRDATE — dùng cho test nhiều file CSV
+    khác ngày trong 1 lượt upload (`_tim_file_core_hoac_csv` đọc TRDATE thật để tự gán offset,
+    2026-09-08)."""
+    cols = ["TRDATE"] + _GL02_COLS
+    row = {"TRDATE": trdate, **_gl02_row()}
+    df = pd.DataFrame([row], columns=cols)
+    return ("files", (filename, df.to_csv(index=False).encode("utf-8-sig"), "text/csv"))
+
+
 def _doc_csv(content: bytes) -> list[tuple]:
     """Đọc 1 file CSV kết quả (đổi 2026-08-31, xem export.py) — trả list dòng dạng tuple, cùng
     hình dạng `_doc_sheets()` trả cho 1 sheet, để so sánh dễ với assertion cũ."""
@@ -420,6 +430,61 @@ class TestStartUploadEndpoint:
         assert prog["status"] == "done", prog
         assert prog["ket_qua"]["kenh_hub"] is not None
         assert prog["ket_qua"]["hub_core"] is not None
+
+    def test_2_file_gl02_zip_khac_ngay_qua_upload_deu_dung_duoc(self, admin_client, monkeypatch, tmp_path):
+        """Kiểm tra thật qua API (không chỉ hàm nội bộ): upload CÙNG LÚC 2 file GL02 ZIP khác
+        ngày (T và T+1) — mỗi file tự mang đúng ngày trong tên nên không mơ hồ, cả 2 phải đọc
+        được (khác hẳn 2 file HUB trùng ngày ở `test_2_file_hub_cung_khop_khong_tu_chon`, đó là
+        ca CÙNG ngày nên đúng phải bị chặn)."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core/start_upload",
+            files=[
+                *_hub_kenh_upload_files(ngay="20260825"),
+                _gl02_upload_file(ngay="20260825"),
+                _gl02_upload_file(ngay="20260826"),
+            ],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["hub_core"] is not None
+
+        logs = "\n".join(prog["logs"])
+        assert "[CORE T] đang giải mã + phân loại GL02_20260825_1000.zip" in logs, logs
+        assert "[CORE T+1] đang giải mã + phân loại GL02_20260826_1000.zip" in logs, logs
+
+    def test_2_file_csv_core_khac_ngay_qua_upload_deu_dung_duoc(self, admin_client, monkeypatch, tmp_path):
+        """Kiểm tra thật qua API: upload CÙNG LÚC 2 file CSV core đã phân loại sẵn, tên file
+        KHÔNG mang ngày nhưng TRDATE bên trong khác nhau (T và T+1) — đúng bug người dùng thật
+        báo 2026-09-08 (module "Đối chiếu đến" không chạy được khi có nhiều CSV trong 1 phiên).
+        Xác nhận qua API thật (không chỉ unit test hàm `_tim_file_core_hoac_csv`), vì đây mới là
+        đường người dùng thật đi qua."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core/start_upload",
+            files=[
+                *_hub_kenh_upload_files(ngay="20260825"),
+                _core_csv_upload_file_trdate("202_DEN_dot1.csv", "20260825"),
+                _core_csv_upload_file_trdate("202_DEN_dot2.csv", "20260826"),
+            ],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["hub_core"] is not None
+
+        logs = "\n".join(prog["logs"])
+        assert "[CORE T] đọc thẳng CSV đã phân loại sẵn 202_DEN_dot1.csv" in logs, logs
+        assert "[CORE T+1] đọc thẳng CSV đã phân loại sẵn 202_DEN_dot2.csv" in logs, logs
 
     def test_khong_chon_file_tra_422(self, admin_client):
         r = admin_client.post(
