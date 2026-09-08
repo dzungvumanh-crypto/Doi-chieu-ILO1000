@@ -374,6 +374,40 @@ class TestTimFile:
         # Không file nào có TRDATE=20260825 (offset 2) → không tự nhận nhầm, trả None
         assert pipeline._tim_file_core_hoac_csv(tmp_path, "20260825", "202", 2) is None
 
+    def test_2_file_gom_chung_1_thu_muc_dat_ten_theo_ngay_T(self, tmp_path):
+        """Phát hiện qua phản biện trước PR (2026-09-08): người dùng thường gom MỌI CSV của cả
+        phiên (nhiều ngày khác nhau) vào 1 thư mục con đặt tên theo ngày T (VD `23.8/`) — bản vá
+        đầu tiên chỉ dò theo ngày CỦA TỪNG OFFSET (`thu_muc_ngay_ung_vien` không tìm ra thư mục
+        `24.8/` vì nó không tồn tại, `tim_file_glob` rơi thẳng về gốc mà KHÔNG đệ quy vào `23.8/`)
+        nên vẫn mất file dù đã nằm sẵn trong thư mục T. Gọi kèm `ngay_goc` (đúng như
+        `doi_chieu_hub_core()` truyền vào) để dò thêm theo ngày T mới sửa được."""
+        sub = tmp_path / "23.8"
+        sub.mkdir()
+        self._viet_csv_trdate(sub / "202_DEN_20260823_0900.csv", "20260823")
+        self._viet_csv_trdate(sub / "202_DEN_20260824_0900.csv", "20260824")
+
+        loai, p = pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260823", "202", 0, ngay_goc="20260823")
+        assert loai == "csv" and p.name == "202_DEN_20260823_0900.csv"
+
+        loai, p = pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260824", "202", 1, ngay_goc="20260823")
+        assert loai == "csv" and p.name == "202_DEN_20260824_0900.csv"
+
+    def test_zip_offset_khac_0_gom_chung_thu_muc_dat_ten_theo_ngay_T(self, tmp_path):
+        """Cùng lỗi tổ chức thư mục như CSV (test trên) nhưng cho nhánh GL02 ZIP — nếu người dùng
+        gom cả ZIP của T lẫn T+1 vào chung 1 thư mục đặt tên theo ngày T, offset T+1 vẫn phải tìm
+        thấy nhờ `ngay_goc` (phát hiện qua phản biện vòng 2, 2026-09-08 — chưa có báo cáo lỗi thật
+        cho nhánh ZIP, sửa trước cho nhất quán vì cùng 1 hàm, cùng yêu cầu "cả .zip lẫn .csv")."""
+        sub = tmp_path / "23.8"
+        sub.mkdir()
+        (sub / "GL02_20260823_1000.zip").write_bytes(b"x")
+        (sub / "GL02_20260824_1000.zip").write_bytes(b"x")
+
+        loai, p = pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260824", "202", 1, ngay_goc="20260823")
+        assert loai == "zip" and p.name == "GL02_20260824_1000.zip"
+
     def test_offset_khac_0_van_nhan_zip_khi_khong_co_csv_dung_ngay(self, tmp_path):
         """CSV có sẵn nhưng TRDATE của nó không khớp offset đang hỏi → rơi về GL02 zip đúng ngày,
         không dùng liều CSV sai ngày (mặt còn lại của luật cũ vẫn phải giữ, thêm ở review
@@ -422,3 +456,16 @@ class TestTimFile:
         (tmp_path / "23.8" / "doichieugd_20260823__05_DEN_9999_N.zip").write_bytes(b"x")
         (tmp_path / "23.8" / "doichieugd_20260823__05_DEN_9999_N_v2.zip").write_bytes(b"x")
         assert pipeline._tim_file_hub(tmp_path, "20260823", "202") is None
+
+    def test_hub_offset_khac_0_gom_chung_thu_muc_dat_ten_theo_ngay_T(self, tmp_path):
+        """Phát hiện qua phản biện vòng 3 trước PR (2026-09-08): cùng lỗi tổ chức thư mục như CSV
+        core, áp dụng cho HUB — người dùng gom HUB của T VÀ T-1 vào chung 1 thư mục đặt tên theo
+        ngày T. Không vá thì HUB T-1 bị mất, khiến CORE đáng lẽ khớp "hub T-1 core T" bị gắn nhầm
+        "CORE THỪA" (sai nhãn âm thầm, không log/raise nào bắt được) — xem `doi_chieu_hub_core()`."""
+        sub = tmp_path / "23.8"
+        sub.mkdir()
+        (sub / "doichieugd_20260823__05_DEN_9999_N.zip").write_bytes(b"x")
+        (sub / "doichieugd_20260822__05_DEN_9999_N.zip").write_bytes(b"x")
+
+        p = pipeline._tim_file_hub(tmp_path, "20260822", "202", ngay_goc="20260823")
+        assert p is not None and p.name == "doichieugd_20260822__05_DEN_9999_N.zip"

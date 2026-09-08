@@ -35,6 +35,7 @@ from .config import NHAN_HUB_T_CORE_T
 
 def _tim_file_hub(
     goc_dir: Path, ngay: str, ma_nh: str, log: Callable[[str], None] = lambda msg: None,
+    ngay_goc: str | None = None,
 ) -> Path | None:
     """Khớp glob `doichieugd_{ngay}__{code}_DEN_9999_N*.zip` — KHÔNG đòi tên chính xác, cùng lý
     do CSV CORE/OSB đã vá (dữ liệu export thủ công có thể kèm hậu tố).
@@ -43,8 +44,20 @@ def _tim_file_hub(
     coi như chưa xác định được, trả None kèm log riêng biệt với "không tìm thấy". Lý do: nhiều
     người dùng có thể trỏ chung 1 thư mục server (mode 2) cùng lúc — tự đoán "mới nhất" dễ đọc
     nhầm file người khác vừa thả vào, ra kết quả sai mà không ai biết (chỉ có 1 dòng cảnh báo dễ
-    bỏ qua)."""
+    bỏ qua).
+
+    `ngay_goc`: ngày T gốc của cả lần chạy — dò THÊM thư mục ứng viên của ngày này nếu không thấy
+    theo `ngay` riêng của offset đang xét (2026-09-08, phát hiện qua phản biện vòng 3 trước PR:
+    cùng cơ chế lỗi đã vá cho CSV/ZIP core — người dùng gom file HUB nhiều ngày (T, T-1, T-2, T-3)
+    vào 1 thư mục đặt tên theo ngày T thay vì mỗi ngày 1 thư mục riêng. Hậu quả nếu KHÔNG vá: thiếu
+    HUB T-1 không chỉ "thiếu dữ liệu" mà làm CORE đáng lẽ khớp "hub T-1 core T" bị rơi xuống gắn
+    nhầm nhãn "CORE THỪA" — sai nhãn âm thầm, job vẫn báo "Hoàn thành" bình thường, xem
+    `match.py::classify_core` bước khớp `OFFSET_HUB_KHI_XU_LY_CORE`. Tên file HUB tự mang đúng
+    ngày giao dịch nên không cần đọc nội dung để xác minh như CSV core — chỉ cần mở rộng thư mục
+    tìm kiếm."""
     matches = tim_file_glob(goc_dir, ngay, hub_filename_glob(ngay, ma_nh))
+    if not matches and ngay_goc is not None and ngay_goc != ngay:
+        matches = tim_file_glob(goc_dir, ngay_goc, hub_filename_glob(ngay, ma_nh))
     if not matches:
         return None
     if len(matches) > 1:
@@ -79,32 +92,35 @@ def _doc_trdate_1_file(path: Path, log: Callable[[str], None]) -> str | None:
 
 
 def _theo_ngay_cac_file_csv(
-    thu_muc: Path, pattern: str, cache: dict[Path, dict[str, list[Path]]],
+    files: list[Path], cache: dict[tuple[Path, ...], dict[str, list[Path]]],
     log: Callable[[str], None],
 ) -> dict[str, list[Path]]:
-    """Đọc TRDATE thật của MỌI file khớp `pattern` trong `thu_muc`, trả `{TRDATE: [file,...]}`.
-    Dựng đúng 1 lần/thư mục trong 1 lần chạy rồi tái dùng cho mọi offset (`cache` truyền từ
-    `doi_chieu_hub_core`, sống theo lần gọi — KHÔNG dùng biến module-level để tránh rò rỉ qua
-    nhiều job của tiến trình server chạy dài)."""
-    if thu_muc in cache:
-        return cache[thu_muc]
-    all_files = sorted(thu_muc.glob(pattern))
+    """Đọc TRDATE thật của MỌI file trong `files` (đã dò sẵn ở tầng gọi — KHÔNG tự glob lại 1 thư
+    mục ở đây, vì `files` có thể đến từ NHIỀU thư mục ứng viên khác nhau gộp lại, xem
+    `_tim_file_core_hoac_csv`), trả `{TRDATE: [file,...]}`. Dựng đúng 1 lần/tổ hợp file trong 1
+    lần chạy rồi tái dùng cho mọi offset (`cache` truyền từ `doi_chieu_hub_core`, sống theo lần
+    gọi — KHÔNG dùng biến module-level để tránh rò rỉ qua nhiều job của tiến trình server chạy
+    dài)."""
+    key = tuple(files)
+    if key in cache:
+        return cache[key]
     theo_ngay: dict[str, list[Path]] = {}
-    for p in all_files:
+    for p in files:
         d = _doc_trdate_1_file(p, log)
         if d is not None:
             theo_ngay.setdefault(d, []).append(p)
-    if len(all_files) > 1:
-        log(f"[CORE] {len(all_files)} file '{pattern}' trong {thu_muc} — đã đọc TRDATE thật để tự "
-            f"gán đúng ngày (KHÔNG dựa tên file): "
+    if len(files) > 1:
+        log(f"[CORE] {len(files)} file CSV core đã phân loại — đã đọc TRDATE thật để tự gán đúng "
+            f"ngày (KHÔNG dựa tên file/thư mục): "
             + ", ".join(f"{d}={[x.name for x in fs]}" for d, fs in sorted(theo_ngay.items())))
-    cache[thu_muc] = theo_ngay
+    cache[key] = theo_ngay
     return theo_ngay
 
 
 def _tim_file_core_hoac_csv(
     goc_dir: Path, ngay: str, ma_nh: str, off: int, log: Callable[[str], None] = lambda msg: None,
-    cache_ngay_csv: dict[Path, dict[str, list[Path]]] | None = None,
+    cache_ngay_csv: dict[tuple[Path, ...], dict[str, list[Path]]] | None = None,
+    ngay_goc: str | None = None,
 ) -> tuple[str, Path] | None:
     """Ưu tiên `{ma_nh}_DEN*.csv` (đã phân loại sẵn, đọc thẳng — không giải mã) — khớp glob,
     KHÔNG đòi tên chính xác `{ma_nh}_DEN.csv`: dữ liệu thật xuất thủ công (ngoài module Phân
@@ -129,15 +145,33 @@ def _tim_file_core_hoac_csv(
     ZIP đúng ngày đó, hoặc 1 CSV khác đại diện đúng ngày đó (đọc được qua TRDATE thật). Không thấy
     CSV nào khớp ngày đang hỏi thì mới tới `GL02_{ngay}_1000.zip` (cần giải mã AES + phân loại).
     Trả `(loai, path)`, `loai` là `"csv"`/`"zip"`, hoặc `None` nếu không thấy/không xác định được
-    cái nào."""
+    cái nào.
+
+    `ngay_goc`: ngày T gốc của cả lần chạy (bằng `ngay` khi `off == 0`, khác khi `off != 0`) —
+    dùng để dò thư mục làm việc chứa CSV, THÊM VÀO chỗ dò theo `ngay` của offset đang xét, KHÔNG
+    thay thế. Lý do (phát hiện qua phản biện trước PR, 2026-09-08): `tim_file_glob()` chọn thư mục
+    ứng viên theo NGÀY ĐANG HỎI qua `thu_muc_ngay_ung_vien()`; người dùng thường gom mọi CSV của cả
+    phiên (nhiều ngày khác nhau) vào 1 thư mục ĐẶT TÊN THEO NGÀY T — nếu chỉ dò theo ngày riêng của
+    offset≠0, thư mục `D.M` của ngày đó không tồn tại, `tim_file_glob` rơi thẳng về `goc_dir`
+    (KHÔNG đệ quy vào thư mục con `D.M` của ngày T) → không thấy file dù nó đang nằm ngay đó. Dò cả
+    2 ngày (gộp, khử trùng) vừa chịu được cách tổ chức "gom vào thư mục ngày T" vừa chịu được cách
+    tổ chức "mỗi ngày 1 thư mục riêng" (bên nào tồn tại thì dùng)."""
     pattern = f"{ma_nh}_DEN*.csv"
-    matches = tim_file_glob(goc_dir, ngay, pattern)
+    cac_ngay_do = {ngay} if ngay_goc is None else {ngay, ngay_goc}
+    matches: list[Path] = []
+    da_thay: set[Path] = set()
+    for nv in cac_ngay_do:
+        for p in tim_file_glob(goc_dir, nv, pattern):
+            if p not in da_thay:
+                da_thay.add(p)
+                matches.append(p)
+    matches.sort()
     if len(matches) == 1 and off == 0:
         return ("csv", matches[0])
 
     if matches:
         cache = cache_ngay_csv if cache_ngay_csv is not None else {}
-        theo_ngay = _theo_ngay_cac_file_csv(matches[0].parent, pattern, cache, log)
+        theo_ngay = _theo_ngay_cac_file_csv(matches, cache, log)
         cac_file = theo_ngay.get(ngay, [])
         if len(cac_file) == 1:
             return ("csv", cac_file[0])
@@ -146,6 +180,11 @@ def _tim_file_core_hoac_csv(
                 f"({', '.join(f.name for f in cac_file)}) — KHÔNG tự chọn, cần dọn bớt file trùng.")
 
     p = tim_file(goc_dir, ngay, f"GL02_{ngay}_1000.zip")
+    if p is None and ngay_goc is not None and ngay_goc != ngay:
+        # Cùng lý do CSV ở trên (2026-09-08): GL02 zip của offset≠0 có thể bị gom vào thư mục đặt
+        # tên theo ngày T thay vì thư mục riêng đúng ngày của nó — thử thêm thư mục ứng viên của
+        # `ngay_goc`, tên file vẫn phải đúng `GL02_{ngay}_1000.zip` (tên tự mang ngày, không đổi).
+        p = tim_file(goc_dir, ngay_goc, f"GL02_{ngay}_1000.zip")
     if p is not None:
         return ("zip", p)
     return None
@@ -232,9 +271,18 @@ def doi_chieu_hub_core(
             continue
         p = _tim_file_hub(
             goc_dir, cong_ngay(ngay, off), ma_nh, lambda m, nhan=nhan: log(f"[HUB {nhan}] {m}"),
+            ngay_goc=ngay,
         )
         if p is None:
-            log(f"[HUB {nhan}] không tìm thấy file" + (" — BẮT BUỘC" if off in (0, -1) else " (bỏ qua)"))
+            if off == 0:
+                nhac = " — BẮT BUỘC"
+            elif off == -1:
+                nhac = (" — BẮT BUỘC nhưng KHÔNG chặn: giao dịch CORE hôm nay đáng lẽ khớp HUB "
+                        "hôm qua sẽ bị xếp NHẦM thành 'CORE THỪA' thay vì 'hub T-1 core T'. Cần "
+                        "nạp thêm HUB zip ngày T-1.")
+            else:
+                nhac = " (bỏ qua)"
+            log(f"[HUB {nhan}] không tìm thấy file" + nhac)
             continue
         log(f"[HUB {nhan}] đang đọc {p.name}...")
         with do_thoi_gian(log, f"đọc+parse HUB {nhan}"):
@@ -245,14 +293,14 @@ def doi_chieu_hub_core(
 
     core_theo_offset: dict[int, pd.DataFrame] = {}
     # Cache TRDATE→file (2026-09-08) dựng 1 lần, dùng lại cho cả 4 offset — tránh mở đọc lại cùng
-    # 1 thư mục CSV 4 lần (xem `_theo_ngay_cac_file_csv`).
-    cache_ngay_csv: dict[Path, dict[str, list[Path]]] = {}
+    # tổ hợp file CSV 4 lần (xem `_theo_ngay_cac_file_csv`).
+    cache_ngay_csv: dict[tuple[Path, ...], dict[str, list[Path]]] = {}
     for off in (0, 1, 2, 3):
         nhan = nhan_offset(off)
         found = _tim_file_core_hoac_csv(
             goc_dir, cong_ngay(ngay, off), ma_nh, off,
             lambda m, nhan=nhan: log(f"[CORE {nhan}] {m}"),
-            cache_ngay_csv=cache_ngay_csv,
+            cache_ngay_csv=cache_ngay_csv, ngay_goc=ngay,
         )
         if found is None:
             # 2026-09-03: T+1 gắn nhãn BẮT BUỘC (config.py — tài liệu không ghi "nếu có") nhưng
