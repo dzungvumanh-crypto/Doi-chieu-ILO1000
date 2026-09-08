@@ -90,6 +90,48 @@ def test_hai_nguoi_khac_nhau_moi_nguoi_1_bang_rieng():
     db.close()
 
 
+def test_trung_ho_ten_khong_lam_vo_gom_nhom_tang_1():
+    """Bug thật (review 07/09/2026): get_reconciliation_days() từng sắp CHỈ
+    theo (ngày, tên hiển thị) — 2 người khác `created_by` nhưng TRÙNG
+    full_name có cùng khoá sắp xếp, Python sort không đảm bảo gom liền
+    nhau khi khoá bằng nhau nhưng xen giữa còn dòng của người thứ 3 (id nằm
+    giữa 2 id kia). Frontend gom Tầng 1 bằng cách duyệt tuần tự các dòng
+    LIỀN NHAU cùng `created_by` — vỡ thành nhiều nhóm giả cho CÙNG 1 người
+    nếu thứ tự bị xen. Không lỗi, không log, chỉ hiển thị sai (vỡ Tầng 1).
+    Sửa: thêm created_by vào khoá sắp xếp."""
+    db = _db()
+    db.executescript(
+        "INSERT INTO user_tttt (id, username, full_name) VALUES "
+        "(1, 'nguyenvana1', 'Nguyen Van A'), "
+        "(2, 'tranvanb', 'Tran Van B'), "
+        "(3, 'nguyenvana2', 'Nguyen Van A')"  # id=3 TRÙNG full_name với id=1
+    )
+    ngay = "20/08/2026"
+    # Chèn xen kẽ: bảng của người 1 (A), rồi người 2 (B), rồi LẠI người 1 (A).
+    id_1a = svc.session_save(db, ngay, 1, {"lap_bang": "A-bang1"}, "draft")
+    id_2 = svc.session_save(db, ngay, 2, {"lap_bang": "B-bang1"}, "draft")
+    id_1b = svc.session_save(db, ngay, 1, {"lap_bang": "A-bang2"}, "draft")
+
+    days = svc.get_reconciliation_days(db)
+    assert len(days) == 3
+
+    # Gom Tầng 1 giống hệt cách frontend làm: duyệt tuần tự, gộp các dòng
+    # LIỀN NHAU cùng (ngay, created_by) — phải ra ĐÚNG 2 nhóm (người 1 với
+    # 2 bảng, người 2 với 1 bảng), KHÔNG phải 3 nhóm.
+    groups = []
+    for d in days:
+        if groups and groups[-1][0] == d["ngay"] and groups[-1][1] == d["created_by"]:
+            groups[-1][2].append(d["session_id"])
+        else:
+            groups.append((d["ngay"], d["created_by"], [d["session_id"]]))
+    assert len(groups) == 2, f"Vỡ Tầng 1 do trùng họ tên: {groups}"
+    by_owner = {created_by: session_ids for _, created_by, session_ids in groups}
+    assert set(by_owner[1]) == {id_1a, id_1b}
+    assert set(by_owner[2]) == {id_2}
+
+    db.close()
+
+
 def test_khong_truyen_session_id_luon_tao_bang_moi_doc_lap():
     """Trọng tâm của thay đổi 07/09/2026: 1 người lưu bảng tạm ngày X, KHÔNG
     bấm "Tải" tiếp tục bảng cũ (nghĩa là KHÔNG truyền session_id) mà gõ lại
@@ -227,6 +269,39 @@ def test_lich_su_moi_bang_tach_rieng_khong_lan_nhau():
     assert len(hist_1) == 1  # 2 lần lưu liên tiếp CÙNG bảng gộp thành 1 dòng
     assert len(hist_2) == 1
     assert hist_1[0]["staff_id"] == 1 and hist_2[0]["staff_id"] == 2
+
+    db.close()
+
+
+def test_get_reconciliation_days_tra_dung_last_history_id():
+    """Góp ý review 07/09/2026: frontend gộp dòng Tầng 2 khi bảng chỉ có 1
+    lần lưu (dùng thẳng field này để tránh gọi thêm GET .../history — N+1
+    request khi bung Tầng 1 của người có nhiều bảng). `last_history_id`
+    phải luôn khớp đúng dòng lịch sử MỚI NHẤT của đúng bảng đó."""
+    db = _db()
+    db.executescript(
+        "INSERT INTO user_tttt (id, username, full_name) VALUES "
+        "(1, 'a', 'Nguyen A'), (2, 'b', 'Nguyen B')"
+    )
+    ngay = "20/08/2026"
+    id_1 = svc.session_save(db, ngay, 1, {"napas_m": 1, "napas_t": 1}, "draft")
+    hist_1_only = svc.get_reconciliation_history(db, id_1)
+    assert len(hist_1_only) == 1
+
+    days = svc.get_reconciliation_days(db)
+    row = next(d for d in days if d["session_id"] == id_1)
+    assert row["so_lan_luu"] == 1
+    assert row["last_history_id"] == hist_1_only[0]["id"]
+
+    # Người khác góp Napas vào bảng này (session_id=id_1) — sinh thêm 1 dòng
+    # lịch sử MỚI (khác staff_id, xem session_save()) — last_history_id phải
+    # trỏ đúng dòng MỚI NHẤT, không phải dòng đầu tiên.
+    svc.session_save(db, ngay, 2, {"napas_m": 5, "napas_t": 5}, "draft", session_id=id_1)
+    hist_after = svc.get_reconciliation_history(db, id_1)
+    assert len(hist_after) == 2
+    row_after = next(d for d in svc.get_reconciliation_days(db) if d["session_id"] == id_1)
+    assert row_after["so_lan_luu"] == 2
+    assert row_after["last_history_id"] == hist_after[-1]["id"]
 
     db.close()
 

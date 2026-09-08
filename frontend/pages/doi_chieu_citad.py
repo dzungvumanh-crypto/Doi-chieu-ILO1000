@@ -1188,20 +1188,26 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                                 ui.label(f"{int(m)}/{y}").classes("text-xs font-bold text-emerald-950")
                         _person_row(ngay, bang_list, is_last=(gi == len(groups) - 1))
 
-        async def _session_row(ngay: str, r: dict, idx: int, is_last: bool):
+        def _session_row(ngay: str, r: dict, idx: int, is_last: bool):
             """TẦNG 2 — 1 bảng (`session_id`) ĐỘC LẬP của người ở dòng TẦNG 1
             cha (cùng ngày). Bảng chỉ có ĐÚNG 1 lần lưu thì GỘP LUÔN thành 1
             dòng duy nhất kèm sẵn nút Tải/Ai đã sửa — không bắt bấm thêm 1
             lần mở rộng chỉ để thấy lại đúng thông tin đã có ở dòng tóm tắt
             (phản hồi thực tế 07/09/2026: 2 dòng đó trùng lặp vô ích). Bảng
             có TỪ 2 lần lưu trở lên mới cần bấm để bung TẦNG 3 (danh sách
-            thật sự có ý nghĩa để xem — tái dùng _render_history_entries)."""
+            thật sự có ý nghĩa để xem — tái dùng _render_history_entries).
+
+            Dòng gộp dùng thẳng `r["last_history_id"]` (MAX(h.id) tính sẵn ở
+            get_reconciliation_days(), review 07/09/2026) — KHÔNG gọi thêm
+            GET .../history nữa: trước đây mỗi bảng 1-lần-lưu bắn 1 request
+            RIÊNG khi bung Tầng 1, người có N bảng/ngày phải chờ N lượt
+            đi-về tuần tự chỉ để lấy đúng 1 con số mỗi lần (N+1 request)."""
             session_id = r["session_id"]
 
             def _draw_expandable():
                 # Dạng bấm-mở-rộng gốc (Tầng 2 tóm tắt -> bấm bung Tầng 3) —
                 # dùng cho bảng có TỪ 2 lần lưu trở lên, VÀ dùng làm phương án
-                # lùi về khi tải trước 1 lần lưu duy nhất bị lỗi (xem bên dưới)
+                # lùi về khi `last_history_id` thiếu bất thường (xem bên dưới)
                 # để không mất hẳn chức năng Tải/Ai-đã-sửa, người dùng bấm lại
                 # được để thử tải lần nữa thay vì thấy 1 dòng cụt không rõ lý do.
                 expanded = {"open": False}
@@ -1247,28 +1253,18 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                 _draw_expandable()
                 return
 
-            try:
-                entries = await asyncio.to_thread(
-                    api.get, f"/api/doi-chieu-citad/session-by-id/{session_id}/history"
-                )
-            except Exception as e:
-                if _handle_api_error(e):
-                    return
-                ui.notify(f"Lỗi tải bảng {idx}: {e} — bấm dòng để thử lại", type="negative")
-                _draw_expandable()  # lùi về dạng bấm-thử-lại, KHÔNG vẽ dòng cụt mất nút
-                return
-
-            if not entries:
-                # so_lan_luu nói có 1 lần lưu nhưng tải về lại rỗng — dữ liệu
-                # không khớp (không nên xảy ra, nhưng nếu có thì KHÔNG được che
-                # giấu bằng cách vẽ dòng thiếu nút im lặng) — lùi về dạng bấm
-                # thử lại để người dùng còn thấy có gì đó bất thường và tự bấm
+            hid = r.get("last_history_id")
+            if hid is None:
+                # so_lan_luu nói có 1 lần lưu nhưng last_history_id lại rỗng —
+                # dữ liệu không khớp (không nên xảy ra, cả 2 field cùng lọc
+                # theo session_id trong 1 câu SQL, nhưng nếu có thì KHÔNG
+                # được che giấu bằng cách vẽ dòng thiếu nút im lặng) — lùi về
+                # dạng bấm-mở-rộng để người dùng còn thấy bất thường và tự
                 # kiểm tra được, thay vì tưởng bảng này không có nút nào.
                 ui.notify(f"Bảng {idx}: dữ liệu lịch sử không khớp — bấm dòng để tải lại", type="warning")
                 _draw_expandable()
                 return
 
-            hid = entries[0]["id"]
             with ui.row().classes(
                 "w-full items-center gap-0 px-3 py-1.5"
                 + ("" if is_last else " border-b border-gray-100")
@@ -1281,6 +1277,11 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                         ui.badge("Chính thức").props('color="positive"')
                     else:
                         ui.badge("Tạm").props('color="grey-7"')
+                # "1" cố định (so_lan_luu == 1 ở nhánh này) — giữ ĐÚNG 4 cột
+                # như _draw_expandable() (w-28/w-44/w-24/flex-1), không thì 2
+                # kiểu dòng Tầng 2 lệch cột "Cập nhật" khi đứng cạnh nhau
+                # (thẩm mỹ, review 07/09/2026).
+                ui.label("1").classes("w-24 text-center border-r border-gray-200 pr-2 mr-2")
                 ui.label(r["updated_at"] or "").classes("flex-1 text-xs text-gray-400")
                 ui.button(
                     icon="group", on_click=lambda _, h=hid: _show_edit_log(h)
@@ -1314,7 +1315,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     ui.icon("expand_more").classes("text-gray-500")
                 detail_area = ui.column().classes("w-full pl-4")
 
-                async def toggle_person_detail():
+                def toggle_person_detail():
                     if expanded["open"]:
                         detail_area.clear()
                         expanded["open"] = False
@@ -1322,7 +1323,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     expanded["open"] = True
                     with detail_area:
                         for bi, b in enumerate(bang_list, start=1):
-                            await _session_row(ngay, b, bi, is_last=(bi == len(bang_list)))
+                            _session_row(ngay, b, bi, is_last=(bi == len(bang_list)))
 
                 row.on("click", toggle_person_detail)
 
@@ -1738,6 +1739,37 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                         "border-2 border-red-800 shadow-sm p-4"
                     ):
                         ngay_input = _date_picker_input("Ngày")
+
+                        def _on_ngay_changed(_e=None):
+                            # Đổi ngày (gõ tay hoặc chọn lại lịch) khi đang
+                            # tải/sửa 1 bảng (session_id != None) nghĩa là
+                            # người dùng muốn chấm SANG NGÀY KHÁC — tách khỏi
+                            # bảng cũ NGAY, để lần Lưu tiếp theo tự tạo bảng
+                            # MỚI đúng ngày mới, thay vì ăn lỗi "Ngày không
+                            # khớp với bảng đang lưu tiếp" mà không biết phải
+                            # làm gì tiếp (hành động đổi ngày của họ hoàn
+                            # toàn hợp lệ — bug phát hiện khi review 07/09/2026).
+                            #
+                            # AN TOÀN với apply_session_data() gán lại
+                            # ngay_input.value khi "Tải" 1 bảng: NiceGUI gọi
+                            # on_value_change ĐỒNG BỘ ngay khi gán .value dù
+                            # gán từ code hay từ người dùng (xem
+                            # ValueElement._handle_value_change) — nhưng cả
+                            # _load_session() lẫn _load_history_entry() đều
+                            # gọi _apply_view_mode(..., session_id, ...) NGAY
+                            # SAU apply_session_data(), nên giá trị None ở
+                            # đây bị ghi đè lại đúng session_id thật ngay sau
+                            # đó — chỉ "thắng" khi KHÔNG có bước tải nào theo
+                            # sau (đúng lúc người dùng tự đổi ngày).
+                            if view_state["session_id"] is not None:
+                                view_state["session_id"] = None
+                                ui.notify(
+                                    "Đã đổi sang ngày khác — lưu tiếp theo sẽ tạo bảng MỚI, "
+                                    "không ghi đè bảng vừa tải",
+                                    type="info",
+                                )
+
+                        ngay_input.on_value_change(_on_ngay_changed)
                         lap_bang_input = ui.select(
                             [], label="Lập bảng", with_input=True, new_value_mode="add-unique"
                         ).props("dense outlined").classes("w-48")

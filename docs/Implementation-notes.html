@@ -14497,7 +14497,96 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
-  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-06</footer>
+  <!-- 126 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">126</span>
+      <span class="card-title">Đối chiếu CITAD — PR#80: 1 người nhiều bảng độc lập/ngày, Lịch sử 3 tầng + 3 lỗi tự phát hiện khi review</span>
+      <span class="badge badge-done">Đã sửa, chờ Người 1 duyệt migrations.py</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-blue">Yêu cầu</span> PR#76 (đã merge) chốt "mỗi người 1 bảng/ngày" — chưa đủ</div>
+      <p>Phòng Thanh toán giải thích lại qua ảnh đánh số 3 tầng: 1 người có thể tự tạo NHIỀU bảng
+        độc lập trong CÙNG 1 ngày — mỗi lần họ gõ lại ngày rồi Lưu mà KHÔNG bấm "Tải" tiếp tục bảng
+        cũ (kể cả sau khi 1 bảng đã "Lưu bản cuối" rồi chấm lại) phải sinh 1 bảng riêng, không đè
+        lên bảng trước. Đảo ngược đúng điều PR#76 vừa cố định — làm PR riêng (#80), không sửa thêm
+        vào #76 vì đã merge.</p>
+      <p>Migration rebuild lần 3 bỏ <code>UNIQUE(ngay, created_by)</code>, chỉ còn khoá <code>id</code>.
+        <code>session_save(session_id=None)</code> LUÔN tạo bảng mới; có <code>session_id</code> là
+        lưu tiếp đúng bảng đó. Route đổi từ <code>/session/{ngay:path}...</code> sang
+        <code>/session-by-id/{id}...</code>. Tab Lịch sử dựng lại 3 tầng: người lập bảng → từng bảng
+        độc lập của người đó → từng lần lưu.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi A (review, độ tin cậy cao)</span> Gom Tầng 1 vỡ khi 2 người trùng họ tên</div>
+      <p><code>get_reconciliation_days()</code> sắp theo <code>(ngày, TÊN hiển thị)</code>, frontend
+        gom nhóm Tầng 1 theo <code>created_by</code> (id) bằng cách duyệt tuần tự các dòng LIỀN
+        NHAU cùng id — 2 người khác id nhưng trùng <code>full_name</code> có cùng khoá sắp xếp,
+        Python sort không đảm bảo gom liền nhau nếu có dòng của người thứ 3 xen giữa. Kết quả: 1
+        người hiện thành 2+ dòng Tầng 1 riêng trong cùng 1 ngày. <b>Không lỗi, không log, chỉ hiển
+        thị sai</b> — trùng họ tên trong 1 phòng không hiếm. Sửa 1 dòng: đưa <code>created_by</code>
+        vào khoá sắp xếp (<code>parsed.sort(key=lambda t: (t[0], t[1], t[2]["created_by"] or 0), ...)</code>).
+        Test mới <code>test_trung_ho_ten_khong_lam_vo_gom_nhom_tang_1</code> dựng đúng kịch bản 3
+        người, id xen kẽ, 2 người trùng tên — xác nhận vẫn gom đúng 2 nhóm.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi B (review, độ tin cậy cao)</span> Đổi ô ngày sau khi "Tải" ra lỗi 400 không có lối ra</div>
+      <p>Ở <code>mode='edit'</code> ô ngày mở khoá nhưng <code>view_state["session_id"]</code> vẫn
+        trỏ bảng vừa tải. Bản đầu của PR chỉ đổi lỗi 500 chung chung thành 400 rõ ràng
+        ("Ngày không khớp với bảng đang lưu tiếp") — đúng nhưng chưa đủ: đổi ngày là hành động HỢP
+        LỆ, không phải lỗi người dùng cần sửa. Fix thật: bắt <code>on_value_change</code> của
+        <code>ngay_input</code>, tự tách khỏi bảng cũ (<code>session_id = None</code>) ngay khi đổi
+        ngày, kèm thông báo "lưu tiếp theo sẽ tạo bảng MỚI".</p>
+      <div class="note">Đã kiểm chứng qua source NiceGUI (<code>ValueElement._handle_value_change</code>):
+        gán <code>.value = x</code> từ CODE hay từ NGƯỜI DÙNG đều gọi <code>on_value_change</code>
+        ĐỒNG BỘ như nhau — không có cách phân biệt nguồn gốc ở tầng handler. An toàn vì
+        <code>_load_session()</code>/<code>_load_history_entry()</code> đều gọi
+        <code>_apply_view_mode(..., session_id, ...)</code> NGAY SAU <code>apply_session_data()</code>
+        (hàm gán <code>ngay_input.value</code>) — giá trị <code>None</code> handler vừa gán bị ghi đè
+        lại đúng <code>session_id</code> thật ngay sau đó trong CÙNG lượt "Tải". Chỉ "thắng" khi
+        không có bước tải nào theo sau — đúng lúc người dùng tự đổi ngày.</div>
+
+      <div class="label"><span class="pill pill-amber">Thiết kế — hỏi lại Phòng Thanh toán, chưa quyết</span></div>
+      <table>
+        <tr><th>Câu hỏi</th><th>Vì sao chưa tự quyết</th></tr>
+        <tr><td><b>C.</b> Không hề báo "ngày này bạn đã có bảng" ở tab chính</td>
+            <td>Hệ quả trực tiếp + đúng ý của model mới (không Tải → luôn bảng mới). Nhưng F5 giữa
+                chừng, hoặc mở lại hôm sau, gõ đúng ngày cũ + nạp + Lưu → đẻ bảng trùng, im lặng.
+                Đường lưu tiếp duy nhất nằm sâu 3 lớp (Lịch sử → người → bảng → Tải).</td></tr>
+        <tr><td><b>D.</b> Sổ trực dễ báo XANH nhầm hơn hẳn</td>
+            <td><code>get_reconciliation_status()</code> không đổi code, nhưng <code>any(matched)</code>
+                giờ có thể đúng vì CHÍNH người đó có 2 bảng final cùng ngày (1 chốt nhầm khớp, 1 chấm
+                lại lệch) — trước PR#80 chỉ 1 bảng final/người/ngày nên "bất kỳ bảng nào khớp" khó
+                lẫn với ý "người đó tự sửa lại". Cần xác nhận đây vẫn đúng ý nghiệp vụ.</td></tr>
+      </table>
+
+      <div class="label"><span class="pill pill-green">Góp ý đã áp dụng</span> N+1 request khi bung Tầng 1 + lệch cột</div>
+      <p>Mỗi bảng 1-lần-lưu từng gọi RIÊNG 1 <code>GET .../history</code> khi bung Tầng 1 — người có
+        N bảng/ngày chờ N lượt đi-về tuần tự chỉ để lấy 1 con số. Thêm
+        <code>MAX(h.id) AS last_history_id</code> vào đúng câu SQL đã có sẵn
+        <code>COUNT(*) AS so_lan_luu</code> ở <code>get_reconciliation_days()</code> — dòng gộp
+        1-lần-lưu dùng thẳng field này, không gọi API nào nữa (<code>_session_row()</code> đổi lại
+        thành hàm đồng bộ, bỏ hẳn <code>async</code>/<code>await</code> cho nhánh này). Kèm sửa lệch
+        cột: dòng gộp thiếu đúng 1 ô <code>w-24</code> so với dạng bấm-mở-rộng, làm cột "Cập nhật"
+        so le khi 1 người có cả 2 kiểu bảng — thêm ô "1" cố định cho khớp 4 cột.</p>
+
+      <div class="label"><span class="pill pill-gray">Chưa làm, biết mà để lại</span></div>
+      <p><code>_create_tables()</code> vẫn tạo <code>doi_chieu_citad_sessions</code> ở hình dạng CŨ
+        (<code>ngay TEXT PRIMARY KEY</code>) — DB mới toanh phải chạy đủ 3 lượt rebuild mới ra hình
+        dạng cuối. Không sai (đã test <code>init_db.py</code> 2 lần liên tiếp sạch), chỉ là chuỗi
+        rebuild đang dài dần qua nhiều PR; để nguyên trong đợt này, cân nhắc dồn về 1 hình dạng cuối
+        nếu còn sửa tiếp bảng này. <code>DELETE /session-by-id/{id}</code> không nơi nào ở frontend
+        gọi — dead route có từ PR#76, không phải lỗi của PR#80.</p>
+
+      <p>Test: <code>tests/test_doi_chieu_citad_multi_session.py</code> viết lại toàn bộ cho API
+        <code>session_id</code>-only (13 test, gồm 2 test mới cho lỗi A và cho
+        <code>last_history_id</code>) + 45/45 test CITAD liên quan pass, không regression. Migration
+        rebuild lần 3 test riêng trên DB mô phỏng schema PR#76 (có UNIQUE) — bỏ đúng ràng buộc, giữ
+        nguyên <code>id</code> cũ, không mất dòng nào.</p>
+
+    </div>
+  </div>
+
+  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-08</footer>
 </div>
 </body>
 </html>

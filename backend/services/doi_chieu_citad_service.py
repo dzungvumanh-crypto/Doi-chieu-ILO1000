@@ -35,10 +35,10 @@
   bảng của người đó → từng lần lưu trong bảng đó.
 - **"Lưu bản tạm" / "Lưu bản cuối" (`status`, thêm 2026-08-20)** — xem
   `session_save()`. Bản tạm cho phép NGƯỜI KHÁC người lập bảng (`created_by`)
-  vào nạp riêng Napas/PSS-MDP qua Extension (tham số `target_session_id` —
-  trỏ đúng BẢNG CỤ THỂ của người đó, không phải bảng của người gọi — 1 người
-  giờ có thể có nhiều bảng nên phải chỉ đích danh `session_id`, không đủ nếu
-  chỉ biết `created_by`), cứu tình huống 1 người chấm 5 Cổng CITAD/PaymentHub
+  vào nạp riêng Napas/PSS-MDP qua Extension (tham số `session_id` — trỏ đúng
+  BẢNG CỤ THỂ của người đó, không phải bảng của người gọi — 1 người giờ có
+  thể có nhiều bảng nên phải chỉ đích danh `session_id`, không đủ nếu chỉ
+  biết `created_by`), cứu tình huống 1 người chấm 5 Cổng CITAD/PaymentHub
   nhưng Napas/PSS-MDP phải người khác quét (trang CITAD đó chỉ có ở Cổng 1).
   Bản cuối CHỐT — không ai sửa được nữa kể cả người lập bảng, chỉ Admin mở
   khoá lại qua `session_admin_unlock()`. `created_by` KHÁC `updated_by`:
@@ -514,11 +514,18 @@ def get_reconciliation_days(
     đè" mỗi khi người KHÁC người lập bảng chỉ nạp thêm Napas/PSS-MDP vào
     bảng tạm (xem _NAPAS_ONLY_FIELDS), gây hiểu lầm đổi cả người phụ trách.
     Ai đã từng sửa gì lúc nào xem qua icon "Ai đã sửa bảng tạm này"
-    (get_history_edits())."""
+    (get_history_edits()).
+
+    `last_history_id` (MAX(h.id), review 07/09/2026) — bảng chỉ có ĐÚNG 1
+    lần lưu thì đó CHÍNH LÀ id của lần lưu đó, frontend dùng thẳng cho nút
+    Tải/Ai-đã-sửa mà KHÔNG cần gọi thêm GET .../history riêng (trước đây
+    mỗi bảng 1-lần-lưu lại bắn 1 request tuần tự — người có N bảng/ngày
+    phải chờ N lượt đi-về chỉ để lấy đúng 1 con số mỗi lần)."""
     rows = db.execute(
         """SELECT s.id AS session_id, s.ngay, s.updated_at, s.status, s.created_by,
                   u.username AS created_by_username, u.full_name AS created_by_name,
-                  (SELECT COUNT(*) FROM doi_chieu_citad_history h WHERE h.session_id = s.id) AS so_lan_luu
+                  (SELECT COUNT(*) FROM doi_chieu_citad_history h WHERE h.session_id = s.id) AS so_lan_luu,
+                  (SELECT MAX(h.id) FROM doi_chieu_citad_history h WHERE h.session_id = s.id) AS last_history_id
            FROM doi_chieu_citad_sessions s
            LEFT JOIN user_tttt u ON u.id = s.created_by"""
     ).fetchall()
@@ -549,11 +556,15 @@ def get_reconciliation_days(
             "status": r["status"],
             "updated_at": str(r["updated_at"]) if r["updated_at"] else None,
             "so_lan_luu": r["so_lan_luu"],
+            "last_history_id": r["last_history_id"],
         }))
-    # Sắp theo ngày (mới nhất trước), rồi theo tên người lập bảng — để các
-    # bảng CÙNG 1 người CÙNG 1 ngày đứng liền nhau, frontend gom Tầng 1/2 dễ
-    # dàng bằng cách duyệt tuần tự, không cần tự sort lại.
-    parsed.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    # Sắp theo ngày (mới nhất trước), rồi theo `created_by` — KHÔNG chỉ theo
+    # tên hiển thị (bug thật, phát hiện khi review: 2 người TRÙNG HỌ TÊN
+    # nhưng khác id sẽ có cùng khoá sắp xếp, xen kẽ bảng của nhau — frontend
+    # gom Tầng 1 theo (ngay, created_by) nên vỡ thành nhiều nhóm giả cho
+    # cùng 1 người, không lỗi/không log, chỉ hiển thị sai). Vẫn giữ tên làm
+    # khoá phụ để hiển thị đẹp (gần đúng theo A-Z) khi khác `created_by`.
+    parsed.sort(key=lambda t: (t[0], t[1], t[2]["created_by"] or 0), reverse=True)
     return [item for _, _, item in parsed]
 
 
