@@ -596,11 +596,12 @@ Truy cập:
 - Ngoài 5 cổng còn 2 kênh cộng vào tổng CITAD: **Napas** và **PSS - MDP** (chỉ 2 ô *IH Đến —
   Món/Tiền*). Kênh **Ebanking** đã ngừng: bỏ khỏi màn hình 14/08/2026, bỏ nốt khỏi file Excel
   20/08/2026 — số liệu các ngày đã chấm vẫn nằm nguyên trong DB, chỉ không hiện/in ra nữa
-- **Mỗi người một bảng riêng cho cùng một ngày** (từ 05/09/2026 — `doi_chieu_citad_sessions`
-  khoá theo `(ngay, created_by)`). Trước đây một ngày chỉ một bảng chung cả phòng nên người thứ
-  hai chấm cùng ngày bị chặn, hoặc phải sửa đè lên bảng người thứ nhất. Nay ai cũng tự lập được
-  bảng của mình; mỗi lần bấm Lưu ghi thêm 1 dòng vào `doi_chieu_citad_history` gắn đúng bảng đó
-  để xem/tải lại từng bản cũ
+- Mỗi bảng khoá theo `id` riêng (`doi_chieu_citad_sessions`, từ 07/09/2026) — **1 người có thể
+  có nhiều bảng độc lập trong cùng 1 ngày**: bấm "Tải" một bảng đã lưu để sửa/lưu tiếp tại chỗ,
+  còn gõ ngày rồi Lưu mà KHÔNG bấm "Tải" thì luôn sinh **1 bảng mới hoàn toàn tách biệt** (kể cả
+  sau khi 1 bảng cũ đã "Lưu bảng cuối" rồi chấm lại). "Lưu bảng tạm" cho phép người khác vào góp
+  riêng Napas/PSS-MDP; mỗi lần Lưu ghi thêm 1 dòng vào `doi_chieu_citad_history` để xem/tải lại
+  từng bản cũ. Đổi ô ngày sau khi đã "Tải" 1 bảng sẽ tự tách khỏi bảng đó (không ghi đè nhầm)
 - Vào bảng **tạm** của người khác (qua tab *Lịch sử*) vẫn chỉ bổ sung được Napas/PSS-MDP như cũ,
   không sửa được ô nào khác và không chốt bản cuối hộ được
 - **Sổ trực cuối ngày** coi một ngày là *đã đối chiếu, đã khớp* nếu **bất kỳ** bảng nào của ngày
@@ -624,10 +625,11 @@ Truy cập:
   Tên không nằm trong danh sách (người đã nghỉ / chuyển phòng / gõ tay kiểu khác) vẫn được giữ
   nguyên khi mở lại bảng cũ — hai lỗi mất tên và **Xuất Excel 422** của 23/08/2026 đã vá
   25/08/2026, xem `docs/Implementation-notes.html` mục Z8
-- Tab **Lịch sử** (từ 25/08/2026): mỗi người bấm *Lưu* là **một dòng riêng** mang đúng tên người
-  đó, không còn gộp các lần lưu tạm của nhiều người vào một dòng mang tên người lập bảng.
-  ⚠️ Ô lọc **Tên người chấm** và cột *User chấm đối chiếu* vẫn chỉ tìm theo **người lập bảng** —
-  tìm tên người chỉ bổ sung Napas/PSS-MDP sẽ không ra ngày nào, phải bung dòng ra mới thấy
+- Tab **Lịch sử** (từ 07/09/2026, chia 3 tầng): **người lập bảng** (nhóm theo ngày + người) →
+  **từng bảng độc lập** của người đó → **từng lần lưu** trong bảng đó (mỗi người bấm *Lưu* là
+  một dòng riêng mang đúng tên, không gộp nhiều người vào một dòng mang tên người lập bảng). Có
+  dòng ngăn cách khi sang tháng khác. ⚠️ Ô lọc **Tên người chấm** vẫn chỉ tìm theo **người lập
+  bảng** — tìm tên người chỉ bổ sung Napas/PSS-MDP sẽ không ra ngày nào, phải bung bảng ra mới thấy
 - Phân quyền riêng theo nhóm (`menu.doi_chieu_citad`)
 
 ### Module Đối chiếu CITAD - PaymentHub (Phòng QLTK Nostro, Vostro)

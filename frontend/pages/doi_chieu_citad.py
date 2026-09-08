@@ -251,6 +251,14 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
     view_state = {
         "mode": "edit", "ngay_dang_xem": "", "session_id": None,
         "created_by": None, "created_by_name": "",
+        # True trong lúc _load_session()/_load_history_entry() đang gán lại
+        # ngay_input.value — chặn _on_ngay_changed_sync()/_check_ngay_da_co_bang()
+        # tưởng nhầm đây là NGƯỜI DÙNG tự đổi ngày (bug thật, review 07/09/2026:
+        # đừng dựa vào thứ tự chạy trước/sau giữa apply_session_data() và
+        # _apply_view_mode() để "tự ghi đè lại" — on_value_change ASYNC bị
+        # NiceGUI hoãn sang background task nên chạy SAU CẢ khối đó, không
+        # phải ngay trong lúc gán .value như tưởng).
+        "dang_tai": False,
     }
     current_user = api.get_current_user() or {}
 
@@ -923,10 +931,14 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         if not sess:
             _apply_view_mode("edit")
             return
-        apply_session_data(sess)
-        view_state["ngay_dang_xem"] = sess.get("ngay") or ngay_input.value
-        mode, session_id, created_by, created_by_name = _mode_for_meta(sess)
-        _apply_view_mode(mode, session_id, created_by, created_by_name)
+        view_state["dang_tai"] = True
+        try:
+            apply_session_data(sess)
+            view_state["ngay_dang_xem"] = sess.get("ngay") or ngay_input.value
+            mode, session_id, created_by, created_by_name = _mode_for_meta(sess)
+            _apply_view_mode(mode, session_id, created_by, created_by_name)
+        finally:
+            view_state["dang_tai"] = False
 
     async def _save_session_now(status: str):
         payload = get_session_payload()
@@ -1005,10 +1017,14 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                 return
             ui.notify(f"Lỗi tải bản lịch sử: {e}", type="negative")
             return
-        apply_session_data(sess)
-        view_state["ngay_dang_xem"] = ngay_hien_thi
-        mode, session_id, created_by, created_by_name = _mode_for_meta(sess)
-        _apply_view_mode(mode, session_id, created_by, created_by_name)
+        view_state["dang_tai"] = True
+        try:
+            apply_session_data(sess)
+            view_state["ngay_dang_xem"] = ngay_hien_thi
+            mode, session_id, created_by, created_by_name = _mode_for_meta(sess)
+            _apply_view_mode(mode, session_id, created_by, created_by_name)
+        finally:
+            view_state["dang_tai"] = False
         tabs.set_value(tab_doi_chieu)
         # entry_staff_name = người THỰC SỰ lưu ĐÚNG dòng lịch sử vừa bấm "Tải"
         # (khác created_by_name — chủ bảng, cố định suốt vòng đời bảng). Thiếu
@@ -1740,27 +1756,37 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     ):
                         ngay_input = _date_picker_input("Ngày")
 
-                        async def _on_ngay_changed(_e=None):
-                            # Đổi ngày (gõ tay hoặc chọn lại lịch) khi đang
-                            # tải/sửa 1 bảng (session_id != None) nghĩa là
-                            # người dùng muốn chấm SANG NGÀY KHÁC — tách khỏi
-                            # bảng cũ NGAY, để lần Lưu tiếp theo tự tạo bảng
-                            # MỚI đúng ngày mới, thay vì ăn lỗi "Ngày không
-                            # khớp với bảng đang lưu tiếp" mà không biết phải
-                            # làm gì tiếp (hành động đổi ngày của họ hoàn
-                            # toàn hợp lệ — bug phát hiện khi review 07/09/2026).
-                            #
-                            # AN TOÀN với apply_session_data() gán lại
-                            # ngay_input.value khi "Tải" 1 bảng: NiceGUI gọi
-                            # on_value_change ĐỒNG BỘ ngay khi gán .value dù
-                            # gán từ code hay từ người dùng (xem
-                            # ValueElement._handle_value_change) — nhưng cả
-                            # _load_session() lẫn _load_history_entry() đều
-                            # gọi _apply_view_mode(..., session_id, ...) NGAY
-                            # SAU apply_session_data(), nên giá trị None ở
-                            # đây bị ghi đè lại đúng session_id thật ngay sau
-                            # đó — chỉ "thắng" khi KHÔNG có bước tải nào theo
-                            # sau (đúng lúc người dùng tự đổi ngày).
+                        # Bug thật đã sửa (review 07/09/2026, phát hiện qua
+                        # chạy thật, không phải suy luận): bản đầu viết handler
+                        # này là `async def`. NiceGUI gọi handler ở
+                        # `handle_event()` — với hàm ASYNC, `handler(...)` chỉ
+                        # tạo ra 1 coroutine (chưa chạy thân hàm), rồi
+                        # `handle_event()` đẩy coroutine đó vào
+                        # `background_tasks.create(...)` để chạy SAU, không
+                        # đồng bộ ngay tại chỗ (xem nicegui/events.py). Nghĩa
+                        # là thân hàm — chỗ xoá session_id — chạy SAU KHI cả
+                        # `_load_session()` (gồm cả `_apply_view_mode()` gán
+                        # lại session_id ĐÚNG) đã chạy xong và trả quyền điều
+                        # khiển về event loop, nên nó XOÁ MẤT session_id vừa
+                        # gán đúng — nặng hơn hẳn lỗi gốc: bấm "Tải" bảng nào
+                        # cũng bị tách khỏi bảng đó, "Lưu" sẽ đẻ bảng trùng
+                        # thay vì cập nhật tại chỗ.
+                        #
+                        # Sửa bằng CỜ TƯỜNG MINH (`view_state["dang_tai"]`)
+                        # thay vì dựa vào thứ tự chạy trước/sau — KHÔNG đủ chỉ
+                        # đổi hàm này về `def` đồng bộ: dù vậy nó vẫn chạy
+                        # ĐÚNG lúc apply_session_data() gán ngay_input.value
+                        # trong 1 lượt "Tải" hợp lệ, tự xem đó là "người dùng
+                        # đổi ngày" và hiện nhầm thông báo. Cờ `dang_tai` (bật
+                        # trong lúc _load_session()/_load_history_entry() đang
+                        # gán lại ngay_input.value, xem 2 hàm đó) chặn được cả
+                        # 2 vấn đề. Giữ `def` đồng bộ (KHÔNG async) — nếu để
+                        # async, handler vẫn bị hoãn sang background task, cờ
+                        # đã tắt lại (reset trong `finally` của 2 hàm kia)
+                        # trước khi handler kịp chạy, coi như cờ vô nghĩa.
+                        def _on_ngay_changed_sync(_e=None):
+                            if view_state.get("dang_tai"):
+                                return
                             if view_state["session_id"] is not None:
                                 view_state["session_id"] = None
                                 ui.notify(
@@ -1768,9 +1794,13 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                                     "không ghi đè bảng vừa tải",
                                     type="info",
                                 )
-                            await _check_ngay_da_co_bang()
 
-                        ngay_input.on_value_change(_on_ngay_changed)
+                        ngay_input.on_value_change(_on_ngay_changed_sync)
+                        # Đăng ký handler bất đồng bộ `_check_ngay_da_co_bang`
+                        # (banner "bạn đã có bảng cho ngày này") ở XA hơn phía
+                        # dưới, ngay sau khi hàm đó được định nghĩa — KHÔNG
+                        # tham chiếu thẳng ở đây vì hàm chưa tồn tại tại điểm
+                        # này (NameError lúc dựng trang, không phải lỗi ẩn).
                         lap_bang_input = ui.select(
                             [], label="Lập bảng", with_input=True, new_value_mode="add-unique"
                         ).props("dense outlined").classes("w-48")
@@ -1814,6 +1844,14 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     ngay_banner_area = ui.column().classes("w-full gap-0")
 
                     async def _check_ngay_da_co_bang():
+                        # Bỏ qua khi đang trong 1 lượt "Tải" (xem cờ
+                        # view_state["dang_tai"], đặt trong _load_session()/
+                        # _load_history_entry()) — vừa Tải xong 1 bảng của
+                        # đúng ngày đang xem thì hiện lại banner "bạn đã có
+                        # bảng cho ngày này, tải bảng gần nhất?" là thừa (họ
+                        # đang xem đúng 1 trong số các bảng đó rồi).
+                        if view_state.get("dang_tai"):
+                            return
                         ngay_banner_area.clear()
                         try:
                             ngay_dt = datetime.datetime.strptime((ngay_input.value or "").strip(), "%d/%m/%Y")
@@ -1852,6 +1890,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                                     "Tải bảng gần nhất", icon="download", on_click=_tai_gan_nhat
                                 ).props("dense outline color=indigo-8")
 
+                    ngay_input.on_value_change(_check_ngay_da_co_bang)
                     ui.timer(0.1, _check_ngay_da_co_bang, once=True)
 
                     # Banner trạng thái — nội dung dựng ĐỘNG theo mode trong

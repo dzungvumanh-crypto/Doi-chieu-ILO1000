@@ -14533,17 +14533,35 @@ This may happen if you try to create UI from a background task.</pre>
       <p>Ở <code>mode='edit'</code> ô ngày mở khoá nhưng <code>view_state["session_id"]</code> vẫn
         trỏ bảng vừa tải. Bản đầu của PR chỉ đổi lỗi 500 chung chung thành 400 rõ ràng
         ("Ngày không khớp với bảng đang lưu tiếp") — đúng nhưng chưa đủ: đổi ngày là hành động HỢP
-        LỆ, không phải lỗi người dùng cần sửa. Fix thật: bắt <code>on_value_change</code> của
+        LỆ, không phải lỗi người dùng cần sửa. Fix vòng 1: bắt <code>on_value_change</code> của
         <code>ngay_input</code>, tự tách khỏi bảng cũ (<code>session_id = None</code>) ngay khi đổi
         ngày, kèm thông báo "lưu tiếp theo sẽ tạo bảng MỚI".</p>
-      <div class="note">Đã kiểm chứng qua source NiceGUI (<code>ValueElement._handle_value_change</code>):
-        gán <code>.value = x</code> từ CODE hay từ NGƯỜI DÙNG đều gọi <code>on_value_change</code>
-        ĐỒNG BỘ như nhau — không có cách phân biệt nguồn gốc ở tầng handler. An toàn vì
-        <code>_load_session()</code>/<code>_load_history_entry()</code> đều gọi
-        <code>_apply_view_mode(..., session_id, ...)</code> NGAY SAU <code>apply_session_data()</code>
-        (hàm gán <code>ngay_input.value</code>) — giá trị <code>None</code> handler vừa gán bị ghi đè
-        lại đúng <code>session_id</code> thật ngay sau đó trong CÙNG lượt "Tải". Chỉ "thắng" khi
-        không có bước tải nào theo sau — đúng lúc người dùng tự đổi ngày.</div>
+
+      <div class="caution"><b>Fix vòng 1 tự đẻ ra lỗi NẶNG HƠN lỗi B gốc — đã sửa vòng 2, ghi lại
+        để đừng lặp lại.</b> Note ban đầu ở đây khẳng định "gán <code>.value = x</code> từ CODE hay
+        từ NGƯỜI DÙNG đều gọi <code>on_value_change</code> ĐỒNG BỘ như nhau" — <b>SAI</b>, và review
+        vòng 2 (07/09/2026, chạy thật bằng chính <code>nicegui.events.handle_event()</code>, không
+        phải suy luận) bắt được: handler viết dạng <code>async def</code> thì <code>handler(...)</code>
+        chỉ tạo ra 1 coroutine (thân hàm CHƯA chạy), <code>handle_event()</code> thấy kết quả là
+        <code>Awaitable</code> nên đẩy vào <code>background_tasks.create(...)</code> để chạy SAU —
+        không đồng bộ tại chỗ. Hậu quả: thân hàm (chỗ xoá <code>session_id</code>) chạy SAU KHI cả
+        <code>_load_session()</code> (gồm cả <code>_apply_view_mode()</code> gán lại
+        <code>session_id</code> ĐÚNG) đã chạy xong — xoá mất giá trị vừa gán đúng. Bấm "Tải" bất kỳ
+        bảng nào cũng bị tách khỏi bảng đó, "Lưu" tiếp theo đẻ bảng trùng thay vì cập nhật tại chỗ;
+        nặng nhất ở <code>mode='napas_only'</code> — B tải bảng A để góp Napas rồi Lưu tạo hẳn 1
+        bảng MỚI của B chứa toàn bộ số liệu A (đúng lỗi review PR#76 đã sửa, tái diễn qua đường khác).</div>
+      <p><b>Sửa đúng (vòng 2):</b> đừng dựa vào thứ tự chạy trước/sau giữa
+        <code>apply_session_data()</code> và <code>_apply_view_mode()</code> — dùng CỜ TƯỜNG MINH
+        <code>view_state["dang_tai"]</code> (bật trong <code>_load_session()</code>/
+        <code>_load_history_entry()</code>, tắt trong <code>finally</code>) VÀ đổi handler chính
+        (xoá <code>session_id</code>) về <code>def</code> ĐỒNG BỘ — thiếu vế nào cũng hỏng: chỉ đổi
+        sang <code>def</code> mà không có cờ thì vẫn hiện nhầm thông báo "đã đổi ngày" ngay lúc đang
+        Tải hợp lệ (nó chạy ĐÚNG lúc <code>apply_session_data()</code> gán <code>.value</code>); chỉ
+        có cờ mà vẫn để <code>async def</code> thì cờ đã bị <code>finally</code> tắt lại TRƯỚC KHI
+        handler hoãn kịp chạy, coi như vô nghĩa. Đăng ký 2 handler RIÊNG trên cùng
+        <code>ngay_input</code> (<code>on_value_change</code> nhận nhiều handler): 1 sync (xoá
+        session_id, có cờ) + 1 async giữ nguyên (<code>_check_ngay_da_co_bang</code>, banner C bên
+        dưới, cũng thêm cờ tương tự).</p>
 
       <div class="label"><span class="pill pill-green">Thiết kế — đã hỏi Phòng Thanh toán, đã chốt (08/09/2026)</span></div>
       <table>
@@ -14578,6 +14596,15 @@ This may happen if you try to create UI from a background task.</pre>
         rebuild đang dài dần qua nhiều PR; để nguyên trong đợt này, cân nhắc dồn về 1 hình dạng cuối
         nếu còn sửa tiếp bảng này. <code>DELETE /session-by-id/{id}</code> không nơi nào ở frontend
         gọi — dead route có từ PR#76, không phải lỗi của PR#80.</p>
+      <p><code>_check_ngay_da_co_bang()</code> (banner C) gọi <code>/reconciliation-days</code> —
+        endpoint này SELECT TOÀN BỘ bảng <code>doi_chieu_citad_sessions</code> (kèm 2 subquery mỗi
+        dòng) rồi mới lọc đúng 1 ngày bằng Python, chạy mỗi lần đổi ô ngày (không chỉ khi vào tab
+        Lịch sử). Chưa đau (bảng này lớn rất chậm — vài dòng/ngày làm việc), nhưng sẽ nặng dần theo
+        năm. Cố ý CHƯA đẩy lọc xuống SQL trong đợt này: <code>get_reconciliation_days()</code> dùng
+        chung cho cả Lịch sử (lọc KHOẢNG ngày, phải parse Python vì lưu dạng text dd/mm/yyyy — xem
+        docstring hàm) lẫn banner này (lọc ĐÚNG 1 ngày, có thể lọc bằng SQL text bằng nhau, không
+        cần parse) — thêm nhánh riêng cho trường hợp lọc chính xác vào 1 hàm dùng chung là việc có
+        rủi ro hơn giá trị đem lại ở quy mô hiện tại. Làm khi bảng thật sự lớn tới mức đo được độ trễ.</p>
 
       <p>Test: <code>tests/test_doi_chieu_citad_multi_session.py</code> viết lại toàn bộ cho API
         <code>session_id</code>-only (13 test, gồm 2 test mới cho lỗi A và cho
