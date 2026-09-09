@@ -301,11 +301,24 @@ def delete(path: str) -> Any:
 
 def post_upload_bytes(path: str, files: dict) -> bytes:
     """Multipart POST, nhận bytes response (ZIP, Excel…). Dùng cho generate-dept-zip."""
+    return _post_upload_bytes_raw(path, files).content
+
+
+def post_upload_bytes_with_headers(path: str, files: dict) -> tuple[bytes, dict]:
+    """Như post_upload_bytes nhưng trả kèm header của response.
+
+    Cần cho /api/th-reports/generate: thân response là file Excel, còn cảnh báo
+    "quốc gia không có dòng trong mẫu" nằm ở header X-Skipped-Countries."""
+    r = _post_upload_bytes_raw(path, files)
+    return r.content, dict(r.headers)
+
+
+def _post_upload_bytes_raw(path: str, files: dict):
     try:
         h = {k: v for k, v in _headers().items() if k != "Content-Type"}
         r = _download_client.post(f"{BACKEND_URL}{path}", headers=h, files=files)
         r.raise_for_status()
-        return r.content
+        return r
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 401:
             clear_auth()

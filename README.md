@@ -765,6 +765,31 @@ Truy cập:
 - Phân quyền: `menu.so_truc` (vào module, xem lịch sử) + `so_truc.ksv_confirm`
   (được xuất hiện trong danh sách chọn KSV)
 
+### Module Báo cáo dữ liệu thanh toán (Phòng Tổng hợp)
+- Menu: **Báo cáo → Phòng Tổng hợp → Báo cáo dữ liệu thanh toán**. Quyền: `menu.th_reports`
+- Nhận 2 file Excel xuất từ hệ thống SWIFT — **Lệnh đến (IN)** và **Lệnh đi (OUT)** — điền vào mẫu
+  `D00054-...-ST-M-01.xlsx` của NHNN rồi trả về. Sheet dữ liệu tên `Result` hoặc `Export Worksheet`;
+  sheet `SQL` (nếu có) chỉ chứa câu truy vấn, không phải dữ liệu
+- Cột dùng tới: IN cần `CTHED`, `STTLM_AMT`, `TOTAL`; OUT cần thêm `CUST_TYPE`
+  (`CN` cá nhân / `DN` doanh nghiệp / `TCTD`+`TCTDO` tổ chức tín dụng). Giá trị chia 1.000, làm tròn
+  2 số lẻ
+- **Việt Nam luôn để 0**, cố ý — báo cáo này chỉ tính giao dịch với nước ngoài
+- **Dòng tổng cuối file bị loại theo cột `CTHED` để trống** (09/09/2026). Công cụ export lúc có lúc
+  không thêm dòng này — `OUT_202606` không có, `OUT_202608` có — nên phải nhận diện tường minh; giữ
+  lại là số liệu nhân đôi
+
+⚠️ **Báo cáo có thể ra ít hơn file nguồn — màn hình sẽ báo rõ.** Mẫu D00054 chỉ có **195 dòng quốc
+gia**, trong khi SWIFT báo theo mã ISO nên còn kèm vùng lãnh thổ (Bermuda, Cayman, Guam, Réunion…).
+Nơi nào không có dòng để điền thì bị bỏ khỏi báo cáo. Từ 09/09/2026, sau khi tạo báo cáo màn hình
+hiện **thẻ vàng liệt kê từng nơi bị bỏ kèm số điện và giá trị** — trước đây bỏ hoàn toàn im lặng,
+người làm báo cáo không có cách nào biết. Đo trên dữ liệu thật: kỳ 202606 hụt 59 điện, kỳ 202608 hụt
+43 điện.
+
+- Thấy cảnh báo thì **kiểm lại trước khi nộp**. Đang chờ chốt hai việc: (1) có gộp vùng lãnh thổ về
+  nước mẹ không (Cayman → United Kingdom, Guam → United States…); (2) **South Sudan** — quốc gia
+  thành viên LHQ từ 2011 nhưng mẫu D00054 (soạn khoảng 2010) không có dòng, không gộp vào đâu được,
+  phải hỏi NHNN
+
 ### Module Ôn tập (Quizz)
 - Nhóm **Tính năng khác** → **Ôn tập** (`/quiz`). Dùng chung cho cả cơ quan, không thuộc phòng nào
 - **Bộ câu hỏi chỉ tải lên một lần** — người sau chọn bộ có sẵn để ôn, không phải nhập lại.

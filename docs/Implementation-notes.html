@@ -15236,6 +15236,101 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">130</span>
+      <span class="card-title">Báo cáo dữ liệu thanh toán SWIFT (D00054) — báo cáo hụt hàng chục điện mỗi kỳ mà màn hình không nói gì; chặn dòng tổng tường minh + trả cảnh báo ra giao diện</span>
+      <span class="badge badge-warn">Mục 1/3 — hai mục còn lại chờ người dùng &amp; NHNN chốt</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Lỗi thật, phát hiện 09/09/2026</span> Người dùng hỏi: đầu vào 9.520 sao báo cáo ra 9.483?</div>
+      <p>Mẫu D00054 chỉ có <b>195 dòng quốc gia</b>; file SWIFT báo theo mã ISO nên còn kèm vùng lãnh
+        thổ (Bermuda, Cayman, Guam, Réunion…). Quốc gia nào không tìm được dòng thì
+        <code>fill_template()</code> gom vào biến <code>unmatched</code> rồi chỉ
+        <code>logger.warning</code> — <b>không</b> trả về API, <b>không</b> hiện lên màn hình. Người
+        làm báo cáo tải file về, thấy đủ số, nộp đi; không có dấu hiệu nào cho biết vài chục điện đã
+        bốc hơi.</p>
+      <table>
+        <tr><th>Kỳ</th><th>Chiều đến hụt</th><th>Chiều đi hụt</th><th>Tổng hụt</th></tr>
+        <tr><td>202606</td><td>51</td><td>8</td><td>59</td></tr>
+        <tr><td>202608</td><td>37</td><td>6</td><td>43</td></tr>
+      </table>
+      <p>Đo trên dữ liệu thật của Phòng TH. Mọi kỳ đã nộp từ trước tới nay đều thiếu như vậy.</p>
+
+      <div class="label"><span class="pill pill-amber">Chia 3 mục, chỉ làm mục 1</span> Ranh giới: cái gì là kỹ thuật, cái gì là nghiệp vụ</div>
+      <table>
+        <tr><th>Mục</th><th>Nội dung</th><th>Ai quyết</th><th>Trạng thái</th></tr>
+        <tr><td>1</td><td>Hiện cảnh báo danh sách quốc gia bị bỏ + chặn dòng tổng tường minh</td><td>Không cần ai duyệt — chỉ là <i>nói ra sự thật</i>, không đổi con số nào</td><td><b>Đã làm</b></td></tr>
+        <tr><td>2</td><td>Gộp ~33 vùng lãnh thổ về nước mẹ (BVI+Cayman→United Kingdom, Guam+American Samoa→United States…)</td><td>Người dùng — <b>đổi số nộp lên NHNN</b></td><td>Chờ</td></tr>
+        <tr><td>3</td><td>South Sudan, Palestine, Vatican, Kosovo — không gộp được vào đâu</td><td>Phải hỏi NHNN</td><td>Chờ</td></tr>
+      </table>
+      <p>Cố ý <b>không</b> tự thêm bảng gộp ở mục 2 dù biết cách sửa: sửa xong tổng sẽ khớp 100% và
+        nhìn như đã hết lỗi, nhưng đó là thay đổi số liệu nộp cơ quan quản lý bằng phán đoán của người
+        viết code. Mục 1 làm trước vì nó chỉ phơi bày cái đang bị giấu, không giả định gì.</p>
+
+      <div class="label"><span class="pill pill-gray">Ngữ cảnh</span> Mẫu D00054 soạn khoảng năm 2010, chưa cập nhật lần nào</div>
+      <p>Suy ra từ chính tên nước trong mẫu: <i>Libyan Arab Jamahiriya</i> (Libya đổi tên 2011),
+        <i>Swaziland</i> (2018), <i>The former Yugoslav Republic of Macedonia</i> (2019),
+        <i>Turkey</i> (2022). <code>_COUNTRY_NAME_MAP</code> đã có sẵn ánh xạ cho 4 tên cũ này nên
+        phần đó chạy đúng. Nhưng <b>South Sudan</b> (độc lập 7/2011) thì không có dòng nào để mà ánh
+        xạ — đây là quốc gia thành viên LHQ, không phải vùng lãnh thổ, không gộp được vào Sudan.</p>
+
+      <div class="label"><span class="pill pill-red">Bẫy thứ hai, chưa nổ</span> Dòng tổng đang bị loại do <b>may mắn</b>, không do thiết kế</div>
+      <p>Công cụ export của Phòng TH thêm một dòng tổng ở cuối file (cột <code>CTHED</code> để trống,
+        <code>TOTAL</code> = tổng mọi dòng phía trên). Trước bản sửa này <b>không có dòng code nào</b>
+        nhận diện nó. Nó rơi ra chỉ vì <code>CTHED</code> rỗng → pandas đọc thành chuỗi
+        <code>"nan"</code> → tra tên quốc gia không thấy → lọt vào đúng cái rổ "không khớp mẫu" cùng
+        với Bermuda và Cayman.</p>
+      <p>Cấu trúc file <b>đổi theo kỳ</b>: <code>OUT_202606</code> không có dòng tổng,
+        <code>OUT_202608</code> có. Cùng một công cụ, cùng một báo cáo. Nếu một kỳ nào đó nó điền
+        <code>CUST_TYPE</code> vào dòng tổng, số liệu chiều đi sẽ <b>nhân đôi</b> — cũng không lỗi,
+        cũng không cảnh báo. Loại hỏng này nguy hiểm hơn hẳn chuyện đang hụt 43 điện: thiếu 43 trên
+        8.394 thì khó thấy, gấp đôi thì sai nghiêm trọng mà vẫn không ai được báo. Nay
+        <code>_drop_total_row()</code> loại theo <b>CTHED rỗng</b> và ghi log INFO số dòng đã loại.</p>
+
+      <div class="label"><span class="pill pill-green">Quyết định</span> Cảnh báo đi bằng header HTTP, không bọc file vào JSON</div>
+      <table>
+        <tr><th>Cách</th><th>Giá phải trả</th><th>Chọn</th></tr>
+        <tr><td>Header <code>X-Skipped-Countries</code> (JSON đã URL-encode)</td><td>Phải thêm hàm đọc header ở api_client</td><td><b>Chọn</b></td></tr>
+        <tr><td>Trả JSON bọc file base64</td><td>Phình 33% (file tới 20 MB), hỏng đường <code>ui.download</code> hiện có</td><td>Không</td></tr>
+        <tr><td>Tách 2 endpoint: <code>/analyze</code> + <code>/generate</code></td><td>Hai vòng gọi, parse file hai lần</td><td>Không</td></tr>
+      </table>
+      <p>Thân response là file Excel nên cảnh báo không có chỗ nào khác để đi. Đo trên dữ liệu thật:
+        header dài <b>1.363–1.547 byte</b>, xa ngưỡng của mọi proxy. URL-encode vì header HTTP chỉ chở
+        latin-1. Frontend gọi backend bằng httpx phía server (không qua trình duyệt) nên
+        <b>không</b> cần khai <code>Access-Control-Expose-Headers</code>.</p>
+      <p><code>fill_template()</code> đổi kiểu trả về <code>bytes</code> → <code>tuple[bytes, list[dict]]</code>.
+        Chỉ có đúng một nơi gọi (<code>backend/api/th_reports.py</code>), không test cũ nào đụng tới.</p>
+      <p>Header hỏng hoặc parse lỗi ở frontend thì <b>trả về danh sách rỗng</b>, không ném lỗi: mất
+        cảnh báo còn hơn chặn người dùng tải báo cáo về. Đây là ngoại lệ có chủ đích với quy tắc "không
+        nuốt lỗi" — đường tải file phải sống được kể cả khi đường cảnh báo chết.</p>
+
+      <div class="label"><span class="pill pill-blue">Bất biến được test canh</span> nguồn = báo cáo + bỏ qua</div>
+      <p><code>tests/test_th_report_bo_qua.py</code> (8 test). Test quan trọng nhất là
+        <code>test_dong_tong_file_di_co_cust_type_van_bi_loai</code>: dựng dòng tổng <b>có</b>
+        <code>CUST_TYPE="DN"</code> — đúng kịch bản chưa xảy ra ở trên. Chạy trên code cũ thì test này
+        fail (đếm 10 thay vì 5), nên nó là lưới thật chứ không phải test trang trí. Một test khác chốt
+        rằng dòng tổng <b>không</b> được lọt vào bảng cảnh báo: nó không có tên quốc gia, hiện lên màn
+        hình dòng "NAN — 10.576 điện bị bỏ" là doạ người dùng.</p>
+      <p>Kiểm chứng end-to-end trên 2 kỳ dữ liệu thật, cân bằng khớp tuyệt đối cả 4 con số:
+        202606 <code>9676 = 9625 + 51</code> (đến), <code>8315 = 8307 + 8</code> (đi);
+        202608 <code>9520 = 9483 + 37</code> (đến), <code>8394 = 8388 + 6</code> (đi).</p>
+
+      <div class="label"><span class="pill pill-gray">Chưa làm, biết mà để lại</span></div>
+      <p><b>Không kiểm dòng tổng có khớp tổng các dòng còn lại không.</b> Cân được (chênh nghĩa là
+        dòng CTHED rỗng đó <i>không phải</i> dòng tổng, hoặc file thiếu dòng) nhưng nằm ngoài phạm vi
+        mục 1. Hiện chỉ tin cột CTHED rỗng là đủ để nhận diện.</p>
+      <p><b>Cảnh báo không đi vào trong file Excel.</b> Người nộp báo cáo mở lại file sau vài ngày sẽ
+        không thấy dấu vết gì — cảnh báo chỉ sống trong phiên làm việc lúc bấm nút. Có cân nhắc thêm
+        một sheet phụ, nhưng D00054 là biểu nộp NHNN, thêm sheet vào có thể làm hỏng khâu tiếp nhận.</p>
+
+      <div class="note">Test: 8/8 test mới pass, full suite <b>1615/1615</b> pass, không regression.
+        Đã kiểm đường HTTP thật bằng TestClient: header về đủ, log ghi đúng 2 dòng tổng bị loại.</div>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-09</footer>
 </div>
 </body>
