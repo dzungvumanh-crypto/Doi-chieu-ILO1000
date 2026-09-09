@@ -657,6 +657,11 @@ class TestTimFileDi:
         file có TRDATE lẫn nhiều ngày)."""
         _core_df([_core_row() | {"TRDATE": d} for d in trdates]).to_csv(path, index=False)
 
+    def _viet_xlsx_trdate(self, path, *trdates):
+        """Như `_viet_csv_trdate` nhưng ghi Excel (2026-09-09, hỗ trợ file core dạng .xlsx)."""
+        _core_df([_core_row() | {"TRDATE": d} for d in trdates]).to_excel(
+            path, index=False, engine="openpyxl")
+
     def test_1_file_1_offset_0_dung_duong_nhanh_khong_can_doc_noi_dung(self, tmp_path):
         """Đúng 1 file khớp + hỏi offset 0 (ngày T) → tin luôn, KHÔNG mở đọc nội dung (đường nhanh,
         giữ hiệu năng cho trường hợp phổ biến nhất) — file rỗng/hỏng vẫn được chấp nhận ở bước
@@ -680,6 +685,33 @@ class TestTimFileDi:
 
         # Không file nào có TRDATE=20260831 (offset -1) → không tự nhận nhầm, trả None
         assert pipeline._tim_file_core_hoac_csv_di(tmp_path, "20260831", "201", -1) is None
+
+    def test_1_file_xlsx_offset_0_dung_duong_nhanh(self, tmp_path):
+        """2026-09-09: file core .xlsx đơn lẻ cũng đi được đường nhanh y hệt .csv."""
+        self._viet_xlsx_trdate(tmp_path / "201_DI.xlsx", "20260901")
+        loai, p = pipeline._tim_file_core_hoac_csv_di(tmp_path, "20260901", "201", 0)
+        assert loai == "csv" and p.name == "201_DI.xlsx"
+
+    def test_tron_csv_va_xlsx_khac_ngay_deu_dung_duoc(self, tmp_path):
+        """Trộn lẫn 1 file .csv (ngày T) và 1 file .xlsx (ngày T+1) trong CÙNG thư mục — 2 định
+        dạng bình đẳng, không định dạng nào được ưu tiên hơn."""
+        self._viet_csv_trdate(tmp_path / "201_DI_csv.csv", "20260901")
+        self._viet_xlsx_trdate(tmp_path / "201_DI_xlsx.xlsx", "20260902")
+
+        loai, p = pipeline._tim_file_core_hoac_csv_di(tmp_path, "20260901", "201", 0)
+        assert loai == "csv" and p.name == "201_DI_csv.csv"
+        loai, p = pipeline._tim_file_core_hoac_csv_di(tmp_path, "20260902", "201", 1)
+        assert loai == "csv" and p.name == "201_DI_xlsx.xlsx"
+
+    def test_csv_va_xlsx_cung_ngay_khong_tu_chon(self, tmp_path):
+        """1 file .csv và 1 file .xlsx CÙNG đại diện 1 ngày — vẫn phải chặn như "2 file trùng
+        ngày", không tự chọn định dạng nào ưu tiên hơn."""
+        self._viet_csv_trdate(tmp_path / "201_DI_csv.csv", "20260901")
+        self._viet_xlsx_trdate(tmp_path / "201_DI_xlsx.xlsx", "20260901")
+        logs = []
+        assert pipeline._tim_file_core_hoac_csv_di(
+            tmp_path, "20260901", "201", 1, logs.append) is None
+        assert any("KHÔNG tự chọn" in m for m in logs)
 
     def test_offset_khac_0_van_nhan_zip_khi_khong_co_csv_dung_ngay(self, tmp_path):
         """CSV có sẵn nhưng TRDATE của nó không khớp offset đang hỏi → rơi về GL02 zip đúng ngày,

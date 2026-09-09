@@ -98,6 +98,16 @@ def _core_csv_upload_file_trdate_di(filename: str, trdate: str) -> tuple:
     return ("files", (filename, df.to_csv(index=False).encode("utf-8-sig"), "text/csv"))
 
 
+def _core_xlsx_upload_file_trdate_di(filename: str, trdate: str) -> tuple:
+    """Như `_core_csv_upload_file_trdate_di()` nhưng ghi Excel (2026-09-09)."""
+    cols = ["TRDATE"] + _GL02_COLS_DI
+    row = {"TRDATE": trdate, **_gl02_row_di()}
+    df = pd.DataFrame([row], columns=cols)
+    buf = io.BytesIO()
+    df.to_excel(buf, index=False, engine="openpyxl")
+    return ("files", (filename, buf.getvalue(), _XLSX_MIME))
+
+
 def _wait_done(admin_client, job_id, timeout_s=15):
     deadline = time.time() + timeout_s
     prog = None
@@ -176,8 +186,8 @@ class TestStartUploadEndpointDi:
         assert prog["ket_qua"]["hub_core_di"] is not None
 
         logs = "\n".join(prog["logs"])
-        assert "[CORE T] đọc thẳng CSV đã phân loại sẵn 202_DI_dot1.csv" in logs, logs
-        assert "[CORE T+1] đọc thẳng CSV đã phân loại sẵn 202_DI_dot2.csv" in logs, logs
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DI_dot1.csv" in logs, logs
+        assert "[CORE T+1] đọc thẳng file đã phân loại sẵn 202_DI_dot2.csv" in logs, logs
 
     def test_3_file_csv_core_T_va_T_cong_tru_1_qua_upload_deu_dung_duoc(
         self, admin_client, monkeypatch, tmp_path,
@@ -207,9 +217,9 @@ class TestStartUploadEndpointDi:
         assert prog["ket_qua"]["hub_core_di"] is not None
 
         logs = "\n".join(prog["logs"])
-        assert "[CORE T-1] đọc thẳng CSV đã phân loại sẵn 202_DI_hom_qua.csv" in logs, logs
-        assert "[CORE T] đọc thẳng CSV đã phân loại sẵn 202_DI_hom_nay.csv" in logs, logs
-        assert "[CORE T+1] đọc thẳng CSV đã phân loại sẵn 202_DI_hom_sau.csv" in logs, logs
+        assert "[CORE T-1] đọc thẳng file đã phân loại sẵn 202_DI_hom_qua.csv" in logs, logs
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DI_hom_nay.csv" in logs, logs
+        assert "[CORE T+1] đọc thẳng file đã phân loại sẵn 202_DI_hom_sau.csv" in logs, logs
 
     def test_du_7_file_csv_core_T3_den_T_cong_3_qua_upload_deu_dung_duoc(
         self, admin_client, monkeypatch, tmp_path,
@@ -244,5 +254,52 @@ class TestStartUploadEndpointDi:
         logs = "\n".join(prog["logs"])
         for off, ngay in ngay_theo_offset.items():
             nhan = "T" if off == 0 else f"T{off:+d}"
-            assert f"[CORE {nhan}] đọc thẳng CSV đã phân loại sẵn 202_DI_offset_{off}.csv" in logs, \
+            assert f"[CORE {nhan}] đọc thẳng file đã phân loại sẵn 202_DI_offset_{off}.csv" in logs, \
                 f"Offset {nhan} (ngày {ngay}) không được đọc đúng file:\n{logs}"
+
+    def test_1_file_xlsx_core_qua_upload_dung_duoc(self, admin_client, monkeypatch, tmp_path):
+        """2026-09-09: file core dạng .xlsx (thay vì .csv) cho chiều đi."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core_di/start_upload",
+            files=[*_hub_kenh_upload_files_di(ngay="20260825"),
+                   _core_xlsx_upload_file_trdate_di("202_DI.xlsx", "20260825")],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["hub_core_di"] is not None
+        logs = "\n".join(prog["logs"])
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DI.xlsx" in logs, logs
+
+    def test_da_dang_loai_file_nhieu_ngay_qua_upload(self, admin_client, monkeypatch, tmp_path):
+        """Đa dạng định dạng + nhiều ngày trong CÙNG 1 lượt upload cho chiều đi — csv (T-1), xlsx
+        (T), zip GL02 cần giải mã (T+1) — đúng yêu cầu 'đa dạng file, nhiều file nhiều ngày nhiều
+        loại file' 2026-09-09."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core_di/start_upload",
+            files=[
+                *_hub_kenh_upload_files_di(ngay="20260825"),
+                _core_csv_upload_file_trdate_di("202_DI_homqua.csv", "20260824"),
+                _core_xlsx_upload_file_trdate_di("202_DI_homnay.xlsx", "20260825"),
+                _gl02_upload_file_di(ngay="20260826"),
+            ],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["hub_core_di"] is not None
+
+        logs = "\n".join(prog["logs"])
+        assert "[CORE T-1] đọc thẳng file đã phân loại sẵn 202_DI_homqua.csv" in logs, logs
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DI_homnay.xlsx" in logs, logs
+        assert "[CORE T+1] đang giải mã + phân loại GL02_20260826_1000.zip" in logs, logs

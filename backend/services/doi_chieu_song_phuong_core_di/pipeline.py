@@ -67,14 +67,22 @@ def _tim_file_hub_di(
     return matches[0]
 
 
+_DUOI_EXCEL_CORE = {".xlsx", ".xls"}
+
+
 def _doc_trdate_1_file(path: Path, log: Callable[[str], None]) -> str | None:
-    """Đọc TRDATE THẬT bên trong 1 file CSV core đã phân loại — tên file (`{ma_nh}_DI*.csv`)
-    KHÔNG mang ngày giao dịch, chỉ mở đọc nội dung mới biết đúng ngày nào. Trả `None` nếu không
-    đọc được (file hỏng/thiếu cột) hoặc TRDATE lẫn nhiều ngày khác nhau trong cùng 1 file — không
-    đoán, chỉ log lỗi rồi loại file đó khỏi việc gán offset (không chặn cả job)."""
+    """Đọc TRDATE THẬT bên trong 1 file core đã phân loại (CSV hoặc Excel, 2026-09-09) — tên file
+    (`{ma_nh}_DI*.csv`/`.xlsx`) KHÔNG mang ngày giao dịch, chỉ mở đọc nội dung mới biết đúng ngày
+    nào. Trả `None` nếu không đọc được (file hỏng/thiếu cột) hoặc TRDATE lẫn nhiều ngày khác nhau
+    trong cùng 1 file — không đoán, chỉ log lỗi rồi loại file đó khỏi việc gán offset (không chặn
+    cả job)."""
     try:
-        col = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig",
-                           usecols=["TRDATE"])["TRDATE"].str.strip()
+        if path.suffix.lower() in _DUOI_EXCEL_CORE:
+            col = pd.read_excel(path, dtype=str, engine="calamine",
+                                 usecols=["TRDATE"])["TRDATE"].str.strip()
+        else:
+            col = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig",
+                               usecols=["TRDATE"])["TRDATE"].str.strip()
     except Exception as e:
         log(f"[CORE] [LỖI] Không đọc được cột TRDATE của {path.name} ({e}) — bỏ qua file này khi "
             f"dò theo ngày.")
@@ -140,16 +148,21 @@ def _tim_file_core_hoac_csv_di(
     _tim_file_core_hoac_csv`). Người dùng thường gom mọi CSV/ZIP của cả phiên (nhiều ngày) vào 1
     thư mục đặt tên theo ngày T; `tim_file_glob()`/`tim_file()` chỉ dò theo ngày ĐANG HỎI nên
     không tự đệ quy vào thư mục con của ngày T khi đang hỏi offset khác — dò thêm cả 2 ngày mới
-    chịu được cách tổ chức này."""
-    pattern = f"{ma_nh}_{CHIEU}*.csv"
+    chịu được cách tổ chức này.
+
+    2026-09-09 (yêu cầu Business Owner): file đã phân loại sẵn giờ chấp nhận CẢ `.csv` lẫn
+    `.xlsx` — cùng 1 cơ chế TRDATE thật, chỉ khác cách mở file (`load_core.load_core_den_csv()`
+    tự dò đuôi). 2 định dạng bình đẳng, không định dạng nào được ưu tiên hơn."""
+    patterns = [f"{ma_nh}_{CHIEU}*.csv", f"{ma_nh}_{CHIEU}*.xlsx"]
     cac_ngay_do = {ngay} if ngay_goc is None else {ngay, ngay_goc}
     matches: list[Path] = []
     da_thay: set[Path] = set()
     for nv in cac_ngay_do:
-        for p in tim_file_glob(goc_dir, nv, pattern):
-            if p not in da_thay:
-                da_thay.add(p)
-                matches.append(p)
+        for pattern in patterns:
+            for p in tim_file_glob(goc_dir, nv, pattern):
+                if p not in da_thay:
+                    da_thay.add(p)
+                    matches.append(p)
     matches.sort()
     if len(matches) == 1 and off == 0:
         return ("csv", matches[0])
@@ -245,7 +258,7 @@ def _doc_core_di(loai: str, path: Path, ma_nh: str, log: Callable[[str], None]) 
     sử — nội dung chỉ là đọc CSV + kiểm cột bắt buộc, không có gì riêng chiều đến), rồi kiểm
     thêm `USERID` — cột chiều đi bắt buộc phải có mà `CORE_REQUIRED_COLS` của đến không đòi."""
     if loai == "csv":
-        log(f"đọc thẳng CSV đã phân loại sẵn {path.name} (bỏ qua giải mã GL02)...")
+        log(f"đọc thẳng file đã phân loại sẵn {path.name} (bỏ qua giải mã GL02)...")
         csv_path = path
     else:
         log(f"đang giải mã + phân loại {path.name}...")
