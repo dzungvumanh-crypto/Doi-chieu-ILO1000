@@ -24,11 +24,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from backend.services.doi_chieu_song_phuong_common import bao_ve_khoa_so_khoi_excel
+from backend.services.doi_chieu_song_phuong_common import (
+    COT_KHOA_HUB_CAN_BAO_VE, bao_ve_khoa_so_khoi_excel,
+)
 
 from .config import KENH_KEY_COL, RECONCILE_UNITS
-
-_COT_KHOA_HUB_CAN_BAO_VE = ("MSGREF", "TXID")
 
 _BANG1_COLS = [
     "Ngày", "Ngân hàng", "Loại", "Số món HUB (1)", "Số tiền HUB (2)",
@@ -127,7 +127,7 @@ def export_bao_cao(day_results: list[dict], out_dir: str | Path) -> list[Path]:
     # tiếng Việt khi mở bằng Excel.
     hub_csv_path = out_dir / "doi_chieu_song_phuong_kenh_hub_chi_tiet.csv"
     hub_out = _gop_chi_tiet(day_results, "hub")
-    for c in _COT_KHOA_HUB_CAN_BAO_VE:
+    for c in COT_KHOA_HUB_CAN_BAO_VE:
         if c in hub_out.columns:
             hub_out[c] = bao_ve_khoa_so_khoi_excel(hub_out[c])
     hub_out.to_csv(hub_csv_path, index=False, encoding="utf-8-sig")

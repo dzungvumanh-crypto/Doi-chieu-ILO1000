@@ -13600,10 +13600,36 @@ This may happen if you try to create UI from a background task.</pre>
         <code>test_doi_chieu_song_phuong_core_algorithm.py</code>). Toàn bộ test module Đối chiếu
         Song phương (112 test) pass.</p>
 
+      <div class="label"><span class="pill pill-red">Phát hiện nhưng CHƯA sửa</span> Cùng lỗi này khả năng còn ở các cột khác trong <code>hub_chi_tiet.csv</code> (review PR#75, Khánh, 2026-09-09)</div>
+      <p><b><code>TRACE</code> gần như chắc chắn dính đúng lỗi này</b> — bằng chứng nằm ngay trong
+        code hiện tại (<code>load_hub.py</code> và <code>process.py</code>):
+        <code>trace_norm = df["TRACE"].str.strip().str.lstrip("'0")</code>. Code phải tự
+        <code>lstrip("0")</code> nghĩa là <code>TRACE</code> <b>có số 0 đứng đầu</b> trong dữ liệu
+        thật → Excel mở CSV trực tiếp sẽ rụng đúng những số 0 đó, y hệt cơ chế đã vá cho
+        <code>TXID</code>/<code>MSGREF</code>/<code>MtId</code>. <code>CHI_NHANH</code>,
+        <code>MSGSEQ</code>, <code>REFHUB</code>, <code>SESSION</code> là ứng viên cùng loại
+        (độ tin cậy thấp hơn — mới suy từ tên cột, chưa xác nhận bằng code/dữ liệu thật).</p>
+      <p><b>Không vá trong PR này</b> — đúng phạm vi bug người dùng báo (2 cột khoá), không mở
+        rộng. Người vận hành có thể thấy <code>TXID</code> đã đúng, tưởng đã xong, rồi vài tuần
+        sau báo lại <code>TRACE</code> sai — lúc đó khó lần ra hơn vì "đã sửa rồi mà". Muốn vá,
+        thêm cột vào <code>COT_KHOA_HUB_CAN_BAO_VE</code> trong
+        <code>doi_chieu_song_phuong_common.py</code> sau khi xác nhận dữ liệu thật.</p>
+
+      <div class="label"><span class="pill pill-blue">Bẫy cho người sửa tiếp</span> <code>bao_ve_khoa_so_khoi_excel()</code> chỉ an toàn cho CSV đầu ra cuối</div>
+      <p>Hàm chỉ an toàn với file <b>không ai đọc lại</b> (đúng với 3 file trong PR này — đã grep
+        xác nhận). File <code>{ma_nh}_DEN.csv</code> của <code>doi_chieu_song_phuong_service.py</code>
+        trông giống nhưng KHÁC hẳn: nó bị chính hệ thống đọc lại ở
+        <code>doi_chieu_song_phuong_core/load_core.py</code> làm khoá đối chiếu bước Hub↔Core.
+        Cột <code>UNIT</code>/<code>TRCD</code>/<code>BUSCD</code> trong đó cũng là mã toàn chữ số
+        → nếu sau này ai đó gọi hàm này cho file ấy "cho nhất quán", <code>load_core</code> sẽ đọc
+        nguyên văn <code>="0100"</code> làm khoá → khớp trượt toàn bộ, <b>im lặng, không log/lỗi
+        nào</b>, ra hàng loạt "HUB THỪA"/"CORE THỪA" sai. Đã ghi cảnh báo dứt khoát vào docstring
+        hàm (không chỉ mô tả hiện trạng).</p>
+
     </div>
   </div>
 
-  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-04</footer>
+  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-09</footer>
 </div>
 </body>
 </html>

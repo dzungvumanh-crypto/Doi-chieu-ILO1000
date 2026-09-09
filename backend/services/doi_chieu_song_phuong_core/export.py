@@ -9,11 +9,11 @@ from pathlib import Path
 import pandas as pd
 
 from backend.services.ach.so_tien import doc_so_tien
-from backend.services.doi_chieu_song_phuong_common import bao_ve_khoa_so_khoi_excel
+from backend.services.doi_chieu_song_phuong_common import (
+    COT_KHOA_HUB_CAN_BAO_VE, bao_ve_khoa_so_khoi_excel,
+)
 
 from .match import KEY_COL
-
-_COT_KHOA_HUB_CAN_BAO_VE = ("MSGREF", "TXID")
 
 _TONG_HOP_COLS = ["Nhãn (KETQUADOICHIEU)", "Số dòng CORE", "Số tiền CORE", "Số dòng HUB", "Số tiền HUB"]
 
@@ -72,8 +72,15 @@ def export_excel(ket_qua: dict, out_dir: str | Path, base_name: str) -> list[Pat
     core_df.drop(columns=[KEY_COL], errors="ignore").to_csv(core_csv_path, index=False, encoding="utf-8-sig")
 
     hub_csv_path = out_dir / f"{base_name}_hub_chi_tiet.csv"
+    # `.copy()` KHÔNG thừa dù `.drop()` đã trả về DataFrame "mới" — cột giữ nguyên có thể vẫn
+    # chia sẻ block bộ nhớ với `hub_df` gốc tuỳ phiên bản pandas/Copy-on-Write. `hub_df` còn được
+    # dùng lại TRONG RAM sau lệnh gọi này (báo cáo tổng hợp dựng từ `ket_qua["hub_df"]`, xem
+    # `doi_chieu_song_phuong_kenh_core_service.py`) — thiếu `.copy()` thì gán `="..."` bên dưới có
+    # thể lây `="..."` ngược vào `hub_df` gốc, làm nhiễm báo cáo tổng hợp trong RAM một cách âm
+    # thầm (review PR#75, Khánh, 2026-09-09 — không test nào bắt được vì bộ test hiện chỉ kiểm 3
+    # file CSV, không kiểm workbook tổng hợp).
     hub_out = hub_df.drop(columns=[KEY_COL], errors="ignore").copy()
-    for c in _COT_KHOA_HUB_CAN_BAO_VE:
+    for c in COT_KHOA_HUB_CAN_BAO_VE:
         if c in hub_out.columns:
             hub_out[c] = bao_ve_khoa_so_khoi_excel(hub_out[c])
     hub_out.to_csv(hub_csv_path, index=False, encoding="utf-8-sig")

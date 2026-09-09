@@ -12,9 +12,9 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       của Excel) bị **làm tròn chữ số cuối về 0** — 16 chữ số của SPT vượt giới hạn này ở mọi giá trị
     + Fix: các cột khoá này giờ được bọc `="..."` trước khi ghi CSV, ép Excel hiểu là công thức trả
       về chuỗi và hiển thị đúng nguyên văn
-    + ⚠️ **File CSV trên đĩa đổi định dạng ở đúng các cột này.** Mở bằng Excel (double-click hoặc
-      import) vẫn ra đúng số như trước giờ. Nếu mở bằng trình soạn thảo văn bản hoặc đưa vào công cụ
-      khác không phải Excel để đọc CSV thô, sẽ thấy thêm `="..."` bao quanh giá trị — không phải lỗi,
+    + ⚠️ **File CSV trên đĩa đổi định dạng ở đúng các cột này.** Mở bằng Excel bằng cách
+      double-click vẫn ra đúng số như trước giờ, nhưng mở bằng trình soạn thảo văn bản, bằng
+      Power Query, hoặc công cụ khác đọc CSV thô sẽ thấy `="..."` bao quanh giá trị — không phải lỗi,
       chỉ cần biết trước để khỏi bất ngờ
     + ✅ Không đổi quyền, không cần thao tác gì thêm ngoài lưu ý trên
 
