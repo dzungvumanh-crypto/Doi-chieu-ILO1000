@@ -14970,7 +14970,98 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
-  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-08</footer>
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">127</span>
+      <span class="card-title">Đối soát CITAD — PR#82: bỏ cột "Dịch vụ", thêm cột "Số RefHub" ở nhóm Agribank; vá được nửa điểm mù SCNL-thiếu-ngày-kênh-trả</span>
+      <span class="badge badge-done">Đã merge — còn 1 chỗ sót đã ghi rõ bên dưới</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-blue">Yêu cầu</span> Phòng Thanh toán 09/09/2026</div>
+      <p>Bỏ cột "Dịch vụ" (nội dung suy thẳng được từ cột "Loại GD" IH/IL ngay bên cạnh), thêm cột
+        "Số RefHub" vốn đã có sẵn trong dữ liệu IPCAS nhưng chưa từng hiện ra báo cáo. Field
+        <code>dich_vu</code> <b>không</b> bị xoá ở tầng dữ liệu — vẫn tính như cũ, chỉ thôi hiển thị.</p>
+
+      <div class="label"><span class="pill pill-green">Quyết định</span> RefHub xếp vào nhóm AGRIBANK (IPCAS), không lấp chỗ trống của "Dịch vụ"</div>
+      <p>Chỗ cũ của "Dịch vụ" nằm giữa dải nhóm "CITAD (NHNN)". Đặt RefHub vào đó thì rẻ hơn nhiều
+        (không phải đụng chỉ số cột nào), nhưng <b>sai nguồn dữ liệu</b>: <code>refhub</code> do
+        <code>_parse_ipcas_text()</code> đọc từ file IPCAS, phía CITAD/Hub không hề có field này.
+        Chọn đặt cuối nhóm Agribank và chấp nhận cái giá: phải sửa lại <b>mọi</b> chỉ số cột viết
+        cứng (<code>ci &lt;= 8</code> → <code>7</code>, <code>ci == 8</code> → <code>7</code>,
+        <code>vals[7]</code> → <code>vals[6]</code>, hai bảng <code>_COL_WIDTHS*</code>, ba dải merge
+        nhóm tiêu đề) rải trong cả 3 hàm xuất Excel.</p>
+      <table>
+        <tr><th>Dải nhóm dòng 4</th><th>Trước</th><th>Sau</th></tr>
+        <tr><td>CITAD (NHNN)</td><td>E4:H4 (4 cột)</td><td>E4:G4 (3 cột — mất "Dịch vụ")</td></tr>
+        <tr><td>AGRIBANK (IPCAS)</td><td>I4:L4 (4 cột)</td><td>H4:L4 (5 cột — nhận "Số RefHub")</td></tr>
+      </table>
+      <p>Kiểm chứng bằng cách dựng file .xlsx thật từ cả 3 hàm rồi đọc lại: mỗi cột cũ vẫn nằm đúng
+        nhóm cũ của nó, không cột nào bị đổi nhóm theo. "Số RefHub" cũng thừa hưởng đúng độ rộng 28/32
+        mà "Dịch vụ" để lại.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi thật đã sửa</span> Dòng ĐÃ KHỚP luôn trống cột RefHub</div>
+      <p>Dòng <code>both</code> dựng bằng <code>{**r, ...}</code> với <code>r</code> là dòng CITAD —
+        không có <code>refhub</code> — rồi chỉ chép tay đúng 3 field
+        <code>key_agri/nh_nhan/trang_thai</code> từ dòng IPCAS <code>m</code>. Bỏ sót
+        <code>refhub</code>. Hệ quả trước khi sửa: chỉ dòng "Chỉ Agribank" chưa khớp mới có RefHub,
+        còn mọi lệnh đã khớp đều trống. Cùng lớp lỗi ở dict <code>only_ipcas</code> — dict này liệt kê
+        tường minh từng field thay vì <code>**r</code> nên thiếu hẳn field mới thêm sau, dù
+        <code>r</code> ở đó <b>chính là</b> dòng gốc IPCAS luôn có sẵn refhub.</p>
+
+      <div class="label"><span class="pill pill-green">Đổi cách làm</span> <code>continue</code> → cờ <code>nkt_thieu</code>, hành vi đầu-cuối giữ nguyên</div>
+      <p>Quy tắc 27/08/2026: lệnh Đi báo <code>SCNL</code> (đã sang kênh thành công) nhưng
+        <code>NGAY_KENH_TRA</code> trống thì kênh chưa thực sự xác nhận, <b>không</b> được tự động
+        khớp. Cách cũ: <code>continue</code> ngay trong parser, xoá hẳn dòng khỏi kết quả. Cái giá
+        không ai để ý: xoá luôn <code>refhub</code> — đúng thứ người chấm cần để tự tra cứu bên
+        Agribank khi thấy dòng "Chỉ CITAD" đó. Nay giữ dòng lại, đánh dấu <code>nkt_thieu=True</code>,
+        <code>reconcile.py</code> loại nó khỏi <code>ipcas_di_map</code> (vẫn không tự động khớp,
+        đúng ý gốc) nhưng giữ riêng ở <code>ipcas_di_nkt_thieu_map</code> để chép refhub sang dòng
+        "Chỉ CITAD" tương ứng.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi phát sinh, tác giả tự tìm ra trước khi đóng gói</span> Dòng <code>nkt_thieu</code> làm bộ đếm trùng lặp sai</div>
+      <p>Giữ dòng lại nghĩa là nó đi tiếp vào <code>ipcas_identity_count</code> — bộ đếm "dòng này bị
+        lặp lại y hệt bao nhiêu lần" theo khoá mịn (khoá này <b>cố ý không có</b>
+        <code>msgref</code>). Nếu nó tình cờ trùng khoá mịn với một dòng KHỚP khác thì dòng khớp kia
+        bị tính dư 1 lần: vừa sai ghi chú "IPCAS ghi nhận N lần", vừa đẻ thêm 1 dòng "Chỉ IPCAS" ma
+        ở khoá không liên quan — báo hai lần cho đúng một chênh lệch. Loại
+        <code>nkt_thieu</code> khỏi bộ đếm này để giữ nguyên hành vi cũ (lúc đó dòng chưa từng vào
+        tới đây).</p>
+
+      <div class="label"><span class="pill pill-green">Tác dụng phụ tốt</span> <code>total_ipcas</code> hết đếm thiếu</div>
+      <p>Card 109 ghi điểm mù: dòng SCNL-thiếu-ngày-kênh-trả bị loại ngay lúc đọc file nên
+        <code>total_ipcas</code> trong tab Lịch sử <b>đếm thiếu đúng số dòng này</b>. Nay dòng còn
+        trong <code>ipcas_rows</code> nên con số đếm đúng trở lại. Đổi lại: số "tổng dòng IPCAS" của
+        các lượt chấm từ 09/09/2026 <b>không so sánh trực tiếp được</b> với các lượt cũ đã lưu trong
+        lịch sử — cùng một file sẽ cho con số lớn hơn trước.</p>
+
+      <div class="label"><span class="pill pill-gray">Chưa làm, biết mà để lại</span></div>
+      <p><b>Nhánh <code>lech_trang_thai</code> vẫn không có RefHub.</b> Dict đó (<code>reconcile.py</code>,
+        nhánh <code>else</code> của <code>tt in VALID_DI</code>) cũng dựng từ <code>{**r, ...}</code>
+        và cũng chỉ chép 3 field như nhánh <code>both</code> — PR sửa 6 nhánh khác nhưng sót đúng
+        nhánh này. Đã chạy thử xác nhận: dòng <code>lech_trang_thai</code> trả về
+        <code>refhub = None</code> trong khi <code>m</code> cầm sẵn giá trị thật. Trớ trêu là đây
+        đúng nhóm cần refhub nhất — IPCAS <b>có</b> lệnh nhưng trạng thái chưa xong, người chấm bắt
+        buộc phải sang Agribank tra. Sửa chỉ 1 dòng
+        (<code>'refhub': m.get('refhub', ''),</code>); để lại vì người dùng chốt merge trước, làm
+        riêng sau.</p>
+      <p><b>Nửa còn lại của điểm mù card 109 vẫn nguyên.</b> Dòng <code>nkt_thieu</code> mà CITAD
+        <b>không hề có</b> lệnh tương ứng vẫn biến mất khỏi báo cáo — không ra "Chỉ Agribank", vì
+        vòng lặp "IPCAS Đi dư" duyệt <code>ipcas_di_map</code> mà dòng này đã bị loại khỏi đó. Không
+        phải regression (trước PR nó cũng biến mất, chỉ khác là biến mất sớm hơn ở parser), nhưng
+        lập luận của chính PR — "lệnh này rất có thể VẪN tồn tại thật ở Agribank" — lại nói ngược:
+        nếu tồn tại thật mà CITAD không có thì đó là chênh lệch thật đang bị giấu, và là ca đáng ngờ
+        nhất. Cố ý không tự quyết trong PR này: cho dòng đó hiện ra "Chỉ Agribank" sẽ làm số dòng
+        lệch tăng thêm, phải hỏi Phòng Thanh toán trước.</p>
+
+      <div class="note">Test: 50/50 test <code>doi_soat_citad</code> pass (6 test mới), full suite
+        1607/1607 pass, không regression. PR mô tả 33 test fail — không tái hiện được, là lỗi môi
+        trường máy tác giả (ImportError ở 2 file không liên quan).</div>
+
+    </div>
+  </div>
+
+  <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-09</footer>
 </div>
 </body>
 </html>

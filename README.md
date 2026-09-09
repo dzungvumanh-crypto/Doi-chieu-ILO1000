@@ -678,11 +678,22 @@ Truy cập:
   nhưng kênh chưa ghi ngày trả thì chưa phải xác nhận thật — lệnh CITAD tương ứng rơi vào nhóm
   **Chỉ CITAD** để người dùng tự xác minh. Hệ quả: **số dòng lệch có thể tăng**, số liệu
   trước/sau mốc này không so sánh trực tiếp được
-- 🔴 **Điểm mù đã biết của quy tắc trên**: dòng IPCAS nói trên bị loại ngay lúc đọc file, nên nếu
-  CITAD **không hề có** lệnh đó thì dòng biến mất khỏi báo cáo — trước đây nó hiện ở nhóm
-  **Chỉ Agribank**. Đây đúng là ca đáng ngờ nhất (IPCAS ghi đã đi kênh mà CITAD chưa từng thấy).
-  `total_ipcas` trong tab Lịch sử cũng đếm thiếu đúng số dòng này. Xem
-  `docs/Implementation-notes.html` (card 109)
+- 🔴 **Điểm mù đã biết của quy tắc trên** (từ 09/09/2026 vá được một nửa): dòng IPCAS nói trên nay
+  **vẫn được giữ lại** khi đọc file, nên nếu CITAD **có** lệnh tương ứng thì dòng "Chỉ CITAD" nay
+  kèm luôn **Số RefHub** để tra cứu bên Agribank, và `total_ipcas` trong tab Lịch sử **hết đếm
+  thiếu**. Nửa còn lại chưa vá: nếu CITAD **không hề có** lệnh đó thì dòng vẫn biến mất khỏi báo
+  cáo, không hiện ở nhóm **Chỉ Agribank** — đây đúng là ca đáng ngờ nhất (IPCAS ghi đã đi kênh mà
+  CITAD chưa từng thấy), đang chờ Phòng Thanh toán chốt vì cho hiện sẽ làm số dòng lệch tăng thêm.
+  Xem `docs/Implementation-notes.html` (card 109, 127)
+- ⚠️ **`total_ipcas` từ 09/09/2026 không so sánh trực tiếp được với các lượt chấm cũ** — cùng một
+  file IPCAS nay cho con số lớn hơn trước, vì hết đếm thiếu nhóm dòng nói trên (không phải do dữ
+  liệu thay đổi)
+- **Cột "Dịch vụ" đã bỏ, thay bằng cột "Số RefHub"** (09/09/2026, yêu cầu Phòng Thanh toán) — trên
+  cả Excel xuất ra lẫn bảng "Kết quả" trên màn hình. Nội dung cột "Dịch vụ" cũ suy thẳng được từ
+  cột **Loại GD** (IH = giá trị cao, IL = giá trị thấp) ngay bên cạnh. "Số RefHub" đặt **cuối nhóm
+  AGRIBANK (IPCAS)** vì đó là dữ liệu gốc của file IPCAS, phía CITAD không có
+- 🔴 **Dòng nhóm "Lệch trạng thái" hiện vẫn để trống cột Số RefHub** dù IPCAS có sẵn giá trị đó —
+  đúng nhóm cần tra cứu nhất. Đang chờ vá; xem `docs/Implementation-notes.html` (card 127)
 - Cảnh báo khi chọn **trùng nội dung file** (băm SHA-256 toàn bộ byte, không dựa vào tên file).
   ⚠️ Chỉ là cảnh báo, bấm qua được — nhưng chọn nhầm trùng file nay khiến **mỗi dòng đẻ 1 dòng
   lệch giả**, không còn bị lọc âm thầm như trước

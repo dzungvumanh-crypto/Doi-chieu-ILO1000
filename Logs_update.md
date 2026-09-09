@@ -4,6 +4,28 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 09/09/2026 Đối soát CITAD - **Bỏ cột "Dịch vụ", thêm cột "Số RefHub"; lệnh đã khớp nay cũng hiện RefHub**
+    + **Cột "Dịch vụ" đã bỏ khỏi báo cáo** — cả file Excel xuất ra lẫn bảng "Kết quả" trên màn hình.
+      Nội dung cột đó đọc thẳng được từ cột **Loại GD** ngay bên cạnh: IH là chuyển giá trị cao, IL
+      là chuyển giá trị thấp. Số liệu bên trong **không bị xoá**, chỉ thôi hiện ra
+    + **Thêm cột "Số RefHub"** — mã tham chiếu vốn đã nằm sẵn trong file IPCAS nhưng từ trước tới nay
+      chưa bao giờ được đưa ra báo cáo. Cột này nằm **cuối nhóm AGRIBANK (IPCAS)**, không nằm chỗ cũ
+      của "Dịch vụ", vì đó là số liệu của Agribank chứ không phải của CITAD
+    + **Trước đây chỉ dòng chưa khớp mới có RefHub, lệnh đã khớp thì trống trơn.** Nay mọi lệnh có
+      RefHub đều hiện đủ
+    + **Lệnh Đi mà IPCAS báo "đã sang kênh" nhưng chưa ghi ngày kênh trả**: vẫn rơi vào nhóm
+      **Chỉ CITAD** như quy tắc 28/08/2026, nhưng nay **kèm theo số RefHub** để tra cứu bên Agribank.
+      Trước đây dòng này bị bỏ ngay từ lúc đọc file nên mất luôn số RefHub, người chấm không có gì
+      trong tay để tra
+    + ⚠️ **Con số "tổng dòng IPCAS" trong tab Lịch sử nay lớn hơn trước với cùng một file** — vì
+      trước đây nó đếm thiếu đúng nhóm dòng nói trên. Đây là sửa đúng, không phải dữ liệu thay đổi.
+      Hệ quả: **không so sánh trực tiếp con số này với các lượt chấm trước ngày 09/09/2026**
+    + 🔴 **Còn một chỗ chưa xong**: dòng thuộc nhóm **Lệch trạng thái** vẫn để trống cột Số RefHub,
+      dù bên IPCAS có sẵn giá trị đó — trong khi đây đúng là nhóm cần tra cứu nhất. Sẽ vá riêng
+    + 🔴 **Vẫn giữ điểm mù cũ**: lệnh IPCAS báo đã đi kênh mà CITAD **không hề có** thì dòng vẫn
+      không hiện ra báo cáo. Đang chờ Phòng Thanh toán chốt, vì cho hiện sẽ làm số dòng lệch tăng
+    + ✅ **Không phải làm gì sau khi cập nhật, không đổi dữ liệu, không cấp thêm quyền**
+
 - 08/09/2026 Chuẩn hoá văn bản - **Rà soát lại trên hai văn bản thật — sửa 8 chỗ, khối chữ ký và Nơi nhận**
     + **Khối "Nơi nhận" gõ bằng nút chấm tròn của Word thì không được sửa gì cả.** Dấu chấm tròn đó
       do Word **tự vẽ**, nó không nằm trong chữ nên phần mềm đọc dòng "Như trên;" mà không thấy dấu
