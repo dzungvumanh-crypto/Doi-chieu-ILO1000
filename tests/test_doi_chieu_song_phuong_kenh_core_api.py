@@ -130,6 +130,17 @@ def _core_csv_upload_file_trdate(filename: str, trdate: str) -> tuple:
     return ("files", (filename, df.to_csv(index=False).encode("utf-8-sig"), "text/csv"))
 
 
+def _core_xlsx_upload_file_trdate(filename: str, trdate: str) -> tuple:
+    """Như `_core_csv_upload_file_trdate()` nhưng ghi Excel (2026-09-09, hỗ trợ file core dạng
+    .xlsx bên cạnh .csv/.zip)."""
+    cols = ["TRDATE"] + _GL02_COLS
+    row = {"TRDATE": trdate, **_gl02_row()}
+    df = pd.DataFrame([row], columns=cols)
+    buf = io.BytesIO()
+    df.to_excel(buf, index=False, engine="openpyxl")
+    return ("files", (filename, buf.getvalue(), _XLSX_MIME))
+
+
 def _doc_csv(content: bytes) -> list[tuple]:
     """Đọc 1 file CSV kết quả (đổi 2026-08-31, xem export.py) — trả list dòng dạng tuple, cùng
     hình dạng `_doc_sheets()` trả cho 1 sheet, để so sánh dễ với assertion cũ."""
@@ -391,7 +402,7 @@ class TestStartFolderEndpoint:
         assert prog["ket_qua"]["hub_core"] is not None, prog
 
         logs = "\n".join(prog["logs"])
-        assert "[CORE T] đọc thẳng CSV đã phân loại sẵn 202_DEN.csv" in logs
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DEN.csv" in logs
         # T+1/T+2/T+3 KHÔNG có ZIP đúng ngày -> phải báo "bỏ qua", KHÔNG được đọc lại CSV của T
         for nhan in ("T+1", "T+2", "T+3"):
             assert f"[CORE {nhan}] không tìm thấy file CSV/GL02" in logs, logs
@@ -483,8 +494,89 @@ class TestStartUploadEndpoint:
         assert prog["ket_qua"]["hub_core"] is not None
 
         logs = "\n".join(prog["logs"])
-        assert "[CORE T] đọc thẳng CSV đã phân loại sẵn 202_DEN_dot1.csv" in logs, logs
-        assert "[CORE T+1] đọc thẳng CSV đã phân loại sẵn 202_DEN_dot2.csv" in logs, logs
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DEN_dot1.csv" in logs, logs
+        assert "[CORE T+1] đọc thẳng file đã phân loại sẵn 202_DEN_dot2.csv" in logs, logs
+
+    def test_1_file_xlsx_core_qua_upload_dung_duoc(self, admin_client, monkeypatch, tmp_path):
+        """2026-09-09: file core dạng .xlsx (thay vì .csv) — yêu cầu Business Owner mở rộng thêm
+        định dạng Excel bên cạnh .zip/.csv đã có."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core/start_upload",
+            files=[*_hub_kenh_upload_files(ngay="20260825"),
+                   _core_xlsx_upload_file_trdate("202_DEN.xlsx", "20260825")],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["hub_core"] is not None
+        logs = "\n".join(prog["logs"])
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DEN.xlsx" in logs, logs
+
+    def test_da_dang_file_1_ngay_zip_csv_xlsx_tron_lan_qua_upload(
+        self, admin_client, monkeypatch, tmp_path,
+    ):
+        """Đa dạng định dạng file trong CÙNG 1 lượt upload, CÙNG 1 phiên ngày T: HUB .zip + kênh
+        .xlsx + CSV core (T, đã phân loại) + Excel core (T+1, đã phân loại) + GL02 .zip (T+2, cần
+        giải mã) — đúng yêu cầu 'đa dạng file và nhiều file trong 1 ngày' 2026-09-09, phủ đủ 3
+        "loai" mà `_doc_core()` phân biệt (csv/excel-qua-nhánh-csv, zip) trong CÙNG 1 job."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core/start_upload",
+            files=[
+                *_hub_kenh_upload_files(ngay="20260825"),
+                _core_csv_upload_file_trdate("202_DEN_T.csv", "20260825"),
+                _core_xlsx_upload_file_trdate("202_DEN_Tcong1.xlsx", "20260826"),
+                _gl02_upload_file(ngay="20260827"),
+            ],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["kenh_hub"] is not None
+        assert prog["ket_qua"]["hub_core"] is not None
+
+        logs = "\n".join(prog["logs"])
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DEN_T.csv" in logs, logs
+        assert "[CORE T+1] đọc thẳng file đã phân loại sẵn 202_DEN_Tcong1.xlsx" in logs, logs
+        assert "[CORE T+2] đang giải mã + phân loại GL02_20260827_1000.zip" in logs, logs
+
+    def test_nhieu_ngay_nhieu_loai_file_qua_upload(self, admin_client, monkeypatch, tmp_path):
+        """Đa dạng file + nhiều ngày trong CÙNG 1 lượt upload — đúng yêu cầu 'nhiều file trong
+        nhiều ngày nhiều loại file' 2026-09-09: 3 file core CHO 3 NGÀY khác nhau (T là .xlsx, T+1
+        là .csv, T+2 là .zip GL02 cần giải mã — CORE chiều đến chỉ có offset T..T+3, không có
+        offset âm) cùng 1 lượt."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core/start_upload",
+            files=[
+                *_hub_kenh_upload_files(ngay="20260825"),
+                _core_xlsx_upload_file_trdate("202_DEN_homnay.xlsx", "20260825"),
+                _core_csv_upload_file_trdate("202_DEN_homsau.csv", "20260826"),
+                _gl02_upload_file(ngay="20260827"),
+            ],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        assert prog["ket_qua"]["hub_core"] is not None
+
+        logs = "\n".join(prog["logs"])
+        assert "[CORE T] đọc thẳng file đã phân loại sẵn 202_DEN_homnay.xlsx" in logs, logs
+        assert "[CORE T+1] đọc thẳng file đã phân loại sẵn 202_DEN_homsau.csv" in logs, logs
+        assert "[CORE T+2] đang giải mã + phân loại GL02_20260827_1000.zip" in logs, logs
 
     def test_khong_chon_file_tra_422(self, admin_client):
         r = admin_client.post(

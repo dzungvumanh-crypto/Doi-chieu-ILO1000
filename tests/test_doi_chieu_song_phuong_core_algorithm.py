@@ -350,6 +350,12 @@ class TestTimFile:
         rows = [{**_core_row(), "TRDATE": d} for d in trdates]
         pd.DataFrame(rows, columns=["TRDATE"] + _CORE_COLS).to_csv(path, index=False)
 
+    def _viet_xlsx_trdate(self, path, *trdates):
+        """Như `_viet_csv_trdate` nhưng ghi Excel (2026-09-09, hỗ trợ file core dạng .xlsx)."""
+        rows = [{**_core_row(), "TRDATE": d} for d in trdates]
+        pd.DataFrame(rows, columns=["TRDATE"] + _CORE_COLS).to_excel(
+            path, index=False, engine="openpyxl")
+
     def test_1_file_1_offset_0_dung_duong_nhanh_khong_can_doc_noi_dung(self, tmp_path):
         """Đúng 1 file khớp + hỏi offset 0 (ngày T) → tin luôn, KHÔNG mở đọc nội dung (đường nhanh,
         giữ hiệu năng cho trường hợp phổ biến nhất)."""
@@ -373,6 +379,44 @@ class TestTimFile:
 
         # Không file nào có TRDATE=20260825 (offset 2) → không tự nhận nhầm, trả None
         assert pipeline._tim_file_core_hoac_csv(tmp_path, "20260825", "202", 2) is None
+
+    def test_1_file_xlsx_offset_0_dung_duong_nhanh(self, tmp_path):
+        """2026-09-09: file core .xlsx đơn lẻ cũng đi được đường nhanh y hệt .csv."""
+        self._viet_xlsx_trdate(tmp_path / "202_DEN.xlsx", "20260823")
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0)
+        assert loai == "csv" and p.name == "202_DEN.xlsx"
+
+    def test_nhieu_file_xlsx_khac_ngay_tu_gan_dung_theo_trdate(self, tmp_path):
+        """Nhiều file .xlsx khác ngày trong 1 thư mục — tự gán đúng offset qua TRDATE thật, y hệt
+        cơ chế đã làm cho .csv (2026-09-08)."""
+        self._viet_xlsx_trdate(tmp_path / "202_DEN_dot1.xlsx", "20260823")
+        self._viet_xlsx_trdate(tmp_path / "202_DEN_dot2.xlsx", "20260824")
+
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0)
+        assert loai == "csv" and p.name == "202_DEN_dot1.xlsx"
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260824", "202", 1)
+        assert loai == "csv" and p.name == "202_DEN_dot2.xlsx"
+
+    def test_tron_csv_va_xlsx_khac_ngay_deu_dung_duoc(self, tmp_path):
+        """Trộn lẫn 1 file .csv (ngày T) và 1 file .xlsx (ngày T+1) trong CÙNG thư mục — 2 định
+        dạng bình đẳng, không định dạng nào được ưu tiên hơn, chỉ xét TRDATE thật bên trong."""
+        self._viet_csv_trdate(tmp_path / "202_DEN_csv.csv", "20260823")
+        self._viet_xlsx_trdate(tmp_path / "202_DEN_xlsx.xlsx", "20260824")
+
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0)
+        assert loai == "csv" and p.name == "202_DEN_csv.csv"
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260824", "202", 1)
+        assert loai == "csv" and p.name == "202_DEN_xlsx.xlsx"
+
+    def test_csv_va_xlsx_cung_ngay_khong_tu_chon(self, tmp_path):
+        """1 file .csv và 1 file .xlsx CÙNG đại diện 1 ngày (TRDATE giống nhau) — vẫn phải chặn
+        như "2 file trùng ngày", không tự chọn định dạng nào ưu tiên hơn."""
+        self._viet_csv_trdate(tmp_path / "202_DEN_csv.csv", "20260823")
+        self._viet_xlsx_trdate(tmp_path / "202_DEN_xlsx.xlsx", "20260823")
+        logs = []
+        assert pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260823", "202", 1, logs.append) is None
+        assert any("KHÔNG tự chọn" in m for m in logs)
 
     def test_2_file_gom_chung_1_thu_muc_dat_ten_theo_ngay_T(self, tmp_path):
         """Phát hiện qua phản biện trước PR (2026-09-08): người dùng thường gom MỌI CSV của cả

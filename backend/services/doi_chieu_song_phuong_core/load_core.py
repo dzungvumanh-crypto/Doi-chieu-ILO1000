@@ -14,9 +14,32 @@ from .config import (
 )
 
 
+_DUOI_EXCEL = {".xlsx", ".xls"}
+
+
 def load_core_den_csv(path: str | Path) -> pd.DataFrame:
-    """Đọc 1 file `{ma_nh}_DEN.csv` (đã phân loại sẵn, luôn CRAMOUNT ∈ ZERO_AMOUNTS)."""
-    df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    """Đọc 1 file `{ma_nh}_DEN.csv`/`.xlsx` (đã phân loại sẵn, luôn CRAMOUNT ∈ ZERO_AMOUNTS) —
+    tên hàm giữ chữ ".csv" vì dấu vết lịch sử (dùng chung cho cả 2 chiều, xem
+    `doi_chieu_song_phuong_core_di/pipeline.py::_doc_core_di`), thật ra đọc được cả Excel
+    (2026-09-09, yêu cầu Business Owner: người dùng có thể chỉ có sẵn bản Excel thay vì CSV).
+
+    Excel dùng `engine="calamine"` — đúng quy ước đã kiểm chứng dữ liệu thật của module này
+    (`doi_chieu_song_phuong_kenh/load_kenh.py`: `openpyxl` đọc sai/mất dữ liệu âm thầm với file có
+    lỗi thẻ `<dimension>`, calamine đọc đúng + nhanh hơn). `dtype=str` giữ nguyên định dạng CỘT
+    PANDAS — KHÔNG tự phục hồi được ID dài bị chính Excel làm tròn thành số/ký hiệu khoa học TRƯỚC
+    khi python đọc tới (lỗi nằm ở lúc tạo file, không phải lúc đọc — đúng lớp lỗi đã dính thật ở
+    khoá SPT nơi khác, PR #75). Chưa kiểm chứng bằng dữ liệu thật rằng schema CORE (TRBRCD 4 số,
+    USERID/REFERENCE có tiền tố chữ) miễn nhiễm — chỉ là suy đoán hợp lý (các cột này không phải
+    chuỗi số thuần dài như SPT) chưa có ca thật xác nhận. Nếu vẫn dính (VD chi nhánh mới có số 0
+    đầu bị Excel bỏ), hậu quả là khoá sai → dòng đó hiện "chưa khớp" trong báo cáo (không phải
+    khớp sai lặng lẽ) vì `CORE_REQUIRED_COLS` vẫn đủ, chỉ giá trị bên trong sai — không có lưới
+    chặn nào phát hiện RA sớm hơn thế; cần Business Owner biết nếu thấy dòng "CORE THỪA" bất
+    thường sau khi đổi sang nộp Excel."""
+    path = Path(path)
+    if path.suffix.lower() in _DUOI_EXCEL:
+        df = pd.read_excel(path, dtype=str, engine="calamine")
+    else:
+        df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
     missing = CORE_REQUIRED_COLS - set(df.columns)
     if missing:
         raise ValueError(f"File core thiếu cột bắt buộc: {', '.join(sorted(missing))}")

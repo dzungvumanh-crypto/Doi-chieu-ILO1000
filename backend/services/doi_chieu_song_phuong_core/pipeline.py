@@ -69,16 +69,23 @@ def _tim_file_hub(
     return matches[0]
 
 
+_DUOI_EXCEL_CORE = {".xlsx", ".xls"}
+
+
 def _doc_trdate_1_file(path: Path, log: Callable[[str], None]) -> str | None:
-    """Đọc TRDATE THẬT bên trong 1 file CSV core đã phân loại — tên file (`{ma_nh}_DEN*.csv`)
-    KHÔNG mang ngày giao dịch, chỉ mở đọc nội dung mới biết đúng ngày nào. Trả `None` nếu không
-    đọc được (file hỏng/thiếu cột) hoặc TRDATE lẫn nhiều ngày khác nhau trong cùng 1 file — không
-    đoán, chỉ log lỗi rồi loại file đó khỏi việc gán offset (không chặn cả job). Mirror
-    `doi_chieu_song_phuong_core_di/pipeline.py::_doc_trdate_1_file` — 2 chiều dùng chung nguồn
-    GL02 nên cùng 1 luật, không viết lại logic khác nhau."""
+    """Đọc TRDATE THẬT bên trong 1 file core đã phân loại (CSV hoặc Excel, 2026-09-09) — tên file
+    (`{ma_nh}_DEN*.csv`/`.xlsx`) KHÔNG mang ngày giao dịch, chỉ mở đọc nội dung mới biết đúng ngày
+    nào. Trả `None` nếu không đọc được (file hỏng/thiếu cột) hoặc TRDATE lẫn nhiều ngày khác nhau
+    trong cùng 1 file — không đoán, chỉ log lỗi rồi loại file đó khỏi việc gán offset (không chặn
+    cả job). Mirror `doi_chieu_song_phuong_core_di/pipeline.py::_doc_trdate_1_file` — 2 chiều dùng
+    chung nguồn GL02 nên cùng 1 luật, không viết lại logic khác nhau."""
     try:
-        col = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig",
-                           usecols=["TRDATE"])["TRDATE"].str.strip()
+        if path.suffix.lower() in _DUOI_EXCEL_CORE:
+            col = pd.read_excel(path, dtype=str, engine="calamine",
+                                 usecols=["TRDATE"])["TRDATE"].str.strip()
+        else:
+            col = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig",
+                               usecols=["TRDATE"])["TRDATE"].str.strip()
     except Exception as e:
         log(f"[CORE] [LỖI] Không đọc được cột TRDATE của {path.name} ({e}) — bỏ qua file này khi "
             f"dò theo ngày.")
@@ -155,16 +162,22 @@ def _tim_file_core_hoac_csv(
     offset≠0, thư mục `D.M` của ngày đó không tồn tại, `tim_file_glob` rơi thẳng về `goc_dir`
     (KHÔNG đệ quy vào thư mục con `D.M` của ngày T) → không thấy file dù nó đang nằm ngay đó. Dò cả
     2 ngày (gộp, khử trùng) vừa chịu được cách tổ chức "gom vào thư mục ngày T" vừa chịu được cách
-    tổ chức "mỗi ngày 1 thư mục riêng" (bên nào tồn tại thì dùng)."""
-    pattern = f"{ma_nh}_DEN*.csv"
+    tổ chức "mỗi ngày 1 thư mục riêng" (bên nào tồn tại thì dùng).
+
+    2026-09-09 (yêu cầu Business Owner): file đã phân loại sẵn giờ chấp nhận CẢ `.csv` lẫn
+    `.xlsx` — cùng 1 cơ chế TRDATE thật, chỉ khác cách mở file (`load_core.load_core_den_csv()`
+    tự dò đuôi). Không có ưu tiên .csv hơn .xlsx hay ngược lại — 2 định dạng bình đẳng, nếu cả 2
+    cùng đại diện 1 ngày thì vẫn là "2 file cùng đại diện 1 ngày", chặn như nhau."""
+    patterns = [f"{ma_nh}_DEN*.csv", f"{ma_nh}_DEN*.xlsx"]
     cac_ngay_do = {ngay} if ngay_goc is None else {ngay, ngay_goc}
     matches: list[Path] = []
     da_thay: set[Path] = set()
     for nv in cac_ngay_do:
-        for p in tim_file_glob(goc_dir, nv, pattern):
-            if p not in da_thay:
-                da_thay.add(p)
-                matches.append(p)
+        for pattern in patterns:
+            for p in tim_file_glob(goc_dir, nv, pattern):
+                if p not in da_thay:
+                    da_thay.add(p)
+                    matches.append(p)
     matches.sort()
     if len(matches) == 1 and off == 0:
         return ("csv", matches[0])
@@ -226,11 +239,13 @@ def _doc_hub_tu_da_loc(hub_da_loc_base: pd.DataFrame, log: Callable[[str], None]
 
 
 def _doc_core(loai: str, path: Path, ma_nh: str, log: Callable[[str], None]) -> pd.DataFrame:
-    """`loai="csv"`: đọc thẳng `{ma_nh}_DEN.csv` đã phân loại sẵn — không giải mã. `loai="zip"`:
-    giải mã + phân loại GL02 (tái dùng `doi_chieu_song_phuong_service.process_zip`, không sửa
-    module phân loại) rồi đọc đúng file `{ma_nh}_DEN.csv` vừa sinh ra."""
+    """`loai="csv"`: đọc thẳng `{ma_nh}_DEN.csv`/`.xlsx` đã phân loại sẵn — không giải mã (tên
+    `loai` giữ "csv" làm nhãn chung cho "đã phân loại sẵn", `load_core_den_csv()` tự dò đuôi thật,
+    xem `_tim_file_core_hoac_csv`). `loai="zip"`: giải mã + phân loại GL02 (tái dùng
+    `doi_chieu_song_phuong_service.process_zip`, không sửa module phân loại) rồi đọc đúng file
+    `{ma_nh}_DEN.csv` vừa sinh ra."""
     if loai == "csv":
-        log(f"đọc thẳng CSV đã phân loại sẵn {path.name} (bỏ qua giải mã GL02)...")
+        log(f"đọc thẳng file đã phân loại sẵn {path.name} (bỏ qua giải mã GL02)...")
         csv_path = path
     else:
         log(f"đang giải mã + phân loại {path.name}...")
