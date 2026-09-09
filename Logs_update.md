@@ -4,6 +4,53 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 09/09/2026 Đối chiếu Song phương — chiều ĐẾN (PR #81) - **Nhận file core Excel, và tự đọc ngày thật bên trong file thay vì đoán theo thứ tự**
+    + ✅ **File core đã phân loại sẵn nay nộp được cả `.xlsx`**, không chỉ `.csv` như trước
+      (yêu cầu Phòng nghiệp vụ 09/09). Cách dùng không đổi gì, chỉ là chọn thêm được loại file
+    + ✅ **Nộp cùng lúc nhiều file core của nhiều ngày khác nhau (T, T+1…) đã chạy được.** Trước
+      đây hệ thống buộc "file CSV chỉ dùng cho ngày T", có sẵn file của T+1 cũng không nhận —
+      đó là lỗi người dùng báo ngày 08/09. Nay hệ thống **mở file ra đọc cột ngày (TRDATE)** để
+      biết file nào của ngày nào, trộn lẫn `.csv` với `.xlsx` cũng được
+    + ✅ **Nạp nhầm file của ngày khác nay bị chặn.** Trước đây nếu chỉ có file core của ngày
+      T+1 mà bấm chạy cho ngày T, hệ thống vẫn nhận và chạy tới cùng, báo "Hoàn thành", **số
+      liệu sai ngày mà không có một dòng nào báo**. Nay có dòng đỏ nói rõ file đó là ngày nào
+    + ⚠️ **Có một trường hợp trước chạy được, nay sẽ dừng lại:** file core mà **bên trong chứa
+      nhiều ngày** (do lúc phân loại gộp nhiều đợt zip làm một lượt). Trước đây hệ thống nhận
+      file đó cho ngày T — kèm luôn cả dòng của ngày khác vào số liệu. Nay hệ thống **không
+      đoán nữa**: báo lỗi và dừng bước Hub↔Core. **Cách xử lý: phân loại lại từng ngày một rồi
+      nộp riêng.** Bước Kênh↔Hub vẫn chạy bình thường, không bị ảnh hưởng
+    + ⚠️ **Cùng một ngày đừng nộp cả bản `.csv` lẫn `.xlsx`** — hệ thống cố ý không tự chọn hộ
+      (tránh đọc nhầm bản cũ), sẽ báo lỗi yêu cầu bỏ bớt một file
+    + ℹ️ **Bảng "đủ/thiếu" hiện trước khi bấm Chạy chỉ nhìn TÊN file**, chưa mở file ra xem.
+      Nên vẫn có thể báo "đủ" rồi lúc chạy mới dừng vì ngày bên trong không khớp — đọc dòng log
+      để biết lý do
+
+- 09/09/2026 Báo cáo dữ liệu thanh toán (Phòng TH) - **Báo cáo lâu nay ra thiếu vài chục điện mỗi kỳ mà không ai được báo; nay hiện rõ thiếu ở đâu**
+    + 🔴 **Đây là lỗi đã tồn tại từ trước, không phải lỗi mới.** Mẫu D00054 của NHNN chỉ có **195
+      dòng quốc gia**, trong khi hệ thống SWIFT báo theo mã quốc tế nên còn kèm cả **vùng lãnh thổ**
+      (Bermuda, quần đảo Cayman, Guam, đảo Réunion…). Nơi nào không có dòng trong mẫu thì bị bỏ khỏi
+      báo cáo — **lặng lẽ**, không báo, không ghi chú. Người làm báo cáo tải file về, thấy đủ số, nộp
+      đi mà không có cách nào biết
+    + **Đo trên chính dữ liệu của phòng**: kỳ 202606 hụt **59 điện**, kỳ 202608 hụt **43 điện**.
+      Nghĩa là mọi kỳ đã nộp từ trước tới nay đều thiếu tương tự
+    + ✅ **Nay sau khi bấm "Tạo báo cáo", màn hình hiện một thẻ vàng** ghi rõ bao nhiêu nơi bị bỏ, kèm
+      **bảng liệt kê từng nơi: tên, số điện đến, giá trị đến, số điện đi, giá trị đi**. Không có gì bị
+      bỏ thì không hiện thẻ nào
+    + ⚠️ **Thấy thẻ vàng thì kiểm lại trước khi nộp.** Con số trên báo cáo lúc đó **nhỏ hơn** file
+      nguồn đúng bằng phần ghi trong bảng
+    + **Số liệu trên báo cáo KHÔNG thay đổi** so với trước. Đợt này chỉ *nói ra* phần đang bị giấu,
+      chưa cộng thêm gì vào báo cáo
+    + **Sửa thêm một chỗ chực hỏng**: dòng tổng ở cuối file dữ liệu (dòng có ô tên nước để trống) nay
+      bị loại một cách chắc chắn. Trước đây nó rơi ra do trùng hợp; file xuất tháng 6 không có dòng
+      này còn tháng 8 lại có, nên nếu công cụ xuất file đổi cách ghi thì **số liệu chiều đi có thể bị
+      tính gấp đôi** mà cũng không báo lỗi. Nay không còn khả năng đó
+    + 🔴 **Hai việc còn chờ chốt, chưa làm**: (1) có gộp vùng lãnh thổ về nước mẹ hay không — quần đảo
+      Cayman và Virgin thuộc Anh, Guam và American Samoa thuộc Mỹ, Réunion thuộc Pháp… Gộp xong thì
+      tổng khớp 100%, nhưng đây là **thay đổi số nộp lên NHNN** nên phải có người quyết;
+      (2) **Nam Sudan** — quốc gia độc lập từ 2011, mẫu D00054 soạn khoảng 2010 nên không có dòng,
+      không gộp vào đâu được, phải hỏi NHNN
+    + ✅ **Không phải làm gì sau khi cập nhật, không đổi dữ liệu, không cấp thêm quyền**
+
 - 09/09/2026 Đối soát CITAD - **Bỏ cột "Dịch vụ", thêm cột "Số RefHub"; lệnh đã khớp nay cũng hiện RefHub**
     + **Cột "Dịch vụ" đã bỏ khỏi báo cáo** — cả file Excel xuất ra lẫn bảng "Kết quả" trên màn hình.
       Nội dung cột đó đọc thẳng được từ cột **Loại GD** ngay bên cạnh: IH là chuyển giá trị cao, IL

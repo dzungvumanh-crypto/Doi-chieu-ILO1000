@@ -547,17 +547,32 @@ Truy cập:
 - **Thẻ Đối chiếu đến** (`/api/doi_chieu_song_phuong_kenh_core`): chạy **Kênh↔Hub rồi Hub↔Core**
   tự động nối tiếp trong 1 job cho 1 ngân hàng + 1 ngày mỗi lượt — không phải 2 tính năng rời
   nhau, lỗi 1 bước không chặn bước còn lại, chỉ khi cả 2 đều lỗi mới đánh dấu job lỗi. Từ
-  02/09/2026 chỉ nhận **tải file lên** (HUB zip, kênh xlsx, GL02 zip/CSV, OSB xlsx cùng lúc) —
+  02/09/2026 chỉ nhận **tải file lên** (HUB zip, kênh xlsx, GL02 zip / CORE csv-xlsx, OSB xlsx cùng lúc) —
   đã bỏ hẳn chế độ "chọn thư mục server" cùng nút "Duyệt..." — 2 endpoint cũ nhận `folder_path`
   tuỳ ý không qua allowlist nào, tiền lệ giống lỗ hổng `/api/fs/browse` đã gỡ ở ACH trước đó (xem
   `docs/Implementation-notes.html` card 113). Backend ghi **thẳng từng khối** xuống đĩa job
   (`save_upload_to`), không gom vào RAM trước — cùng khuôn mẫu upload của module ACH
-- **Nạp CORE bằng CSV đã phân loại sẵn thì chỉ có dữ liệu của đúng ngày đối chiếu.** Bước
-  Hub↔Core nhìn tới CORE của T+1..T+3, nhưng tên `{mã NH}_DEN*.csv` không mang ngày nên không
-  suy ra được nó là ngày nào — từ 03/09/2026 CSV chỉ được nhận cho ngày T (trước đó 1 file CSV bị
-  dùng nhầm cho cả 4 ngày, tự nhân dữ liệu lên ngày không có thật). Giao dịch hôm nay mà CORE hạch
-  toán sang hôm sau sẽ xếp thành "HUB THỪA" nếu thiếu — muốn chấm đủ thì nạp thêm **GL02 zip của
-  ngày hôm sau** (`docs/Implementation-notes.html` card 117)
+- **File CORE đã phân loại sẵn: nhận cả `.csv` lẫn `.xlsx`, và ngày lấy từ NỘI DUNG file**
+  (từ 09/09/2026, PR #81). Bước Hub↔Core nhìn tới CORE của T+1..T+3, nhưng tên `{mã NH}_DEN*.csv`
+  không mang ngày. Luật cũ 03/09 vá bằng cách chỉ nhận CSV cho ngày T — chặn luôn cả trường hợp
+  hợp lệ là người dùng đã có sẵn file của T+1. Nay hệ thống **mở file đọc cột `TRDATE`** để gán
+  đúng offset, nộp nhiều file khác ngày một lượt và trộn `.csv` với `.xlsx` đều được
+  (`docs/Implementation-notes.html` card 129)
+  - `TRDATE` **không** nằm trong `CORE_REQUIRED_COLS` — file không có cột này vẫn được nhận cho
+    **ngày T** (tương thích ngược), nhưng không dùng được cho offset khác
+  - File mà `TRDATE` bên trong **lẫn nhiều ngày** (phân loại gộp nhiều đợt zip một lượt) bị **từ
+    chối cả file** — đổi so với trước, khi nó được nhận cho ngày T kèm luôn dòng của ngày khác.
+    Cách xử lý: phân loại lại từng ngày rồi nộp riêng. Module ILO1000 gặp cùng dạng file này thì
+    **lọc theo `TRDATE`** (`ilo1000/pipeline.py::_filter_core_by_date`); chiều ĐẾN chưa làm vậy
+  - Cùng một ngày mà có 2 file (kể cả 1 `.csv` + 1 `.xlsx` cùng nội dung) thì **không tự chọn**,
+    báo lỗi yêu cầu bỏ bớt — cùng nguyên tắc "không đoán khi mơ hồ" của `_tim_file_hub()`
+  - ⚠️ Bảng **"đủ/thiếu" hiện trước khi bấm Chạy** (`common.kiem_tra_du_lieu()`) vẫn chỉ dò theo
+    **TÊN** file, không mở file ra xem — nên có thể báo "đủ" rồi lúc chạy mới dừng vì ngày bên
+    trong không khớp. Docstring hàm đó nói "tái dùng đúng luật dò tên của pipeline" đã **không
+    còn đúng** kể từ PR #81
+  - ⚠️ Tham số `ngay_goc` (dò thêm thư mục ngày T) chỉ có tác dụng khi thư mục nguồn có thư mục
+    con dạng `D.M`. `/start_upload` ghi phẳng qua `safe_filename()` nên **hiện là no-op** — nó
+    chuẩn bị cho chế độ thư mục máy chủ đã bị gỡ ở PR #70
 - **3 file CSV chi tiết bọc `="..."` quanh cột khoá toàn chữ số** (từ 09/09/2026) —
   `MSGREF`/`TXID` ở hai file `..._hub_chi_tiet.csv`, `MtId/MsgId` ở `..._kenh_chi_tiet.csv`.
   Khoá SP THƯỜNG là chuỗi **16 chữ số thuần**, vượt trần **15 chữ số có nghĩa** của Excel: mở CSV

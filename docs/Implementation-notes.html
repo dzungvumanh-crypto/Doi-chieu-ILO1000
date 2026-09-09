@@ -15142,6 +15142,100 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">129</span>
+      <span class="card-title">Đối chiếu Song phương chiều ĐẾN — CORE nhận file .xlsx và gán offset theo TRDATE THẬT thay vì theo vị trí trong vòng lặp ngày (PR #81, 2026-09-09)</span>
+      <span class="badge badge-warn">Đã merge — 4 điểm còn treo ghi rõ bên dưới</span>
+    </div>
+    <div class="card-body">
+
+      <div class="label"><span class="pill pill-red">Báo cáo người dùng</span> Không chạy được khi thư mục có nhiều hơn 1 file CSV core</div>
+      <p>Luật 03/09 (card 117) chặn cứng: <b>CSV đã phân loại sẵn chỉ được nhận cho ngày T</b>. Lý do
+        khi đó đúng — tên <code>{mã NH}_DEN*.csv</code> không mang ngày giao dịch, mà
+        <code>doi_chieu_hub_core()</code> gọi hàm dò file trong vòng lặp 4 ngày T..T+3, nên một file
+        để rời khớp cả 4 offset và tự nhân dữ liệu ngày T lên 3 ngày không hề có.</p>
+      <p>Nhưng cách vá đó chặn luôn ca hợp lệ: người dùng đã xuất sẵn CSV cho <b>cả T lẫn T+1</b>
+        (2 đợt trong 1 phiên) vẫn không dùng được file T+1. Đó là báo lỗi thật ngày 08/09.</p>
+
+      <div class="label"><span class="pill pill-blue">Quyết định</span> Đọc ngày từ NỘI DUNG file, không suy từ tên file hay vị trí offset</div>
+      <p>Mở file đọc cột <code>TRDATE</code> để biết nó đại diện đúng ngày nào rồi mới gán vào offset.
+        Cùng cơ chế cho <code>.csv</code> và <code>.xlsx</code> (<code>.xlsx</code> thêm cùng đợt theo
+        yêu cầu Business Owner). Nguyên tắc "không đoán khi mơ hồ" giữ nguyên, chỉ đổi chỗ xét: từ
+        tên file sang ngày thật đọc được.</p>
+
+      <div class="label"><span class="pill pill-amber">Đánh đổi</span> TRDATE không nằm trong hợp đồng cột bắt buộc</div>
+      <table>
+        <tr><th>Tình huống</th><th>Xử lý</th><th>Vì sao</th></tr>
+        <tr><td>File <b>có</b> TRDATE, khớp ngày đang hỏi</td><td>Dùng</td><td>Đường thường</td></tr>
+        <tr><td>File <b>có</b> TRDATE, khác ngày đang hỏi</td><td>Từ chối + log đỏ</td><td>Chính là lỗi PR này sửa</td></tr>
+        <tr><td>File <b>không có</b> cột TRDATE, offset 0</td><td><b>Vẫn nhận</b> + log giải thích</td><td>Tương thích ngược: <code>CORE_REQUIRED_COLS</code> và 10 cột chuẩn của module Phân loại đều không có TRDATE, nên file cũ hợp lệ mà thiếu cột này không được coi là hỏng</td></tr>
+        <tr><td>File <b>không có</b> cột TRDATE, offset ≠ 0</td><td>Từ chối</td><td>Không có gì bảo đảm đó đúng ngày đang hỏi</td></tr>
+      </table>
+      <p>Bản đầu của PR có "đường nhanh": đúng 1 file khớp + offset 0 thì tin luôn, không mở file, với
+        lý do giữ hiệu năng. <b>Đo lại cho thấy nó không tiết kiệm gì</b> — cùng file đó vẫn bị mở đọc
+        ở offset 1 ngay sau, vì vòng lặp luôn chạy đủ 4 offset. Đổi lại, nó giữ nguyên đúng lỗ hổng
+        PR này sinh ra để bịt, ở đúng ngày BẮT BUỘC quyết định toàn bộ kết quả. Đã gỡ sau review.</p>
+
+      <div class="label"><span class="pill pill-red">Đổi hành vi</span> File lẫn nhiều ngày: trước nhận, nay từ chối</div>
+      <p>Một file core có thể chứa <b>nhiều TRDATE</b> — không phải dữ liệu hỏng: người dùng phân loại
+        gộp nhiều đợt zip một lượt thì <code>doi_chieu_song_phuong_service</code> ghi tất cả vào chung
+        một <code>{ma_nh}_DEN.csv</code>; ILO1000 cũng đã xác nhận ca thật 19/08
+        (<code>1000_gl02_2026081120260812.csv</code> chứa cả TRDATE 11 và 12/08).</p>
+      <table>
+        <tr><th></th><th>Trước PR #81</th><th>Sau PR #81</th></tr>
+        <tr><td>1 file core lẫn 2 ngày, chạy ngày T</td>
+            <td>Nhận cho ngày T — <b>kèm luôn dòng của ngày khác</b> vào số liệu, không log</td>
+            <td>Từ chối cả file, job dừng bước Hub↔Core với thông báo chỉ cách tách file</td></tr>
+      </table>
+      <p><b>Chưa làm và cố ý chưa làm:</b> ILO1000 xử lý cùng dạng file này bằng cách <b>lọc theo
+        TRDATE</b> (<code>ilo1000/pipeline.py::_filter_core_by_date</code>) chứ không vứt file. Chiều
+        ĐẾN nên theo hướng đó, nhưng lọc dòng là đụng vào dữ liệu đưa vào khoá đối chiếu — để riêng
+        một đợt có kiểm chứng dữ liệu thật, không gộp vào PR đang sửa việc khác.</p>
+
+      <div class="label"><span class="pill pill-amber">Còn treo</span> Ba chỗ đã soi ra, chưa sửa</div>
+      <table>
+        <tr><th>Chỗ</th><th>Vấn đề</th><th>Vì sao chưa sửa</th></tr>
+        <tr><td><code>ngay_goc</code> ở <code>_tim_file_hub</code>, ZIP fallback, glob CSV</td>
+            <td>Chỉ có tác dụng khi thư mục nguồn có thư mục con dạng <code>D.M</code>.
+              <code>/start_upload</code> ghi <b>phẳng</b> qua <code>safe_filename()</code> (cắt sạch
+              mọi thành phần thư mục) nên <code>tim_file_glob</code> luôn rơi về <code>goc_dir</code>
+              với mọi ngày → dò theo <code>ngay</code> và theo <code>ngay_goc</code> trả cùng một danh
+              sách. <b>Hiện là no-op.</b> Ba test của nó tự tạo <code>tmp_path/"23.8"</code> — layout
+              ứng dụng không còn sinh ra được</td>
+            <td>Nó chuẩn bị cho chế độ "chọn thư mục máy chủ" đã gỡ ở PR #70 vì lỗ hổng đường dẫn.
+              Giữ hay bỏ là quyết định sản phẩm, cần chốt chế độ đó có quay lại không</td></tr>
+        <tr><td><code>common.kiem_tra_du_lieu()</code></td>
+            <td>Bảng "đủ/thiếu" trước khi bấm Chạy dò theo <b>TÊN</b> file; pipeline nay xét
+              <b>nội dung</b>. Banner báo "đủ" mà job vẫn dừng ở 3 ca: sai ngày, lẫn nhiều ngày, cùng
+              ngày có 2 định dạng. Docstring hàm nói "tái dùng đúng luật dò tên đã áp dụng ở tầng
+              pipeline — không phát minh luật mới" nay <b>không còn đúng</b></td>
+            <td>Banner vốn được khai là xấp xỉ và không chặn nút Chạy. Nhưng docstring phải sửa cho
+              khỏi nói sai</td></tr>
+        <tr><td><code>_DUOI_EXCEL</code> / <code>_DUOI_EXCEL_CORE</code></td>
+            <td>Cả hai khai <code>{".xlsx", ".xls"}</code>, nhưng glob dò file, banner readiness và
+              <code>accept</code> của ô chọn file đều chỉ có <code>.xlsx</code> → nhánh
+              <code>.xls</code> <b>không đường nào với tới</b>. Đọc mã thì tưởng có hỗ trợ</td>
+            <td>Hoặc bỏ <code>.xls</code> khỏi 2 set, hoặc thêm nốt vào 3 chỗ kia — chưa chốt IPCAS có
+              xuất <code>.xls</code> thật không</td></tr>
+      </table>
+
+      <div class="label"><span class="pill pill-blue">Merge</span> Xung đột add/add với PR #75, giữ cả hai bên</div>
+      <p>PR #75 (khoá SPT bọc <code>="..."</code>) merge trước và cùng chạm 3 file. Xung đột ở
+        <code>tests/test_doi_chieu_song_phuong_core_algorithm.py</code>: hai nhánh cùng thêm một class
+        test vào cuối file. Đã giữ <b>cả hai</b> (<code>TestExportExcelBaoVeKhoaExcel</code> +
+        <code>TestLoadCoreDenCsvFileHong</code>) — lấy nguyên một bên là lặng lẽ xoá mất phần kia mà
+        test vẫn xanh.</p>
+      <p>Đã kiểm hai thay đổi có đụng nhau không: <code>bao_ve_khoa_so_khoi_excel()</code> của PR #75
+        chỉ áp cho <code>hub_chi_tiet.csv</code>/<code>kenh_chi_tiet.csv</code> là <b>đầu ra cuối</b>,
+        không chạm <code>{ma_nh}_DEN.csv</code> mà <code>load_core_den_csv()</code> đọc lại — nên việc
+        PR #81 mở rộng hàm đọc đó sang <code>.xlsx</code> không tạo đường vòng nào. Full suite sau
+        merge: <b>1635 passed</b>.</p>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-09</footer>
 </div>
 </body>
