@@ -88,12 +88,40 @@ def da_co_duong_ke(p) -> bool:
 
 
 def go_gach_chan(p) -> bool:
-    """Bỏ gạch chân trên đoạn. Trả True nếu có gì bị gỡ."""
+    """Bỏ mọi cách kẻ vạch SAI HÌNH THỨC trên đoạn. Trả True nếu có gì bị gỡ.
+
+    Hai cách đều cho ra một vạch nhìn giống đường kẻ ngang, và cả hai đều
+    không làm được thứ Điều 7.2 / 8.2 đòi:
+
+    * **Gạch chân** (`w:u`) luôn dài đúng bằng chữ, không ngắn hơn được.
+    * **Viền dưới của đoạn** (`w:pBdr/w:bottom`) luôn dài hết bề ngang đoạn.
+
+    Quy định đòi vạch dưới tên đơn vị và trích yếu chỉ dài **1/3 đến 1/2** dòng
+    chữ — cả hai cách trên đều chịu. Gỡ đi rồi vẽ lại bằng đối tượng đường
+    thẳng rời, đúng cách mẫu 979 làm.
+
+    Không gỡ thì thành **hai vạch chồng nhau**: `da_co_duong_ke()` cố ý không
+    nhận `w:pBdr` là "đã có vạch", vì nhận nó nghĩa là chấp nhận một vạch sai
+    độ dài và bỏ luôn việc vẽ vạch đúng.
+
+    Chỉ nhấc riêng `w:bottom`, không xoá cả `w:pBdr`: đoạn có thể đang có viền
+    trên / trái / phải mà người soạn cố ý đặt.
+    """
     da_go = False
     for r in p.runs:
         if r.font.underline:
             r.font.underline = False
             da_go = True
+
+    pPr = p._p.find(qn("w:pPr"))
+    pBdr = pPr.find(qn("w:pBdr")) if pPr is not None else None
+    if pBdr is not None:
+        duoi = pBdr.find(qn("w:bottom"))
+        if duoi is not None:
+            pBdr.remove(duoi)
+            da_go = True
+        if len(pBdr) == 0:
+            pBdr.getparent().remove(pBdr)
     return da_go
 
 

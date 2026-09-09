@@ -22,6 +22,7 @@ import io
 import logging
 
 from docx import Document
+from docx.shared import Cm
 
 from . import ap_dung, bien_doi, do_chu, duong_ke, nhan_dien, quy_chuan
 
@@ -58,26 +59,45 @@ def _loc_chong_lan(sua: list[tuple[int, int, str]]) -> list[tuple[int, int, str]
 
 
 def _sua_chu(p, ma: str, tp: dict, cfg: dict, tu_dien,
-             txt_truoc: str | None) -> set[int]:
+             txt_truoc: str | None, ky_tu_gach: str | None = None) -> set[int]:
     """Lượt 1 — ép hoa/thường, chuẩn đánh số, viết hoa. Trả chỉ số run đã sửa."""
     txt = p.text
     if not txt.strip():
         return set()
 
-    # Tiêu ngữ có luật riêng về dấu nối và dấu cách (Điều 7.2), không liên quan
-    # tới hoa/thường nên chạy trước và độc lập.
+    som: set[int] = set()
+
+    # Thụt đầu dòng gõ bằng tab: chỉ bỏ khi quy chuẩn TỰ ĐẶT mức thụt cho thành
+    # phần này (`thut_cm`), vì lúc đó tab thành khoảng trống cộng thêm và dòng
+    # bị thụt gấp đôi. Chạy đầu tiên để mọi luật sau đọc chuỗi đã sạch đầu dòng.
+    if tp.get("thut_cm") is not None:
+        som = ap_dung.ap_sua_text(p, bien_doi.bo_thut_thu_cong(txt))
+        if som:
+            txt = p.text
+
+    # Tiêu ngữ có luật riêng về dấu nối, dấu cách và hoa/thường (Điều 7.2),
+    # không liên quan tới nhóm dưới nên chạy trước và độc lập.
     if ma == "tieu_ngu" and cfg["chung"].get("chuan_tieu_ngu"):
         da_sua = ap_dung.ap_sua_text(p, bien_doi.chuan_tieu_ngu(txt))
         if da_sua:
-            return da_sua
+            return som | da_sua
+
+    # Dấu cách sau tiền tố đề ký ("TL.TỔNG GIÁM ĐỐC"). Phải nằm TRƯỚC nhánh ép
+    # in hoa bên dưới: `quyen_han_chuc_vu` khai `hoa="hoa"`, mà nhánh đó thoát
+    # hàm ngay nên mọi luật sửa chữ đặt sau nó không bao giờ chạy tới.
+    if ma == "quyen_han_chuc_vu":
+        them = ap_dung.ap_sua_text(p, bien_doi.chuan_tien_to_quyen_han(txt))
+        if them:
+            som |= them
+            txt = p.text
 
     # Ép in hoa cả đoạn thì mọi luật viết hoa khác thành vô nghĩa: kết quả đằng
     # nào cũng là chữ hoa. Chạy riêng, không trộn với nhóm dưới.
     if tp.get("hoa"):
-        return ap_dung._ep_hoa_thuong(p, tp["hoa"])
+        return som | ap_dung._ep_hoa_thuong(p, tp["hoa"])
 
     sua: list[tuple[int, int, str]] = []
-    sua += bien_doi.chuan_danh_so(txt, ma, cfg["danh_so"])
+    sua += bien_doi.chuan_danh_so(txt, ma, cfg["danh_so"], ky_tu_gach)
     vh = cfg["viet_hoa"]
     if vh.get("vien_dan"):
         sua += bien_doi.viet_hoa_vien_dan(txt)
@@ -86,7 +106,7 @@ def _sua_chu(p, ma: str, tp: dict, cfg: dict, tu_dien,
     if vh.get("dau_cau"):
         sua += bien_doi.viet_hoa_dau_cau(
             txt, bien_doi.cho_phep_hoa_dau_doan(ma, txt_truoc))
-    return ap_dung.ap_sua_text(p, _loc_chong_lan(sua))
+    return som | ap_dung.ap_sua_text(p, _loc_chong_lan(sua))
 
 
 def chuan_hoa(du_lieu: bytes, cau_hinh: dict | None = None) -> tuple[bytes, dict]:
@@ -118,7 +138,28 @@ def chuan_hoa(du_lieu: bytes, cau_hinh: dict | None = None) -> tuple[bytes, dict
         sua_chung.append(f"bỏ {so_ngat} ngắt trang thủ công")
 
     khoi = ap_dung.duyet_doan(doc)
-    ma_list = nhan_dien.phan_loai([(p.text, tb) for p, tb in khoi])
+
+    # Đổi danh sách chấm tròn tự động thành gạch đầu dòng gõ tay TRƯỚC khi phân
+    # loại: dấu chấm tròn không nằm trong `p.text` nên bộ nhận diện không thấy
+    # gạch đầu dòng nào, và cả khối Nơi nhận / Kính gửi dựng bằng danh sách tự
+    # động sẽ trượt khỏi mọi luật nhận khối. Xem `ap_dung.go_bullet_tu_dong`.
+    bullet_da_doi: set[int] = (
+        ap_dung.go_bullet_tu_dong(doc, khoi, cfg["danh_so"].get("ky_tu_gach", "-"))
+        if cfg["danh_so"].get("bo_bullet_tu_dong") else set())
+
+    ma_list = nhan_dien.phan_loai([(p.text, tb) for p, tb in khoi],
+                                  ap_dung.nhom_bang(doc, khoi))
+    # Chia lại khối tên đơn vị theo chữ đậm tác giả đã đặt — phải làm TRƯỚC khi
+    # `_dinh_dang_doan` ép đậm/thường theo mã, vì lúc đó tín hiệu gốc mất sạch.
+    nhan_dien.theo_dam_khoi_ten_dv(
+        ma_list,
+        [bool(p.runs) and bool(ap_dung._hieu_luc_run(p.runs[0], p, "bold"))
+         for p, _ in khoi],
+    )
+
+    cap_gach = (nhan_dien.cap_gach_dau_dong(ma_list, [p.text for p, _ in khoi])
+                if cfg["chung"].get("phan_cap_gach_dau_dong")
+                else [0] * len(ma_list))
 
     nhat_ky: list[dict] = []
     luu_y: list[str] = []
@@ -149,16 +190,11 @@ def chuan_hoa(du_lieu: bytes, cau_hinh: dict | None = None) -> tuple[bytes, dict
         viec: list[str] = []
 
         # ── Danh sách tự động của Word ──
-        kieu = ap_dung._kieu_danh_so(doc, p)
-        if kieu == "bullet" and cfg["danh_so"].get("bo_bullet_tu_dong"):
-            ap_dung._go_danh_so_tu_dong(doc, p)
-            ky_tu = cfg["danh_so"].get("ky_tu_gach", "-")
-            if p.runs:
-                p.runs[0].text = f"{ky_tu} " + p.runs[0].text
-            else:
-                p.add_run(f"{ky_tu} ")
+        # Loại chấm tròn đã đổi ở lượt trước vòng lặp; ở đây chỉ ghi nhật ký.
+        if stt - 1 in bullet_da_doi:
             viec.append("chuyển dấu chấm tròn tự động thành gạch đầu dòng")
-        elif kieu == "so" and not cfg["danh_so"].get("bo_so_tu_dong"):
+        kieu = ap_dung._kieu_danh_so(doc, p)
+        if kieu == "so" and not cfg["danh_so"].get("bo_so_tu_dong"):
             if not da_canh_bao_so_tu_dong:
                 luu_y.append(
                     "Văn bản có danh sách ĐÁNH SỐ tự động của Word. Số hiển thị do "
@@ -169,7 +205,10 @@ def chuan_hoa(du_lieu: bytes, cau_hinh: dict | None = None) -> tuple[bytes, dict
                 da_canh_bao_so_tu_dong = True
 
         # ── Lượt 1: sửa chữ ──
-        run_noi_dung = _sua_chu(p, ma, tp, cfg, tu_dien, txt_truoc)
+        cap = cap_gach[stt - 1]
+        run_noi_dung = _sua_chu(
+            p, ma, tp, cfg, tu_dien, txt_truoc,
+            cfg["danh_so"].get("ky_tu_gach_cap2", "+") if cap >= 2 else None)
         if run_noi_dung:
             viec.append("sửa chữ (viết hoa / đánh số / gạch đầu dòng)")
 
@@ -190,6 +229,14 @@ def chuan_hoa(du_lieu: bytes, cau_hinh: dict | None = None) -> tuple[bytes, dict
                     sua_chung.append(mo_ta)
             else:
                 viec.append(mo_ta)
+
+        # ── Thụt lề mục con ──
+        # Chỉ thụt khi đoạn chưa có lề trái. Tác giả đã tự thụt thì `_dinh_dang_doan`
+        # giữ nguyên mức của họ, ép lại theo mức mình tính là sửa một thứ đang đúng.
+        if cap >= 2 and not p.paragraph_format.left_indent:
+            p.paragraph_format.left_indent = Cm(
+                (cap - 1) * float(cfg["chung"].get("thut_muc_con_cm") or 1.0))
+            viec.append(f"thụt lề mục con (cấp {cap})")
 
         # ── Nén cho vừa một dòng ──
         # Chạy SAU khi áp cỡ chữ: nén bao nhiêu phụ thuộc cỡ chữ cuối cùng,
@@ -225,7 +272,7 @@ def chuan_hoa(du_lieu: bytes, cau_hinh: dict | None = None) -> tuple[bytes, dict
         ma_ke = next((m for m in ma_list[stt:] if m != "trong"), None)
         if ma in duong_ke.TY_LE and ma_ke != ma:
             if cfg["chung"].get("go_gach_chan_the_thuc") and duong_ke.go_gach_chan(p):
-                viec.append("bỏ gạch chân (quy định dùng đường kẻ ngang rời)")
+                viec.append("bỏ gạch chân / viền đoạn (quy định dùng đường kẻ ngang rời)")
             if cfg["chung"].get("ve_duong_ke_ngang"):
                 co_ve = tp.get("co") or (
                     lambda v: v.pt if v is not None else None)(

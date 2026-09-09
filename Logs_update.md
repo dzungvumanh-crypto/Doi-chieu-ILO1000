@@ -4,6 +4,85 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 08/09/2026 Chuẩn hoá văn bản - **Rà soát lại trên hai văn bản thật — sửa 8 chỗ, khối chữ ký và Nơi nhận**
+    + **Khối "Nơi nhận" gõ bằng nút chấm tròn của Word thì không được sửa gì cả.** Dấu chấm tròn đó
+      do Word **tự vẽ**, nó không nằm trong chữ nên phần mềm đọc dòng "Như trên;" mà không thấy dấu
+      gạch đầu dòng nào — và luật nhận khối Nơi nhận lại đi tìm đúng dấu gạch ấy. Cả khối bị bỏ qua:
+      không về cỡ 11, không căn trái, không giãn dòng đơn. Nay phần mềm đổi chấm tròn thành gạch
+      đầu dòng **trước** khi đọc, nên khối được nhận như văn bản gõ tay
+    + ⚠️ **Nếu bỏ tick ô "Chuyển danh sách chấm tròn tự động…"** trong tab Cấu hình thì lỗi trên
+      quay lại. Nên để nguyên ô đó
+    + **Tên người ký bị bỏ sót khi ký thay.** Khối chữ ký kiểu "TL. TỔNG GIÁM ĐỐC" rồi
+      "GIÁM ĐỐC TRUNG TÂM THANH TOÁN": phần mềm tưởng dòng thứ hai là **tên người**, nên tên thật ở
+      dưới khoảng chừa chữ ký không còn ai nhận — giữ nguyên cỡ chữ, không in đậm, không canh giữa.
+      Nay hai dòng chức vụ được hiểu đúng là chức vụ, tên người lấy ở dòng dưới
+    + **"TRƯỞNG NHÓM" nay được nhận là chức vụ.** Trước đây danh sách chỉ có Trưởng phòng, Trưởng
+      ban, Trưởng đơn vị, Trưởng bộ phận — thiếu "Trưởng nhóm" nên cả khối chữ ký của một Báo cáo
+      không được áp thể thức. Nay mọi chức danh có chữ "Trưởng" đều được nhận
+    + **Tiêu ngữ "Độc lập - Tự do - Hạnh Phúc"** (chữ P hoa) nay được sửa về "Hạnh phúc". Cách bỏ
+      dấu ("Hoà" hay "Hòa") vẫn **không** bị đụng tới — đó là thói quen của từng đơn vị
+    + **Dòng gõ phím Tab để thụt đầu dòng nay bị thụt gấp đôi.** Phần mềm đã tự đặt thụt 1 cm mà
+      dấu Tab vẫn nằm đó. Nay Tab ở **đầu dòng** được bỏ; Tab **giữa dòng** (dùng canh cột, kiểu
+      "- Swift Code &nbsp;&nbsp;: VBAAVNVX330") vẫn giữ nguyên
+    + **"TL.TỔNG GIÁM ĐỐC" gõ dính** nay được thêm dấu cách thành "TL. TỔNG GIÁM ĐỐC". Áp cho cả
+      TM. / KT. / TL. / TUQ. / Q.
+    + **Dòng "V/v ..." của công văn dài quá phải xuống dòng thì nửa dưới bị trình bày như câu văn
+      thường** — nửa trên cỡ 12 canh giữa, nửa dưới cỡ 14 căn đều hai bên. Nay cả hai dòng cùng
+      được hiểu là trích yếu
+    + **Thêm ô "Lề trái đoạn" vào tab Cấu hình quy chuẩn.** Thông số này vốn vẫn được áp lên văn bản
+      (nó kéo lời văn về sát lề) nhưng **không có ô nào trên màn hình** — người dùng không nhìn thấy
+      và không tắt được. Ô "Thụt dòng đầu" nay cũng xoá trống được: để trống = không đụng tới
+    + ✅ **Không phải làm gì sau khi cập nhật, không đổi dữ liệu, không cấp thêm quyền**
+
+- 08/09/2026 Chuẩn hoá văn bản - **Số tự động không còn bị teo, số trang không còn bị đánh đè**
+    + **Số thứ tự "4." "5." "I." "II." in ra bé bằng nửa chữ.** Nguyên nhân: những số đó do Word
+      **tự sinh** khi hiển thị, cỡ chữ của chúng nằm ở một chỗ khác hẳn cỡ chữ của câu văn nên
+      phần mềm sửa câu văn mà không chạm tới số. Nay số ăn theo đúng cỡ chữ của đoạn
+    + **Số trang bị đánh đè thành hai con số.** Trước đây phần mềm chỉ nhìn ở **đầu trang** xem đã
+      có số chưa; văn bản nào đánh số ở **chân trang** (hoặc chỉ ở trang đầu) thì bị đánh thêm một
+      lần nữa. Nay soi đủ **sáu chỗ** đầu/chân trang trước khi quyết định
+    + **Dòng "Kính trình:" của Tờ trình** trước đây không được nhận ra (phần mềm chỉ biết "Kính
+      gửi"), nên bị áp thể thức của câu văn thường. Nay nhận như "Kính gửi" — Mẫu 16 Phụ lục V
+      (Phiếu trình chuyển) dùng đúng chữ này
+    + **Khối "Kính trình" dựng bằng bảng nay vẫn được áp thể thức.** Nhiều người đặt "Kính trình:"
+      và tên người nhận vào hai ô của một bảng cho dễ canh. Trước đây ô thứ hai bị coi là ô bảng
+      số liệu nên giữ nguyên cỡ chữ gốc — nửa dòng cỡ 14, nửa dòng cỡ 11. Nay mọi ô **cùng bảng đó**
+      đều theo thể thức của khối
+    + ⚠️ **Bảng số liệu thật vẫn không bị đụng tới** — kể cả khi nằm ngay sát bên dưới khối Kính
+      trình, vì phần mềm phân biệt theo **từng cái bảng** chứ không theo ô đứng cạnh nhau
+    + ✅ **Không phải làm gì sau khi cập nhật**
+
+- 07/09/2026 Chuẩn hoá văn bản - **Tên đơn vị ban hành dài 2 dòng không còn bị bỏ đậm nửa trên**
+    + Khối đầu văn bản kiểu **"BAN TRIỂN KHAI GP QLRR HOẠT ĐỘNG"** rồi **"TỔ TRIỂN KHAI NGHIỆP VỤ"**
+      — cả hai dòng cùng thuộc tên đơn vị ban hành nên phải in đậm cả hai. Trước đây phần mềm chỉ
+      để đậm dòng cuối, dòng trên bị bỏ đậm
+    + Nay phần mềm **đọc chính chữ đậm người soạn đã đặt** để biết dòng nào thuộc tên đơn vị ban
+      hành, dòng nào là đơn vị cấp trên — thay vì đoán theo con chữ. Người soạn bôi đậm đúng chỗ
+      thì phần mềm giữ đúng chỗ đó
+    + Không đụng tới khối mà **cả khối cùng đậm** hoặc **cả khối cùng không đậm** — khi đó người
+      soạn không phân biệt hai vai, phần mềm quay về cách cũ
+    + ✅ **Không phải làm gì sau khi cập nhật**
+
+- 07/09/2026 Chuẩn hoá văn bản - **Mục con của gạch đầu dòng nay trình bày khác mục cha**
+    + **Việc đã sai:** dòng gạch đầu dòng nào người soạn **tự thụt vào cho sâu hơn** để thể hiện
+      mục con thì phần mềm lại kéo thẳng về lề cũ — mục con nằm ngang hàng với chính mục cha của
+      nó, đọc ra thành các mục ngang cấp. Nay giữ nguyên mức thụt người soạn đã đặt (đoạn lời văn
+      thường bị thụt vô cớ thì vẫn dọn về lề như cũ)
+    + **Việc mới làm:** phần mềm **tự nhận ra mục con** cả khi người soạn không thụt lề gì cả.
+      Dòng gạch đầu dòng kết thúc bằng dấu **hai chấm ":"** thì các dòng gạch đầu dòng ngay dưới là
+      mục con của nó — được đổi dấu thành **"+"** và thụt vào thêm 1 cm
+    + Danh sách con **kết thúc** ở dòng có dấu **chấm** cuối câu (theo đúng quy ước "cuối mỗi dòng
+      dấu chấm phẩy, dòng cuối cùng dấu chấm"), hoặc ở dòng đầu tiên không phải gạch đầu dòng
+    + ⚠️ **Đây là thói quen trình bày, không phải quy định.** QĐ 979 chỉ đánh số tới cấp *điểm*
+      (a, b, c), dưới đó không nói gì. Nếu văn bản của phòng có quy ước khác thì vào tab **Cấu hình
+      quy chuẩn** đổi ký tự mục con, đổi mức thụt, hoặc bỏ tick ô *"Tự nhận mục con"*
+    + ⚠️ **Chỗ phần mềm có thể nhận nhầm:** một mục **ngang cấp** đứng ngay sau danh sách con mà
+      không có dòng nào chen giữa và danh sách con không dùng dấu chấm phẩy — nó sẽ bị tụt xuống
+      làm mục con. Mọi dòng bị đổi đều **bôi màu trong nhật ký**, xem lại rồi tải mới chắc
+    + **Danh sách Nơi nhận và Kính gửi không bị đụng tới** — hai khối đó cũng dùng "-" nhưng là
+      danh sách phẳng
+    + ✅ **Không phải cấp quyền gì thêm, không đổi dữ liệu**
+
 - 08/09/2026 Đối chiếu CITAD (Phòng Thanh toán) - **Cho phép 1 người có nhiều bảng đối chiếu độc lập trong cùng 1 ngày**
     + Trước đây mỗi người chỉ được **đúng 1 bảng/ngày**. Nay bấm "Tải" một bảng đã lưu để sửa/lưu
       tiếp tại chỗ như cũ, còn **gõ ngày rồi Lưu mà KHÔNG bấm "Tải"** thì luôn sinh ra **1 bảng

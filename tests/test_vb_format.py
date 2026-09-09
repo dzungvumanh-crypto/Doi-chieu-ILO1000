@@ -7,6 +7,8 @@ Arial, cỡ 11, lề mặc định của Word, gạch đầu dòng bằng "•",
 đụng tới.
 """
 import io
+import pathlib
+import zipfile
 
 import pytest
 from docx import Document
@@ -1072,3 +1074,657 @@ def test_cum_ten_don_vi_nhieu_dong_chi_mot_duong_ke():
     assert thu_tu[i + 2] == "KE", "cụm hai dòng chỉ được MỘT vạch, ở dưới dòng cuối"
     # Vạch thứ hai là của trích yếu (Điều 11.2) — đúng, không phải vạch thừa.
     assert thu_tu.count("KE") == 2
+
+
+# ── Ba cách kẻ vạch sẵn: hình vẽ giữ nguyên, gạch chân và viền đoạn thì thay ──
+_PBDR = ('<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+         "<w:pBdr>{}</w:pBdr></w:pPr>")
+_VIEN = '<w:{0} w:val="single" w:sz="6" w:space="1" w:color="000000"/>'
+
+
+def _tieu_ngu_co(che_bien) -> bytes:
+    doc = Document()
+    doc.add_paragraph("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM")
+    che_bien(doc.add_paragraph("Độc lập - Tự do - Hạnh phúc"))
+    doc.add_paragraph("QUYẾT ĐỊNH")
+    doc.add_paragraph("Về việc điều động cán bộ")
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _tieu_ngu_sau(du_lieu: bytes):
+    doc = Document(io.BytesIO(du_lieu))
+    ds = [p for p, _ in ap_dung.duyet_doan(doc)]
+    i = next(k for k, p in enumerate(ds) if "Độc lập" in p.text)
+    so_vach = sum(1 for p in ds[i:i + 2]
+                  if "<v:line" in p._p.xml or 'prstGeom prst="line"' in p._p.xml)
+    return ds[i], so_vach
+
+
+def test_vien_duoi_cua_doan_bi_go_roi_moi_ve_vach():
+    """`w:pBdr/w:bottom` luôn dài hết bề ngang đoạn, không làm được "1/3 đến
+    1/2 dòng chữ". Coi nó là "đã có vạch" là chấp nhận một vạch sai độ dài;
+    để nguyên rồi vẽ thêm là hai vạch chồng nhau. Phải gỡ rồi vẽ lại."""
+    from docx.oxml import parse_xml
+
+    du_lieu, _ = chuan_hoa(_tieu_ngu_co(
+        lambda p: p._p.insert(0, parse_xml(_PBDR.format(_VIEN.format("bottom"))))))
+    p, so_vach = _tieu_ngu_sau(du_lieu)
+    assert "w:bottom" not in p._p.xml, "viền dưới phải được gỡ"
+    assert so_vach == 1, "chỉ được đúng một vạch"
+
+
+def test_giu_vien_khac_cua_doan():
+    """Chỉ nhấc riêng `w:bottom` — viền trên là thứ người soạn cố ý đặt."""
+    from docx.oxml import parse_xml
+
+    du_lieu, _ = chuan_hoa(_tieu_ngu_co(lambda p: p._p.insert(
+        0, parse_xml(_PBDR.format(_VIEN.format("top") + _VIEN.format("bottom"))))))
+    p, so_vach = _tieu_ngu_sau(du_lieu)
+    assert "w:top" in p._p.xml, "không được xoá lây viền trên"
+    assert "w:bottom" not in p._p.xml
+    assert so_vach == 1
+
+
+@pytest.mark.parametrize("hinh", ["v_line", "straight_connector"])
+def test_da_co_hinh_ve_thi_khong_them_vach(hinh):
+    """Vạch là HÌNH VẼ thì giữ nguyên, không vẽ chồng — cả kiểu Word cũ
+    (`<v:line>`) lẫn Word mới (Straight Connector)."""
+    from docx.oxml import parse_xml
+
+    xml = (f'<w:r {_NS_VE.split(" xmlns:wp")[0]} xmlns:v="urn:schemas-microsoft-com:vml">'
+           '<w:pict><v:line style="position:absolute" from="0,0" to="120pt,0"/></w:pict></w:r>'
+           if hinh == "v_line" else _DUONG_KE_NEO)
+    du_lieu, _ = chuan_hoa(_tieu_ngu_co(lambda p: p._p.append(parse_xml(xml))))
+    _, so_vach = _tieu_ngu_sau(du_lieu)
+    assert so_vach == 1
+
+
+# ── Mục con của gạch đầu dòng (không có trong QĐ 979, suy từ chữ) ────────────
+def _van_ban_co_muc_con(*dong: str) -> bytes:
+    doc = Document()
+    doc.add_paragraph("a) Tài liệu giao phẩm bao gồm:")
+    for t in dong:
+        doc.add_paragraph(t)
+    doc.add_paragraph("b) Nội dung tiếp theo")
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _dong_va_le(du_lieu: bytes) -> list[tuple[str, float]]:
+    doc = Document(io.BytesIO(du_lieu))
+    return [(p.text.replace(" ", " ").strip(),
+             round(p.paragraph_format.left_indent.cm, 1)
+             if p.paragraph_format.left_indent is not None else 0.0)
+            for p in doc.paragraphs if p.text.strip()]
+
+
+def test_muc_con_doi_dau_va_thut_le():
+    """Dòng gạch đầu dòng kết thúc bằng ":" mở một danh sách con."""
+    du_lieu, _ = chuan_hoa(_van_ban_co_muc_con(
+        "- 04 Mẫu biểu, bao gồm:",
+        "- Mẫu biểu 01 (MB01): Đề xuất ý tưởng;",
+        "- Mẫu biểu 02 (MB02): Kế hoạch chi tiết."))
+    ds = dict(_dong_va_le(du_lieu))
+    assert ds["- 04 Mẫu biểu, bao gồm:"] == 0.0
+    assert ds["+ Mẫu biểu 01 (MB01): Đề xuất ý tưởng;"] == 1.0
+    assert ds["+ Mẫu biểu 02 (MB02): Kế hoạch chi tiết."] == 1.0
+
+
+def test_danh_sach_con_dong_o_dong_ket_thuc_bang_dau_cham():
+    """Điều 15.4: cuối mỗi dòng ";", dòng CUỐI CÙNG ".".
+
+    Thiếu quy tắc đóng thì mục ngang cấp đứng ngay sau bị tụt xuống làm mục con
+    — đã gặp thật trong "Bao cao nghiem thu NPA.docx" ở dòng "- Sản phẩm bàn
+    giao: …".
+    """
+    du_lieu, _ = chuan_hoa(_van_ban_co_muc_con(
+        "- Xây dựng phương pháp luận, gồm:",
+        "- Phương pháp xác định sản phẩm mới;",
+        "- Các mẫu biểu, báo cáo liên quan.",
+        "- Sản phẩm bàn giao: Tài liệu phương pháp luận."))
+    ds = dict(_dong_va_le(du_lieu))
+    assert ds["+ Phương pháp xác định sản phẩm mới;"] == 1.0
+    assert ds["+ Các mẫu biểu, báo cáo liên quan."] == 1.0
+    assert ds["- Sản phẩm bàn giao: Tài liệu phương pháp luận."] == 0.0
+
+
+def test_khong_dong_som_khi_moi_dong_deu_ket_thuc_bang_dau_cham():
+    """Người soạn chấm câu mọi dòng bằng "." thì dấu chấm không nói lên điều gì.
+
+    Đóng theo nó là cắt danh sách ngay sau mục con ĐẦU TIÊN.
+    """
+    du_lieu, _ = chuan_hoa(_van_ban_co_muc_con(
+        "- Tài liệu gồm:",
+        "- Mục con thứ nhất.",
+        "- Mục con thứ hai.",
+        "- Mục con thứ ba."))
+    ds = dict(_dong_va_le(du_lieu))
+    for t in ("+ Mục con thứ nhất.", "+ Mục con thứ hai.", "+ Mục con thứ ba."):
+        assert ds[t] == 1.0, t
+
+
+def test_danh_sach_noi_nhan_khong_bi_phan_cap():
+    """Nơi nhận cũng dùng "-" nhưng là danh sách phẳng, cỡ chữ 11 riêng."""
+    doc = Document()
+    doc.add_paragraph("Nơi nhận:")
+    for t in ("- Như trên:", "- Ban Giám đốc;", "- Lưu: VT, TH (2)."):
+        doc.add_paragraph(t)
+    ra = io.BytesIO()
+    doc.save(ra)
+
+    du_lieu, _ = chuan_hoa(ra.getvalue())
+    chu = "\n".join(t for t, _ in _dong_va_le(du_lieu))
+    assert "+" not in chu, "không được đụng vào danh sách nơi nhận"
+
+
+def test_tat_phan_cap_thi_giu_nguyen():
+    du_lieu, _ = chuan_hoa(
+        _van_ban_co_muc_con("- 04 Mẫu biểu, bao gồm:", "- Mẫu biểu 01 (MB01): A."),
+        {"chung": {"phan_cap_gach_dau_dong": False}})
+    ds = dict(_dong_va_le(du_lieu))
+    assert ds["- Mẫu biểu 01 (MB01): A."] == 0.0
+
+
+def test_giu_thut_le_muc_con_tac_gia_da_dat():
+    """Thụt lề là cách DUY NHẤT trong .docx để nói "đây là mục con" — QĐ 979
+    chỉ đánh số tới *điểm*. Ép về 0 là xoá phẳng phân cấp tác giả đã viết."""
+    from docx.shared import Cm
+
+    doc = Document()
+    doc.add_paragraph("a) Tài liệu bao gồm:")
+    doc.add_paragraph("- Mục cha không kết thúc bằng hai chấm")
+    p = doc.add_paragraph("- Mục con tác giả tự thụt")
+    p.paragraph_format.left_indent = Cm(1.5)
+    q = doc.add_paragraph("Đoạn lời văn bị thụt vô cớ")
+    q.paragraph_format.left_indent = Cm(1.5)
+    ra = io.BytesIO()
+    doc.save(ra)
+
+    ds = dict(_dong_va_le(chuan_hoa(ra.getvalue())[0]))
+    assert ds["- Mục con tác giả tự thụt"] == 1.5, "giữ đúng mức tác giả đặt"
+    assert ds["Đoạn lời văn bị thụt vô cớ"] == 0.0, "lời văn thường vẫn dọn về 0"
+
+
+# ── Khối tên đơn vị: chia vai theo chữ đậm tác giả đã đặt (Điều 8.2) ─────────
+def _khoi_ten_dv(*dong: tuple[str, bool]) -> bytes:
+    doc = Document()
+    for t, dam in dong:
+        doc.add_paragraph().add_run(t).bold = dam
+    doc.add_paragraph("QUYẾT ĐỊNH")
+    doc.add_paragraph("Về việc điều động cán bộ")
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _dam_va_ke(du_lieu: bytes) -> dict[str, tuple[bool, bool]]:
+    doc = Document(io.BytesIO(du_lieu))
+    kq = {}
+    for p, _ in ap_dung.duyet_doan(doc):
+        t = p.text.replace(" ", " ").strip()
+        if not t or not p.runs:
+            continue
+        ke = p._p.getnext()
+        kq[t] = (bool(ap_dung._hieu_luc_run(p.runs[0], p, "bold")),
+                 bool(ke is not None and "<v:line" in ke.xml))
+    return kq
+
+
+def test_khoi_ten_dv_chia_vai_theo_dam_tac_gia():
+    """Tên đơn vị ban hành dài được trình bày nhiều dòng (Điều 8.2).
+
+    "TỔ TRIỂN KHAI NGHIỆP VỤ" mở đầu bằng danh từ nên không có dấu hiệu chữ nào
+    nói nó thuộc cùng tên với dòng trên — nhưng tác giả đã bôi đậm cả hai dòng,
+    đó mới là dấu hiệu thật.
+    """
+    du_lieu, _ = chuan_hoa(_khoi_ten_dv(
+        ("NGÂN HÀNG NÔNG NGHIỆP", False),
+        ("VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM", False),
+        ("BAN TRIỂN KHAI GP QLRR HOẠT ĐỘNG", True),
+        ("TỔ TRIỂN KHAI NGHIỆP VỤ", True)))
+    kq = _dam_va_ke(du_lieu)
+    assert kq["NGÂN HÀNG NÔNG NGHIỆP"] == (False, False)
+    assert kq["VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM"] == (False, False)
+    assert kq["BAN TRIỂN KHAI GP QLRR HOẠT ĐỘNG"] == (True, False)
+    assert kq["TỔ TRIỂN KHAI NGHIỆP VỤ"] == (True, True), "vạch chỉ ở dòng cuối"
+
+
+def test_mau_979_chu_quan_nhieu_dong_van_khong_dam():
+    """Ví dụ ngay trong Điều 8: chủ quản 3 dòng, ban hành 1 dòng."""
+    du_lieu, _ = chuan_hoa(_khoi_ten_dv(
+        ("NGÂN HÀNG NÔNG NGHIỆP", False),
+        ("VÀ PHÁT TRIỂN NÔNG THÔN", False),
+        ("VIỆT NAM – CHI NHÁNH THỦ ĐÔ", False),
+        ("PHÒNG GIAO DỊCH CHỢ MƠ", True)))
+    kq = _dam_va_ke(du_lieu)
+    assert kq["VIỆT NAM – CHI NHÁNH THỦ ĐÔ"] == (False, False)
+    assert kq["PHÒNG GIAO DỊCH CHỢ MƠ"] == (True, True)
+
+
+def test_dam_ca_khoi_thi_quay_ve_doan_bang_chu():
+    """Bôi đậm cả khối nghĩa là tác giả KHÔNG phân biệt hai vai — dấu hiệu vô
+    nghĩa, phải quay về `_gom_ten_dv_nhieu_dong`."""
+    du_lieu, _ = chuan_hoa(_khoi_ten_dv(
+        ("NGÂN HÀNG NÔNG NGHIỆP", True),
+        ("VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM", True)))
+    kq = _dam_va_ke(du_lieu)
+    assert kq["NGÂN HÀNG NÔNG NGHIỆP"] == (True, False)
+    assert kq["VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM"] == (True, True)
+
+
+def test_dam_rai_rac_giua_khoi_thi_bo_qua():
+    """Điều 8.2 đặt tên đơn vị ban hành DƯỚI tên đơn vị quản lý trực tiếp.
+    Đậm nằm giữa khối là định dạng lỗi, không phải phân vai."""
+    assert not nhan_dien.theo_dam_khoi_ten_dv(
+        ["ten_dv_chu_quan", "ten_dv_chu_quan", "ten_dv_ban_hanh"],
+        [False, True, False])
+
+
+def test_chia_vai_theo_dam_chay_lai_khong_doi():
+    goc = _khoi_ten_dv(
+        ("NGÂN HÀNG NÔNG NGHIỆP", False),
+        ("VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM", False),
+        ("BAN TRIỂN KHAI GP QLRR HOẠT ĐỘNG", True),
+        ("TỔ TRIỂN KHAI NGHIỆP VỤ", True))
+    lan1, _ = chuan_hoa(goc)
+    lan2, _ = chuan_hoa(lan1)
+    assert _dam_va_ke(lan1) == _dam_va_ke(lan2)
+
+
+# ── Số tự động của Word, số trang trùng, "Kính trình" ────────────────────────
+_W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+
+def _doan_danh_so_tu_dong(co_dau_doan: int = 16, phong: str = "") -> bytes:
+    """Đoạn dùng danh sách đánh số TỰ ĐỘNG của Word, dấu đoạn để cỡ nhỏ."""
+    from docx.oxml import parse_xml
+    from docx.shared import Pt
+
+    doc = Document()
+    doc.add_paragraph("Các đơn vị phối hợp:")
+    p = doc.add_paragraph("Ban Quản lý Tài sản Nợ - Tài sản Có")
+    pPr = p._p.get_or_add_pPr()
+    pPr.insert(0, parse_xml(
+        f'<w:numPr {_W}><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>'))
+    fonts = (f'<w:rFonts w:ascii="{phong}" w:hAnsi="{phong}" w:cs="{phong}"/>'
+             if phong else "")
+    pPr.append(parse_xml(
+        f'<w:rPr {_W}>{fonts}<w:sz w:val="{co_dau_doan}"/>'
+        f'<w:szCs w:val="{co_dau_doan}"/></w:rPr>'))
+    for r in p.runs:
+        r.font.size = Pt(14)
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _co_dau_doan(du_lieu: bytes, chua: str) -> float | None:
+    from docx.oxml.ns import qn
+
+    doc = Document(io.BytesIO(du_lieu))
+    p = next(q for q, _ in ap_dung.duyet_doan(doc) if chua in q.text)
+    pPr = p._p.find(qn("w:pPr"))
+    rPr = pPr.find(qn("w:rPr")) if pPr is not None else None
+    sz = rPr.find(qn("w:sz")) if rPr is not None else None
+    return int(sz.get(qn("w:val"))) / 2 if sz is not None else None
+
+
+def test_so_tu_dong_khong_con_be_hon_loi_van():
+    """Số của danh sách tự động không nằm trong `<w:r>` nào — Word lấy định
+    dạng từ `rPr` của DẤU ĐOẠN. Sửa cỡ chữ từng run không chạm tới nó."""
+    # `bo_bullet_tu_dong` tắt để `numPr` còn nguyên — đúng tình huống danh sách
+    # ĐÁNH SỐ tự động (mặc định `bo_so_tu_dong = False`, phần mềm giữ nguyên số).
+    du_lieu, _ = chuan_hoa(_doan_danh_so_tu_dong(),
+                           {"danh_so": {"bo_bullet_tu_dong": False}})
+    assert _co_dau_doan(du_lieu, "Ban Quản lý") == 14.0
+
+    doc = Document(io.BytesIO(du_lieu))
+    p = next(q for q, _ in ap_dung.duyet_doan(doc) if "Ban Quản lý" in q.text)
+    assert p.runs[-1].font.size.pt == 14.0, "lời văn vẫn phải đúng cỡ"
+
+
+def test_dau_doan_von_dung_co_thi_khong_ghi_nhat_ky():
+    """Đã đúng thì không sinh một dòng nhật ký rỗng nghĩa."""
+    _, bc = chuan_hoa(
+        _doan_danh_so_tu_dong(co_dau_doan=28, phong="Times New Roman"),
+        {"danh_so": {"bo_bullet_tu_dong": False}})
+    assert not any("số/gạch đầu dòng tự động" in x for x in bc["sua_chung"])
+
+
+def _van_ban_co_so_trang(cho: str | None):
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls
+
+    doc = Document()
+    doc.add_paragraph("Nội dung văn bản.")
+    s = doc.sections[0]
+    s.different_first_page_header_footer = True
+    if cho:
+        phan = getattr(s, cho)
+        phan.is_linked_to_previous = False
+        par = phan.paragraphs[0] if phan.paragraphs else phan.add_paragraph()
+        for kieu, nd in (("begin", None), (None, " PAGE "), ("end", None)):
+            r = par.add_run()
+            if kieu:
+                r._r.append(parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="{kieu}"/>'))
+            else:
+                r._r.append(parse_xml(
+                    f'<w:instrText {nsdecls("w")} xml:space="preserve">{nd}</w:instrText>'))
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _dem_truong_page(du_lieu: bytes) -> int:
+    z = zipfile.ZipFile(io.BytesIO(du_lieu))
+    return sum(z.read(n).decode("utf-8").count("PAGE")
+               for n in z.namelist() if "header" in n or "footer" in n)
+
+
+@pytest.mark.parametrize("cho", ["footer", "first_page_header", "header"])
+def test_khong_danh_them_so_trang_khi_da_co(cho):
+    """Soi đủ sáu chỗ đầu/chân trang. Chỉ soi header mặc định thì văn bản đã
+    đánh số ở chân trang sẽ bị đánh thêm — in ra hai con số chồng nhau."""
+    du_lieu, _ = chuan_hoa(_van_ban_co_so_trang(cho))
+    assert _dem_truong_page(du_lieu) == 1
+
+
+def test_van_danh_so_trang_khi_chua_co():
+    du_lieu, bc = chuan_hoa(_van_ban_co_so_trang(None))
+    assert _dem_truong_page(du_lieu) == 1
+    assert any("đánh số trang" in x for x in bc["sua_chung"])
+
+
+def test_kinh_trinh_duoc_nhan_nhu_kinh_gui():
+    """Mẫu 16 Phụ lục V (Phiếu trình chuyển) in đúng chữ "Kính trình:"."""
+    assert nhan_dien.phan_loai(
+        [("Kính trình: Phó Tổng Giám đốc Vương Hồng Lĩnh.", False),
+         ("Nội dung.", False)])[0] == "kinh_gui"
+    assert nhan_dien.phan_loai(
+        [("Kính trình:", False), ("- Ban Pháp chế;", False)])[0] == "kinh_gui_ds"
+
+
+# ── Khối "Kính gửi / Kính trình" dựng bằng bảng ──────────────────────────────
+def _to_trinh_bang(*o_bang: str, bang_so_lieu=None, doan_chen=True) -> bytes:
+    """Khối Kính trình dựng bằng bảng — cách người soạn hay dùng để canh chỗ."""
+    from docx.shared import Pt
+
+    doc = Document()
+    doc.add_paragraph("TỜ TRÌNH")
+    doc.add_paragraph("V/v đề xuất triển khai thử nghiệm")
+    t = doc.add_table(rows=1, cols=len(o_bang))
+    for o, txt in zip(t.rows[0].cells, o_bang):
+        if txt:
+            o.paragraphs[0].add_run(txt).font.size = Pt(11)
+    if doan_chen:
+        doc.add_paragraph("Căn cứ Quy trình số 699/QTr-NHNo-TTTM;")
+    if bang_so_lieu:
+        t2 = doc.add_table(rows=len(bang_so_lieu), cols=len(bang_so_lieu[0]))
+        for hang, bo in zip(t2.rows, bang_so_lieu):
+            for o, txt in zip(hang.cells, bo):
+                o.paragraphs[0].add_run(txt).font.size = Pt(11)
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _co_theo_dong(du_lieu: bytes) -> dict[str, float | None]:
+    doc = Document(io.BytesIO(du_lieu))
+    return {p.text.replace(" ", " ").strip():
+            (p.runs[0].font.size.pt if p.runs and p.runs[0].font.size else None)
+            for p, _ in ap_dung.duyet_doan(doc) if p.text.strip()}
+
+
+def test_o_bang_cua_khoi_kinh_trinh_van_duoc_ap_the_thuc():
+    """Người dùng chốt 08/09/2026: bảng dựng để CANH CHỖ cho một thành phần thể
+    thức thì không phải bảng số liệu — Điều 4.2 không áp cho nó."""
+    kq = _co_theo_dong(chuan_hoa(_to_trinh_bang(
+        "Kính trình:", "Phó Tổng Giám đốc Vương Hồng Lĩnh."))[0])
+    assert kq["Kính trình:"] == 14.0
+    assert kq["Phó Tổng Giám đốc Vương Hồng Lĩnh."] == 14.0, "ô bên cạnh cũng phải theo"
+
+
+def test_o_trong_canh_cho_khong_cat_khoi_kinh_trinh():
+    kq = _co_theo_dong(chuan_hoa(_to_trinh_bang(
+        "Kính trình:", "", "Phó Tổng Giám đốc Vương Hồng Lĩnh."))[0])
+    assert kq["Phó Tổng Giám đốc Vương Hồng Lĩnh."] == 14.0
+
+
+def test_bang_so_lieu_dan_sat_ngay_sau_khong_bi_keo_theo():
+    """Ranh giới là CÁI BẢNG, không phải "ô liền kề".
+
+    Lan theo ô liền kề thì ô vừa nâng thành điểm xuất phát mới và bảng số liệu
+    dán sát bị kéo theo trọn vẹn — đã đo, đúng như vậy.
+    """
+    kq = _co_theo_dong(chuan_hoa(_to_trinh_bang(
+        "Kính trình:", "Phó Tổng Giám đốc Vương Hồng Lĩnh.",
+        bang_so_lieu=(("STT", "Nội dung", "Ghi chú"), ("1", "Kết nối", "x")),
+        doan_chen=False))[0])
+    assert kq["Phó Tổng Giám đốc Vương Hồng Lĩnh."] == 14.0
+    for o in ("STT", "Nội dung", "Ghi chú", "Kết nối"):
+        assert kq[o] == 11.0, f"ô «{o}» của bảng số liệu không được đụng tới"
+
+
+def test_nhom_bang_khong_lan_lon_giua_hai_bang():
+    """`id()` của proxy lxml bị cấp lại sau khi thu hồi — phải ghim tham chiếu.
+
+    Không ghim thì ô cùng một bảng nhận số nhóm khác nhau, ô hai bảng khác nhau
+    lại trùng số: bảng số liệu bị sửa xen kẽ từng ô, nhìn như lỗi ngẫu nhiên.
+    """
+    doc = Document(io.BytesIO(_to_trinh_bang(
+        "Kính trình:", "Phó Tổng Giám đốc",
+        bang_so_lieu=(("STT", "Nội dung"), ("1", "Kết nối")), doan_chen=False)))
+    khoi = ap_dung.duyet_doan(doc)
+    nhom = ap_dung.nhom_bang(doc, khoi)
+    theo_o = {p.text.strip(): g for (p, _), g in zip(khoi, nhom) if p.text.strip()}
+    assert theo_o["Kính trình:"] == theo_o["Phó Tổng Giám đốc"]
+    assert theo_o["STT"] == theo_o["Nội dung"] == theo_o["Kết nối"]
+    assert theo_o["Kính trình:"] != theo_o["STT"]
+    assert theo_o["TỜ TRÌNH"] is None
+
+
+def test_khong_co_nhom_bang_thi_khong_doan():
+    """Gọi `phan_loai` trực tiếp thì thà không sửa còn hơn đoán ranh giới bảng."""
+    ma = nhan_dien.phan_loai([("Kính trình:", True), ("Phó Tổng Giám đốc", True)])
+    assert ma[1] == "bang"
+
+
+# ── Rà soát 08/09/2026 trên hai văn bản thật ────────────────────────────────
+def _van_ban_ket_thuc(cac_dong, kieu_noi_nhan=None) -> bytes:
+    """Khối cuối một công văn: Nơi nhận + khối chữ ký.
+
+    `kieu_noi_nhan` = "List Bullet" thì danh sách nơi nhận dựng bằng danh sách
+    chấm tròn TỰ ĐỘNG của Word — dấu gạch không nằm trong `p.text`.
+    """
+    doc = Document()
+    doc.add_paragraph("THÔNG BÁO")
+    doc.add_paragraph("Về việc thử nghiệm")
+    doc.add_paragraph("Nơi nhận:")
+    for t in ("Như trên;", "Lưu: VP."):
+        doc.add_paragraph(t, style=kieu_noi_nhan) if kieu_noi_nhan \
+            else doc.add_paragraph("- " + t)
+    for t in cac_dong:
+        doc.add_paragraph(t)
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def _co_theo_text(du_lieu: bytes) -> dict:
+    doc = Document(io.BytesIO(du_lieu))
+    ra = {}
+    for p, _ in ap_dung.duyet_doan(doc):
+        if p.text.strip() and p.runs:
+            co = ap_dung._hieu_luc_run(p.runs[0], p, "size")
+            ra[p.text.strip()] = co.pt if co is not None else None
+    return ra
+
+
+def test_noi_nhan_dung_bullet_tu_dong_van_duoc_nhan_dien():
+    """Dấu chấm tròn tự động không nằm trong `p.text`.
+
+    Luật nhận khối Nơi nhận đọc "dòng mở đầu bằng gạch đầu dòng, gặp dòng khác
+    thì dừng" — không thấy gạch nào nên nó dừng ngay dòng đầu, cả khối rơi vào
+    mã `bang` và giữ nguyên cỡ chữ gốc. Đo được trên "TB Swift code Quảng
+    Ninh.docx": sáu dòng Nơi nhận không được áp thể thức nào.
+    """
+    co = _co_theo_text(chuan_hoa(_van_ban_ket_thuc([], "List Bullet"))[0])
+    assert co["- Như trên;"] == 11.0
+    assert co["- Lưu: VP."] == 11.0
+
+
+def test_bullet_va_gach_go_tay_cho_cung_mot_ket_qua():
+    """Dựng bằng danh sách tự động hay gõ tay đều phải ra một bản như nhau."""
+    tu_dong = _co_theo_text(chuan_hoa(_van_ban_ket_thuc([], "List Bullet"))[0])
+    go_tay = _co_theo_text(chuan_hoa(_van_ban_ket_thuc([]))[0])
+    assert tu_dong["- Như trên;"] == go_tay["- Như trên;"]
+
+
+def test_muc_trong_giua_danh_sach_bullet_khong_thanh_gach_dau_dong():
+    """Gõ Enter hai lần giữa danh sách là có một mục TRỐNG.
+
+    Đổi bullet chạy trước khi phân loại nên phải tự lọc đoạn rỗng: thêm "- "
+    vào đó là biến dòng trắng thành gạch đầu dòng không có chữ, và đoạn ấy từ
+    mã `trong` nhảy sang `noi_dung` — sai cả nhật ký lẫn số đoạn đếm được.
+    """
+    doc = Document()
+    doc.add_paragraph("Điều 1. Trách nhiệm")
+    doc.add_paragraph("Phòng Kế toán thực hiện.", style="List Bullet")
+    doc.add_paragraph("", style="List Bullet")
+    ra = io.BytesIO()
+    doc.save(ra)
+    du_lieu, bao_cao = chuan_hoa(ra.getvalue())
+    chu = [p.text for p, _ in ap_dung.duyet_doan(Document(io.BytesIO(du_lieu)))]
+    assert chu[2] == ""
+    assert bao_cao["thong_ke"]["tong_doan"] == 2
+
+
+def test_quyen_han_hai_dong_khong_nuot_ho_ten_nguoi_ky():
+    """Điều 13.2: ký thay thì dòng dưới hình thức đề ký là chức vụ người ký.
+
+    "GIÁM ĐỐC TRUNG TÂM THANH TOÁN" lọt qua phép thử họ tên (5 từ, từ nào cũng
+    mở đầu chữ hoa) nên từng bị nhận là HỌ TÊN — và họ tên thật nằm dưới khoảng
+    trống chừa chữ ký thì không còn ai nhận, ở nguyên mã `bang`.
+    """
+    ma = _ma_theo_text(_van_ban_ket_thuc(
+        ["TL. TỔNG GIÁM ĐỐC", "GIÁM ĐỐC TRUNG TÂM THANH TOÁN", "",
+         "Nguyễn Quốc Hùng"]))
+    assert ma["TL. TỔNG GIÁM ĐỐC"] == "quyen_han_chuc_vu"
+    assert ma["GIÁM ĐỐC TRUNG TÂM THANH TOÁN"] == "quyen_han_chuc_vu"
+    assert ma["Nguyễn Quốc Hùng"] == "ho_ten_nguoi_ky"
+
+
+def test_trich_yeu_cong_van_xuong_dong_duoc_noi_dai():
+    """Công văn không có tên loại nên nhánh nối dài trích yếu không với tới nó.
+
+    Gặp thật: "V/v Thông báo thay đổi tên/địa chỉ đăng ký" xuống dòng thành
+    "trên hệ thống SWIFT" — dòng dưới rơi vào `noi_dung` rồi bị áp cỡ 14, căn
+    đều hai bên, thụt dòng đầu 1 cm, trong khi dòng trên là cỡ 12 canh giữa.
+    Hai nửa của MỘT cụm từ ra hai kiểu chữ khác nhau.
+    """
+    ma = nhan_dien.phan_loai([
+        ("Số: 123/NHNo-TTTT", False),
+        ("V/v Thông báo thay đổi tên/địa chỉ đăng ký", False),
+        ("trên hệ thống SWIFT", False),
+        ("Kính gửi: Giám đốc Agribank Quảng Ninh", False),
+    ])
+    assert ma[1] == ma[2] == "trich_yeu_cong_van"
+    assert ma[3] == "kinh_gui"
+
+
+def test_trich_yeu_cong_van_da_ket_cau_thi_khong_nuot_loi_van():
+    """Dòng "V/v …" kết thúc bằng dấu chấm là đã hết — dòng sau là lời văn."""
+    ma = nhan_dien.phan_loai([
+        ("Số: 1/NHNo-TTTT", False),
+        ("V/v Thông báo thay đổi địa chỉ.", False),
+        ("Nội dung câu văn thường", False),
+    ])
+    assert ma[1] == "trich_yeu_cong_van"
+    assert ma[2] == "noi_dung"
+
+
+def test_chuc_danh_ghep_ngoai_danh_sach_van_duoc_nhan():
+    """Liệt kê từng chức danh ghép thì danh sách không bao giờ đủ — "TRƯỞNG
+    NHÓM" lọt qua dù đã có TRƯỞNG PHÒNG / TRƯỞNG BAN / TRƯỞNG ĐƠN VỊ."""
+    ma = _ma_theo_text(_van_ban_ket_thuc(["TRƯỞNG NHÓM", "", "Nguyễn Đình Khánh"]))
+    assert ma["TRƯỞNG NHÓM"] == "quyen_han_chuc_vu"
+    assert ma["Nguyễn Đình Khánh"] == "ho_ten_nguoi_ky"
+
+
+@pytest.mark.parametrize("goc, mong_doi", [
+    ("Độc lập - Tự do - Hạnh Phúc", "Độc lập - Tự do - Hạnh phúc"),
+    ("ĐỘC LẬP - TỰ DO - HẠNH PHÚC", "Độc lập - Tự do - Hạnh phúc"),
+    ("Độc lập – Tự  do – Hạnh Phúc", "Độc lập - Tự do - Hạnh phúc"),
+])
+def test_tieu_ngu_sai_hoa_thuong_duoc_dua_ve_dung_dieu_7_2(goc, mong_doi):
+    sua = bien_doi.chuan_tieu_ngu(goc)
+    assert sua and sua[0][2] == mong_doi
+
+
+def test_tieu_ngu_khong_du_ba_cum_thi_khong_viet_hoa_lai():
+    """Thiếu một cụm nghĩa là chuỗi không còn là Tiêu ngữ chuẩn — viết hoa lại
+    theo công thức lúc đó là đoán mò trên chữ của người soạn."""
+    sua = bien_doi.chuan_tieu_ngu("Độc  lập – Tự do")
+    assert sua and sua[0][2] == "Độc lập - Tự do"
+
+
+def test_them_dau_cach_sau_tien_to_de_ky():
+    """"TL.TỔNG GIÁM ĐỐC" gõ dính — không sai chính tả nên không ai để ý, nhưng
+    khác mẫu Phụ lục V và khác mọi văn bản khác cùng tập."""
+    # Bỏ dấu cách không ngắt trước khi so: "TỔNG GIÁM ĐỐC" nằm trong danh sách
+    # cụm từ liền dòng nên các dấu cách bên trong đã thành U+00A0.
+    chu = [p.text.replace(" ", " ").strip()
+           for p, _ in ap_dung.duyet_doan(Document(io.BytesIO(
+               chuan_hoa(_van_ban_ket_thuc(["TL.TỔNG GIÁM ĐỐC"]))[0])))]
+    assert "TL. TỔNG GIÁM ĐỐC" in chu
+
+
+@pytest.mark.parametrize("goc", ["tl.tổng giám đốc", "TL. TỔNG GIÁM ĐỐC"])
+def test_tien_to_de_ky_khong_dung_toi_khi_da_dung_hoac_chu_thuong(goc):
+    assert bien_doi.chuan_tien_to_quyen_han(goc) == []
+
+
+def _loi_van_thut_tab() -> bytes:
+    doc = Document()
+    doc.add_paragraph("Điều 1. Trách nhiệm")
+    doc.add_paragraph("\tTrong quá trình thực hiện, chi nhánh liên hệ Trụ sở chính.")
+    doc.add_paragraph("- Swift Code\t\t: VBAAVNVX330")
+    ra = io.BytesIO()
+    doc.save(ra)
+    return ra.getvalue()
+
+
+def test_thut_dau_dong_bang_tab_bi_bo_khi_quy_chuan_tu_dat_thut():
+    """Tab gõ tay + thụt dòng đầu 1 cm = thụt gấp đôi mọi dòng khác.
+
+    Nhìn ra ngay là hỏng mà không có lỗi nào báo — quy chuẩn đã tự đặt mức thụt
+    thì tab không còn là cách thụt lề nữa, chỉ còn là khoảng trống thừa.
+    """
+    doan = [p for p, _ in ap_dung.duyet_doan(
+        Document(io.BytesIO(chuan_hoa(_loi_van_thut_tab())[0])))]
+    dong = _tim(doan, "Trong quá trình")
+    assert not dong.text.startswith("\t")
+    assert dong.paragraph_format.first_line_indent.cm == pytest.approx(1.0, abs=0.01)
+
+
+def test_tab_giua_dong_khong_bi_dung_toi():
+    """Tab giữa dòng là người soạn canh cột — bỏ đi là phá cách trình bày."""
+    doan = [p for p, _ in ap_dung.duyet_doan(
+        Document(io.BytesIO(chuan_hoa(_loi_van_thut_tab())[0])))]
+    assert "\t\t" in _tim(doan, "- Swift Code").text
+
+
+def test_le_trai_doan_co_mat_tren_man_cau_hinh():
+    """Mọi thuộc tính quy chuẩn ĐANG áp lên văn bản đều phải có ô trên màn hình.
+
+    `le_trai_cm` từng bị áp ngầm: nó kéo lời văn về lề 0 mà không ô nào hiện ra,
+    nên người dùng không có cách nào nhìn thấy hay tắt đi.
+    """
+    nguon = (pathlib.Path(__file__).resolve().parents[1]
+             / "frontend" / "pages" / "vb_format.py").read_text(encoding="utf-8")
+    thuoc_tinh = set(quy_chuan.QUY_CHUAN_MAC_DINH["thanh_phan"]["noi_dung"])
+    thieu = [k for k in thuoc_tinh if f'"{k}"' not in nguon]
+    assert not thieu, f"thuộc tính không có ô trên màn Cấu hình: {thieu}"

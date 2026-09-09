@@ -50,10 +50,16 @@ TEN_LOAI_VB = {
 # Từ khoá chức danh — dùng để tách "quyền hạn, chức vụ người ký" khỏi một dòng
 # in hoa bất kỳ. Không có danh sách này thì mọi tiêu đề in hoa cuối văn bản đều
 # bị nhận nhầm là chức danh và bị căn giữa.
+#
+# "TRƯỞNG" để trần, không liệt kê từng chức danh ghép. Liệt kê thì danh sách
+# không bao giờ đủ: gặp thật trên "Bao cao nghiem thu NPA.docx" là dòng
+# "TRƯỞNG NHÓM" — có "TRƯỞNG PHÒNG", "TRƯỞNG BAN", "TRƯỞNG ĐƠN VỊ",
+# "TRƯỞNG BỘ PHẬN" trong danh sách mà vẫn lọt, nên cả khối chữ ký không được
+# áp thể thức. "TRƯỞNG" trần cũng nuốt luôn "KẾ TOÁN TRƯỞNG", "THỦ TRƯỞNG",
+# "TỔ TRƯỞNG" mà không phải khai thêm dòng nào.
 TU_KHOA_CHUC_DANH = (
-    "GIÁM ĐỐC", "CHỦ TỊCH", "TRƯỞNG PHÒNG", "TRƯỞNG BAN", "CHÁNH VĂN PHÒNG",
-    "KẾ TOÁN TRƯỞNG", "THỦ TRƯỞNG", "TRƯỞNG ĐƠN VỊ", "PHÓ", "QUYỀN",
-    "TỔNG GIÁM ĐỐC", "HỘI ĐỒNG", "BAN KIỂM SOÁT", "TRƯỞNG BỘ PHẬN",
+    "GIÁM ĐỐC", "CHỦ TỊCH", "TRƯỞNG", "CHÁNH VĂN PHÒNG",
+    "PHÓ", "QUYỀN", "HỘI ĐỒNG", "BAN KIỂM SOÁT",
 )
 TIEN_TO_QUYEN_HAN = ("TM.", "KT.", "TL.", "TUQ.", "Q.")
 
@@ -83,7 +89,9 @@ RE_DIEM        = re.compile(rf"^([{CHU_CAI_DIEM}]{{1,2}})\s*[).]\s+(.*)$")
 # Mẫu 06 của Phụ lục V ghi "Kính gửi ……." không có dấu hai chấm — đòi dấu
 # hai chấm là bỏ sót. Nhóm 1 giữ phần đứng SAU để phân biệt gửi một nơi
 # (có tên đơn vị ngay trên cùng dòng) với gửi nhiều nơi (liệt kê xuống dòng).
-RE_KINH_GUI    = re.compile(r"^Kính\s+gửi\s*:?\s*(.*)$", re.I)
+# "Kính trình" là dạng của Tờ trình / Phiếu trình chuyển — Mẫu 16 Phụ lục V in
+# đúng chữ "Kính trình:". Cùng vai thể thức với "Kính gửi", cùng cách trình bày.
+RE_KINH_GUI    = re.compile(r"^Kính\s+(?:gửi|trình)\s*:?\s*(.*)$", re.I)
 RE_NOI_NHAN    = re.compile(r"^Nơi\s+nhận\s*:", re.I)
 RE_LUU         = re.compile(r"^-?\s*Lưu\s*:", re.I)
 RE_PHU_LUC     = re.compile(r"^Phụ\s+lục\s+([IVXLCDM]+|\d+)\s*:?$", re.I)
@@ -197,7 +205,8 @@ def _doan_doc_lap(txt: str, trong_bang: bool) -> str | None:
 _KET_TRICH_YEU = (".", "!", "?", ";", ":")
 
 
-def _noi_dai_trich_yeu(ma: list[str], txt: list[str], i: int, ke_tiep) -> None:
+def _noi_dai_trich_yeu(ma: list[str], txt: list[str], i: int, ke_tiep,
+                       ma_dich: str = "trich_yeu") -> None:
     """Trích yếu dài bị xuống dòng thì các dòng sau CŨNG là trích yếu.
 
     Người soạn ngắt dòng để hai dòng cân nhau, không phải vì hết câu. Chỉ nhận
@@ -224,7 +233,7 @@ def _noi_dai_trich_yeu(ma: list[str], txt: list[str], i: int, ke_tiep) -> None:
             return
         if len(_gon(txt[j])) > 200:
             return
-        ma[j] = "trich_yeu"
+        ma[j] = ma_dich
         i = j
 
 
@@ -269,8 +278,126 @@ def _gom_ten_dv_nhieu_dong(khoi: list[int], txt: list[str]) -> list[list[int]]:
     return cum
 
 
+# Chỉ xét gạch đầu dòng trong LỜI VĂN. Danh sách nơi nhận và Kính gửi cũng
+# dùng "-" nhưng là danh sách phẳng, cỡ chữ riêng — đụng vào là hỏng khối cuối.
+_MA_XET_CAP_GACH = frozenset({"noi_dung"})
+
+
+def cap_gach_dau_dong(ma: list[str], txt: list[str]) -> list[int]:
+    """Cấp của từng dòng gạch đầu dòng: 0 = không phải, 1 = cấp ngoài, 2 = mục con…
+
+    QĐ 979 chỉ đánh số tới *điểm* (a, b, c); dưới đó không có cấp nào được khai,
+    nên người soạn thể hiện mục con bằng mắt chứ không bằng cấu trúc. Đo trên
+    "Bao cao nghiem thu NPA.docx": bốn mục con của "- 04 Mẫu biểu, bao gồm:"
+    giống hệt dòng cha về mọi thứ đọc được — cùng dấu "-", cùng thụt dòng đầu
+    1 cm, không lề trái, không danh sách tự động. Không có gì để đọc ra ngoài
+    chính con chữ.
+
+    ## Mở danh sách con: dòng kết thúc bằng dấu hai chấm
+
+    "- 04 Mẫu biểu, bao gồm:" — dấu ":" cuối một dòng gạch đầu dòng là lời hứa
+    "liệt kê ngay dưới đây".
+
+    ## Đóng danh sách con: quy ước ";" … "." của chính văn bản
+
+    Điều 15.4 đặt quy ước cho danh sách: **cuối mỗi dòng dấu chấm phẩy, dòng
+    CUỐI CÙNG dấu chấm**. Không dùng dấu hiệu đóng thì danh sách con chạy tới
+    tận dòng không-gạch-đầu-dòng đầu tiên, và trong chính file trên có ngay một
+    ca sai:
+
+        - Xây dựng phương pháp luận …:      ← mở danh sách con
+        - Phương pháp xác định …;            ← con
+        - Quy trình phê duyệt …;             ← con
+        - Các mẫu biểu, báo cáo liên quan.   ← con CUỐI (dấu chấm)
+        - Sản phẩm bàn giao: Tài liệu …      ← mục ngang cấp, KHÔNG phải con
+
+    Thiếu quy tắc đóng thì dòng cuối bị tụt xuống làm mục con — đổi nghĩa văn bản.
+
+    Chỉ đóng khi văn bản **đã chứng minh là có dùng quy ước**: trong cùng danh
+    sách con đó phải có ít nhất một dòng kết thúc bằng ";". Người soạn chấm câu
+    mọi dòng bằng "." thì dấu chấm không còn nói lên điều gì, và đóng theo nó là
+    cắt danh sách ngay sau mục con đầu tiên.
+
+    Dòng trống không ngắt danh sách; dòng không phải gạch đầu dòng thì ngắt hết.
+    """
+    cap = [0] * len(ma)
+    hien = 0                    # cấp của danh sách đang mở, 0 = không ở trong danh sách nào
+    co_cham_phay = False        # danh sách con hiện tại đã dùng quy ước ";" chưa
+    for i, (m, t) in enumerate(zip(ma, txt)):
+        s = _gon(t)
+        if not s:
+            continue
+        if m not in _MA_XET_CAP_GACH or not RE_GACH_DAU.match(s):
+            hien, co_cham_phay = 0, False
+            continue
+        if hien == 0:
+            hien, co_cham_phay = 1, False
+        cap[i] = hien
+        if s.endswith(":"):
+            hien += 1
+            co_cham_phay = False
+        elif hien > 1 and s.endswith(";"):
+            co_cham_phay = True
+        elif hien > 1 and s.endswith(".") and co_cham_phay:
+            hien -= 1
+            co_cham_phay = False
+    return cap
+
+
+def theo_dam_khoi_ten_dv(ma: list[str], dam: list[bool]) -> bool:
+    """Chia lại khối tên đơn vị theo CHỮ ĐẬM tác giả đã đặt. Trả True nếu có đổi.
+
+    Điều 8.2 cho hai vai và chỉ khác nhau đúng một thứ nhìn thấy được:
+    tên đơn vị **ban hành** in đậm và có đường kẻ, tên đơn vị **quản lý trực
+    tiếp** thì không. Cùng điều đó còn cho phép *"tên đơn vị ban hành văn bản,
+    tên đơn vị quản lý trực tiếp dài có thể trình bày thành nhiều dòng"* — nên
+    "dòng cuối là ban hành, các dòng trên là chủ quản" chỉ đúng khi mỗi vai vừa
+    một dòng.
+
+    Đoán bằng chữ (`_gom_ten_dv_nhieu_dong`) chỉ bắt được chỗ ngắt dòng có liên
+    từ mở đầu. Gặp khối bốn dòng như:
+
+        NGÂN HÀNG NÔNG NGHIỆP                 (thường)
+        VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM      (thường)
+        BAN TRIỂN KHAI GP QLRR HOẠT ĐỘNG      (ĐẬM)
+        TỔ TRIỂN KHAI NGHIỆP VỤ               (ĐẬM)
+
+    thì "TỔ TRIỂN KHAI NGHIỆP VỤ" mở đầu bằng danh từ, không có dấu hiệu chữ
+    nào nói nó thuộc cùng tên với dòng trên — và dòng "BAN…" bị bỏ đậm.
+
+    Nhưng tác giả ĐÃ nói rồi: họ bôi đậm đúng những dòng thuộc tên đơn vị ban
+    hành. Đó là dấu hiệu thật, do người viết đặt, chắc hơn mọi phép đoán trên
+    con chữ. Hàm này đọc chính dấu hiệu đó.
+
+    Hai hàng rào, thiếu cái nào cũng biến một tín hiệu tốt thành phép đoán:
+
+    * **Phải có cả đậm lẫn không đậm.** Tác giả bôi đậm cả khối (hoặc không bôi
+      dòng nào) nghĩa là họ không phân biệt hai vai — quay về đoán bằng chữ.
+    * **Các dòng đậm phải nằm liền nhau ở CUỐI khối.** Điều 8.2 đặt tên đơn vị
+      ban hành *"dưới tên đơn vị quản lý trực tiếp"*; đậm rải rác giữa khối là
+      định dạng lỗi, không phải phân vai.
+    """
+    khoi = [i for i, m in enumerate(ma)
+            if m in ("ten_dv_chu_quan", "ten_dv_ban_hanh")]
+    if not khoi:
+        return False
+    d = [i for i in khoi if dam[i]]
+    if not d or len(d) == len(khoi):
+        return False
+    if d != khoi[len(khoi) - len(d):]:
+        return False
+
+    cu = list(ma)
+    for i in khoi:
+        ma[i] = "ten_dv_chu_quan"
+    for i in d:
+        ma[i] = "ten_dv_ban_hanh"
+    return ma != cu
+
+
 # ── Lượt 2: sửa theo ngữ cảnh ────────────────────────────────────────────────
-def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool]) -> None:
+def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool],
+                       nhom_bang: list[int | None] | None = None) -> None:
     n = len(ma)
 
     def _ke_tiep(i: int) -> int:
@@ -317,6 +444,20 @@ def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool]) ->
             ma[j] = "trich_yeu"
             _noi_dai_trich_yeu(ma, txt, j, _ke_tiep)
 
+    # ── Trích yếu CÔNG VĂN xuống dòng ──
+    # Công văn không có tên loại nên nhánh trên không với tới nó. Gặp thật:
+    # "V/v Thông báo thay đổi tên/địa chỉ đăng ký" xuống dòng thành "trên hệ
+    # thống SWIFT" — dòng dưới rơi vào `noi_dung` rồi bị áp cỡ 14, căn đều hai
+    # bên, thụt dòng đầu 1 cm, trong khi dòng trên là cỡ 12 canh giữa. Hai nửa
+    # của MỘT cụm từ ra hai kiểu chữ khác nhau, nhìn ra ngay là hỏng.
+    #
+    # Dùng chung hàm nối dài với trích yếu thường, nên cũng chung mọi hàng rào:
+    # dừng khi dòng trên đã kết câu, khi đoạn sau đã có mã riêng (Kính gửi, Căn
+    # cứ…), và nhiều nhất 2 dòng.
+    for i in range(n):
+        if ma[i] == "trich_yeu_cong_van":
+            _noi_dai_trich_yeu(ma, txt, i, _ke_tiep, "trich_yeu_cong_van")
+
     # ── Tên đơn vị: các dòng in hoa ở đầu văn bản, trước tên loại ──
     # CỤM cuối của khối là tên đơn vị ban hành (in đậm, có đường kẻ), các cụm
     # trên là tên đơn vị quản lý trực tiếp. "Cụm" chứ không phải "dòng" — xem
@@ -351,6 +492,19 @@ def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool]) ->
                 break
 
     # ── Người ký: chức danh in hoa + họ tên ngay dưới ──
+    # Quyền hạn chiếm được HAI dòng. Điều 13.2: ký thay thì dòng trên là hình
+    # thức đề ký ("TL. TỔNG GIÁM ĐỐC"), dòng dưới là chức vụ của chính người
+    # đặt bút ("GIÁM ĐỐC TRUNG TÂM THANH TOÁN"). Đo trên "TB Swift code Quảng
+    # Ninh.docx": dòng thứ hai lọt qua `_la_ten_rieng` (5 từ, từ nào cũng mở
+    # đầu bằng chữ hoa, không có số) nên bị nhận là HỌ TÊN, và họ tên thật
+    # "Nguyễn Quốc Hùng" nằm dưới khoảng trống chừa chữ ký thì không còn ai
+    # nhận — ở nguyên mã `bang`, không được áp thể thức nào.
+    #
+    # Xét `_la_chuc_danh` TRƯỚC `_la_ten_rieng`: một dòng khớp cả hai thì nó là
+    # chức danh, vì không họ tên nào chứa "GIÁM ĐỐC" hay "TRƯỞNG".
+    #
+    # Chặn ở 2 dòng. Không chặn thì một khối in hoa nhiều dòng (danh sách đơn
+    # vị chẳng hạn) bị nuốt trọn làm quyền hạn rồi ép căn giữa cả khối.
     for i in range(n):
         if ma[i] in ("quoc_hieu", "ten_dv_ban_hanh", "ten_dv_chu_quan", "ten_loai"):
             continue
@@ -360,6 +514,13 @@ def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool]) ->
             continue
         ma[i] = "quyen_han_chuc_vu"
         j = _ke_tiep(i)
+        for _ in range(2):
+            if j < 0 or ma[j] not in ("noi_dung", "bang"):
+                break
+            if not _la_chuc_danh(_gon(txt[j])):
+                break
+            ma[j] = "quyen_han_chuc_vu"
+            j = _ke_tiep(j)
         if j >= 0 and ma[j] in ("noi_dung", "bang") and _la_ten_rieng(_gon(txt[j])):
             ma[j] = "ho_ten_nguoi_ky"
 
@@ -396,6 +557,31 @@ def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool]) ->
         if ma[i] == "bang":
             ma[i] = "bang_the_thuc"
 
+    # ── Ô bảng nằm trong khối "Kính gửi / Kính trình" ──
+    # Khối này hay được dựng bằng bảng cho dễ canh: một ô chứa "Kính trình:",
+    # ô bên cạnh chứa tên người nhận. Ô thứ hai không khớp thành phần nào nên
+    # rơi vào `bang` và GIỮ NGUYÊN cỡ chữ gốc — kết quả là nửa dòng cỡ 14, nửa
+    # dòng cỡ 11, ngay giữa khối đầu văn bản.
+    #
+    # Điều 4.2 để cỡ chữ cho người soạn tự quyết là nói về BẢNG SỐ LIỆU. Bảng
+    # dựng để canh chỗ cho một thành phần thể thức thì không phải bảng số liệu —
+    # nó vẫn phải theo thể thức của thành phần đó (người dùng chốt 08/09/2026).
+    #
+    # Chỉ lan trong ĐÚNG cái bảng chứa dòng "Kính gửi / Kính trình" —
+    # `nhom_bang` cho biết ô nào thuộc bảng nào. Lan theo "ô liền kề" thì hỏng:
+    # ô vừa nâng lại thành điểm xuất phát mới, và một bảng số liệu dán sát ngay
+    # sau bị kéo theo trọn vẹn. Đã thử, đúng là như vậy.
+    #
+    # `nhom_bang = None` (gọi `phan_loai` trực tiếp, không qua `chuan_hoa`) thì
+    # BỎ QUA luật này — thà không sửa còn hơn đoán nhầm ranh giới bảng.
+    if nhom_bang is not None:
+        cua_khoi = {nhom_bang[i]: ma[i] for i in range(n)
+                    if ma[i] in ("kinh_gui", "kinh_gui_ds")
+                    and nhom_bang[i] is not None}
+        for i in range(n):
+            if ma[i] == "bang" and nhom_bang[i] in cua_khoi:
+                ma[i] = cua_khoi[nhom_bang[i]]
+
     # ── Khoản có tiêu đề: dòng ngắn không kết câu, đoạn sau là điểm/gạch đầu ──
     for i in range(n):
         if ma[i] != "khoan":
@@ -408,15 +594,20 @@ def _sua_theo_ngu_canh(ma: list[str], txt: list[str], trong_bang: list[bool]) ->
             ma[i] = "khoan_co_tieu_de"
 
 
-def phan_loai(doan: list[tuple[str, bool]]) -> list[str]:
+def phan_loai(doan: list[tuple[str, bool]],
+              nhom_bang: list[int | None] | None = None) -> list[str]:
     """Trả mã thành phần thể thức cho từng đoạn.
 
     `doan` là danh sách `(text, nằm_trong_bảng)` theo đúng thứ tự xuất hiện
     trong file. Mã `trong` = đoạn rỗng, `bang` = ô bảng không thuộc thể thức
     nào (bước áp dụng chỉ sửa phông chữ cho nhóm này).
+
+    `nhom_bang` (từ `ap_dung.nhom_bang()`) nói mỗi đoạn thuộc BẢNG NÀO. Có nó
+    thì những ô cùng bảng với dòng "Kính gửi / Kính trình" được kéo theo thể
+    thức của khối đó; không có thì bỏ qua luật ấy chứ không đoán.
     """
     txt = [t for t, _ in doan]
     tb = [b for _, b in doan]
     ma = [_doan_doc_lap(t, b) for t, b in doan]
-    _sua_theo_ngu_canh(ma, txt, tb)
+    _sua_theo_ngu_canh(ma, txt, tb, nhom_bang)
     return ma

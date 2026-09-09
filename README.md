@@ -787,6 +787,10 @@ Truy cập:
   phông sẽ in qua Pillow. "NGÂN HÀNG NÔNG NGHIỆP VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM" cỡ 12 đậm đo được
   238,0 pt / ô 241,2 pt. Tràn thì nén `w:spacing` tối đa **−24 twip** (đúng mức Phụ lục V dùng),
   **không hạ cỡ chữ**; hết trần vẫn tràn thì dừng và ghi cảnh báo
+- **Ba cách kẻ vạch sẵn, ba cách xử lý**: hình vẽ (`<v:line>`, Straight Connector) thì **giữ
+  nguyên**; gạch chân (`w:u`) và viền dưới của đoạn (`w:pBdr/w:bottom`) thì **gỡ rồi vẽ lại** — hai
+  cách sau không cắt ngắn được (gạch chân dài đúng bằng chữ, viền đoạn dài hết bề ngang đoạn) nên
+  không làm được yêu cầu "1/3 đến 1/2 dòng chữ". Chỉ nhấc riêng `w:bottom`, giữ viền trên/trái/phải
 - **Không vẽ chồng lên đường kẻ có sẵn**: Word neo hình vẽ tay vào *chính đoạn có chữ*
   (`positionV relativeFrom="paragraph"`), không đặt ở đoạn riêng. Chỉ soi đoạn kế tiếp là vẽ thêm
   vạch thứ hai. Ở chính đoạn chỉ nhận đúng hình đường thẳng (`<v:line>`, `prstGeom prst="line"`,
@@ -798,6 +802,57 @@ Truy cập:
   chuẩn hoá làm chữ cao lên nên nó rơi vào giữa chừng và đẻ ra một trang gần như trống. Đoạn chỉ
   chứa dấu ngắt thì bỏ cả đoạn, đoạn có chữ thì chỉ nhấc thẻ `<w:br>` — không mất chữ. Tắt khi văn
   bản thật sự cần sang trang mới (Phụ lục ban hành kèm theo Quyết định)
+- **Mục con của gạch đầu dòng** — QĐ 979 chỉ đánh số tới cấp *điểm* (a, b, c), dưới đó không có
+  cấp nào được quy định nên đây là **thói quen trình bày, không phải điều khoản**:
+  - **Giữ thụt lề tác giả đã tự đặt**: gạch đầu dòng thụt sâu hơn mức chung là cách duy nhất trong
+    `.docx` để nói "đây là mục con"; ép `left_indent` về 0 là xoá phẳng phân cấp đó. Lời văn thường
+    thụt vô cớ thì vẫn dọn về 0 như cũ
+  - **Tự nhận mục con** (bật sẵn): dòng gạch đầu dòng kết thúc bằng `:` mở một danh sách con; mục
+    con dùng ký tự `+` và thụt thêm 1 cm. Danh sách con **đóng** ở dòng kết thúc bằng `.` — nhưng
+    chỉ khi các dòng trên đã dùng `;` (quy ước Điều 15.4), vì người soạn chấm câu mọi dòng bằng `.`
+    thì dấu chấm không nói lên điều gì — hoặc ở dòng đầu tiên không phải gạch đầu dòng
+  - Không áp cho danh sách **Nơi nhận** và **Kính gửi**: cũng dùng `-` nhưng là danh sách phẳng, cỡ chữ riêng
+- **Số của danh sách tự động ăn theo cỡ chữ của đoạn**: số thứ tự / dấu chấm tròn do Word sinh lúc
+  hiển thị, lấy định dạng từ `w:pPr/w:rPr` (dấu đoạn) chứ không từ `<w:r>` nào — sửa cỡ chữ từng run
+  không chạm tới nó, nên số "4." "I." in ra bằng nửa con chữ. Chỉ đồng bộ ở đoạn CÓ `numPr`
+- **Không đánh thêm số trang khi văn bản đã có**: soi đủ sáu chỗ (header/footer × mặc định/trang
+  đầu/trang chẵn). Trước đây chỉ soi header mặc định nên văn bản đánh số ở chân trang bị đè thêm
+- **"Kính trình:"** được nhận như "Kính gửi" — Mẫu 16 Phụ lục V (Phiếu trình chuyển) dùng đúng chữ này
+- **Bảng dựng để canh chỗ vẫn được áp thể thức**: khối "Kính gửi / Kính trình" hay được dựng bằng
+  bảng (một ô nhãn, một ô tên người nhận). Mọi ô **cùng một bảng** với dòng đó ăn theo thể thức của
+  khối — Điều 4.2 chỉ dành cho bảng số liệu. Ranh giới là **cái bảng** (`ap_dung.nhom_bang()`), không
+  phải "ô liền kề": lan theo ô liền kề thì một bảng số liệu dán sát ngay sau bị kéo theo trọn vẹn
+- **Danh sách chấm tròn tự động được đổi thành gạch đầu dòng TRƯỚC khi nhận diện thể thức.** Dấu
+  chấm tròn do Word vẽ lúc hiển thị, không nằm trong `p.text` — mà luật nhận khối **Nơi nhận** lại
+  đi tìm đúng dấu gạch đầu dòng đó. Khối Nơi nhận dựng bằng nút bullet của Word vì thế trượt hết
+  mọi luật, mang mã `bang` và giữ nguyên cỡ chữ gốc. `ap_dung.go_bullet_tu_dong()` chạy trước
+  `phan_loai()` (cùng chỗ với `bo_ngat_trang_thu_cong()`). Tắt ô *"Chuyển danh sách chấm tròn tự
+  động…"* thì lỗi này quay lại — cố ý không vá bằng cách dạy bộ nhận diện đọc `numPr`, nó chỉ đọc
+  con chữ và phải giữ đúng một nguồn dữ liệu
+- **Quyền hạn người ký chiếm được hai dòng** (Điều 13.2): "TL. TỔNG GIÁM ĐỐC" rồi "GIÁM ĐỐC TRUNG
+  TÂM THANH TOÁN". Dòng thứ hai lọt qua phép thử họ tên (5 từ, từ nào cũng mở đầu chữ hoa) nên từng
+  bị nhận là **họ tên**, và họ tên thật nằm dưới khoảng chừa chữ ký thì không còn ai nhận. Nay xét
+  **chức danh trước, họ tên sau**, đi tối đa 2 dòng
+- **Từ khoá chức danh dùng "TRƯỞNG" để trần**, không liệt kê từng chức danh ghép: đã có TRƯỞNG
+  PHÒNG / BAN / ĐƠN VỊ / BỘ PHẬN mà "TRƯỞNG NHÓM" vẫn lọt, khiến cả khối chữ ký của một Báo cáo
+  không được áp thể thức
+- **Tiêu ngữ được sửa cả hoa/thường**, không chỉ dấu nối và dấu cách: Điều 7.2 nói thẳng "chữ cái
+  đầu của các cụm từ được viết hoa" nên "Hạnh **P**húc" là sai. Kiểu bỏ dấu ("Hoà" / "Hòa") vẫn
+  **không** bị đụng — quy định không nói gì, đó là thói quen từng đơn vị. Không sửa khi chuỗi tách
+  ra khác 3 cụm
+- **Bỏ tab / dấu cách thụt đầu dòng gõ tay** ở thành phần mà quy chuẩn tự đặt `thut_cm`: để lại thì
+  dòng đó thụt gấp đôi (tab + 1 cm). Tab **giữa** dòng không bị đụng — đó là canh cột
+- **Trích yếu công văn xuống dòng cũng được nối dài**: luật nối dài vốn chỉ chạy từ mốc *tên loại
+  văn bản*, mà công văn thì không có tên loại — trích yếu của nó là dòng `V/v …` ngay dưới số ký
+  hiệu. Dòng thứ hai vì thế rơi vào lời văn và bị áp cỡ 14 / căn đều hai bên / thụt 1 cm, trong khi
+  dòng trên là cỡ 12 canh giữa. Dùng lại chính hàm cũ nên thừa hưởng nguyên các hàng rào của nó
+- **Thêm dấu cách sau tiền tố đề ký**: "TL.TỔNG GIÁM ĐỐC" → "TL. TỔNG GIÁM ĐỐC" (TM. / KT. / TL. /
+  TUQ. / Q., chỉ nhận tiền tố viết hoa đứng đầu dòng)
+- **Khối tên đơn vị chia vai theo chữ đậm tác giả đã đặt** (Điều 8.2 — ban hành thì đậm + có đường
+  kẻ, chủ quản thì không). Đây là dấu hiệu do người viết đặt, dùng trước mọi phép đoán trên con chữ;
+  bắt được cả trường hợp tên đơn vị ban hành dài trải hai dòng mà dòng sau mở đầu bằng danh từ
+  ("BAN TRIỂN KHAI … / TỔ TRIỂN KHAI …"). Bỏ qua khi cả khối cùng đậm (tác giả không phân biệt) hoặc
+  khi các dòng đậm không liền nhau ở cuối khối
 - **Tên đơn vị dài trình bày nhiều dòng** (Điều 8.2): khối in hoa đầu văn bản được gom thành từng
   **cụm** trước khi lấy cụm cuối làm đơn vị ban hành. "NGÂN HÀNG NÔNG NGHIỆP / VÀ PHÁT TRIỂN NÔNG
   THÔN VIỆT NAM" là MỘT tên xuống dòng — đọc mỗi dòng là một cấp đơn vị thì nửa trên bị bỏ in đậm.

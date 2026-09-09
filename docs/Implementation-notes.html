@@ -487,12 +487,344 @@
     </div>
   </div>
 
+  <!-- VB6 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">VB6</span>
+      <span class="card-title">Chuẩn hoá văn bản — rà soát lại trên hai văn bản thật, 8 chỗ sửa</span>
+      <span class="badge badge-done">Xong — toàn bộ test pass, thêm 15 test cho riêng module này</span>
+    </div>
+    <div class="card-body">
+
+      <p>Chạy lại engine trên hai file thật trong <code>979-QyD-NHNo-PC (Trình bày VB)/test/</code>
+        rồi soi từng đoạn của bản kết quả, thay vì soi mã nguồn. Tám chỗ hỏng, <b>không chỗ nào
+        báo lỗi</b> — tất cả đều thuộc kiểu "chạy xong, nhìn mới biết sai".</p>
+
+      <table>
+        <tr><th>#</th><th>Hỏng ở đâu</th><th>Vì sao không ai thấy</th></tr>
+        <tr><td>1</td><td>Khối <b>Nơi nhận</b> dựng bằng danh sách chấm tròn tự động không được nhận diện</td>
+            <td>Cả 6 dòng mang mã <code>bang</code>, mà <code>bang</code> thì engine cố ý không đụng
+              cỡ chữ — khối giữ nguyên mọi thứ của bản gốc</td></tr>
+        <tr><td>2</td><td>Dòng chức vụ thứ hai bị nhận là <b>họ tên người ký</b></td>
+            <td>Họ tên thật nằm dưới khoảng chừa chữ ký thì không còn ai nhận</td></tr>
+        <tr><td>3</td><td>"TRƯỞNG NHÓM" không được nhận là chức danh</td>
+            <td>Cả khối chữ ký không được áp thể thức</td></tr>
+        <tr><td>4</td><td>Tiêu ngữ "Hạnh <b>P</b>húc" không được sửa</td>
+            <td>Chữ P hoa giữa cụm, đọc lướt không thấy</td></tr>
+        <tr><td>5</td><td>Tab thụt đầu dòng còn nguyên sau khi engine đặt thụt 1 cm</td>
+            <td>Dòng đó thụt gấp đôi mọi dòng khác</td></tr>
+        <tr><td>6</td><td>"TL.<b>T</b>ỔNG GIÁM ĐỐC" gõ dính</td>
+            <td>Không sai chính tả nên không ai để ý</td></tr>
+        <tr><td>7</td><td><code>le_trai_cm</code> áp lên văn bản mà không có ô nào trên màn Cấu hình</td>
+            <td>Người dùng không có cách nào nhìn thấy hay tắt đi</td></tr>
+        <tr><td>8</td><td>Trích yếu <b>công văn</b> xuống dòng thì dòng dưới thành lời văn</td>
+            <td>Nửa trên cỡ 12 canh giữa, nửa dưới cỡ 14 căn đều hai bên — một cụm từ, hai kiểu chữ</td></tr>
+      </table>
+
+      <div class="label"><span class="pill pill-red">Lỗi 1</span> Dấu chấm tròn tự động không nằm trong chữ</div>
+      <p>Word vẽ dấu chấm tròn lúc hiển thị, <code>p.text</code> chỉ có "Như trên;". Luật nhận khối
+        Nơi nhận đọc <i>"dòng mở đầu bằng gạch đầu dòng, gặp dòng khác thì dừng"</i> — không thấy
+        gạch nào nên nó dừng ngay ở dòng đầu tiên.</p>
+      <p><b>Sửa bằng thứ tự, không bằng thêm luật.</b> Việc đổi bullet tự động thành gạch gõ tay
+        vốn đã có, nhưng chạy <b>trong</b> vòng lặp — tức là sau khi phân loại xong. Tách ra thành
+        <code>ap_dung.go_bullet_tu_dong()</code> chạy <b>trước</b> <code>phan_loai()</code> thì
+        <code>p.text</code> đã có "- " thật và luật cũ chạy đúng, không phải viết luật mới.</p>
+      <div class="note">Cùng lý do và cùng chỗ đặt với <code>bo_ngat_trang_thu_cong()</code>.
+        Nhật ký vẫn ghi đúng từng đoạn: hàm trả về tập chỉ số đoạn đã đổi, vòng lặp đọc lại tập đó.</div>
+      <div class="caution"><b>Cái giá của việc đổi thứ tự — phải tự lọc lại đoạn rỗng.</b> Vòng lặp cũ
+        bỏ qua <code>ma == "trong"</code> <i>trước</i> khi đụng tới bullet, nên mục trống giữa danh
+        sách (gõ Enter hai lần) được để yên. Chạy sớm thì không còn mã thể thức nào để dựa vào:
+        bản đầu thêm "- " vào cả đoạn rỗng, biến dòng trắng thành gạch đầu dòng không có chữ và đẩy
+        đoạn ấy từ <code>trong</code> sang <code>noi_dung</code> — sai cả nhật ký lẫn số đoạn đếm
+        được. <code>go_bullet_tu_dong()</code> tự kiểm <code>p.text.strip()</code>; có test canh.</div>
+      <div class="caution"><b>Còn hở:</b> tắt ô <i>"Chuyển danh sách chấm tròn tự động…"</i> trong
+        tab Cấu hình thì lỗi này quay lại nguyên vẹn. Cố ý không vá: vá nghĩa là dạy bộ nhận diện
+        đọc <code>numPr</code>, mà nó được thiết kế chỉ đọc <b>con chữ</b> — thêm một nguồn dữ liệu
+        thứ hai vào đó là mở cửa cho hai nguồn nói ngược nhau.</div>
+
+      <div class="label"><span class="pill pill-red">Lỗi 2</span> "GIÁM ĐỐC TRUNG TÂM THANH TOÁN" là chức vụ, không phải tên người</div>
+      <p>Điều 13.2: ký thay thì dòng trên là hình thức đề ký ("TL. TỔNG GIÁM ĐỐC"), dòng dưới là
+        <b>chức vụ của chính người đặt bút</b>. Dòng thứ hai lọt qua phép thử họ tên (5 từ, từ nào
+        cũng mở đầu bằng chữ hoa, không có số) nên bị nhận là họ tên.</p>
+      <table>
+        <tr><th>Dòng</th><th>Trước</th><th>Sau</th></tr>
+        <tr><td>TL. TỔNG GIÁM ĐỐC</td><td>quyen_han_chuc_vu</td><td>quyen_han_chuc_vu</td></tr>
+        <tr><td>GIÁM ĐỐC TRUNG TÂM THANH TOÁN</td>
+            <td><span class="pill pill-red">ho_ten_nguoi_ky</span></td>
+            <td><span class="pill pill-green">quyen_han_chuc_vu</span></td></tr>
+        <tr><td>Nguyễn Quốc Hùng</td>
+            <td><span class="pill pill-red">bang</span> — không áp thể thức nào</td>
+            <td><span class="pill pill-green">ho_ten_nguoi_ky</span></td></tr>
+      </table>
+      <p>Quy tắc mới: xét <b>chức danh trước, họ tên sau</b> — một dòng khớp cả hai thì nó là chức
+        danh, vì không họ tên nào chứa "GIÁM ĐỐC" hay "TRƯỞNG". Đi tối đa <b>2 dòng</b>; không chặn
+        thì một khối in hoa nhiều dòng bị nuốt trọn rồi ép căn giữa cả khối.</p>
+
+      <div class="label"><span class="pill pill-amber">Lỗi 3</span> Danh sách chức danh ghép không bao giờ đủ</div>
+      <p>Đã có TRƯỞNG PHÒNG, TRƯỞNG BAN, TRƯỞNG ĐƠN VỊ, TRƯỞNG BỘ PHẬN mà "TRƯỞNG NHÓM" vẫn lọt.
+        Thay bốn dòng đó bằng <b>"TRƯỞNG"</b> để trần — nuốt luôn KẾ TOÁN TRƯỞNG, THỦ TRƯỞNG,
+        TỔ TRƯỞNG mà không phải khai thêm.</p>
+      <div class="caution"><b>Đánh đổi đã nhận:</b> một dòng in hoa dưới 70 ký tự có chữ "TRƯỞNG"
+        đứng giữa văn bản (tiêu đề bảng "DANH SÁCH TRƯỞNG PHÒNG" chẳng hạn) sẽ bị nhận là chức vụ
+        người ký rồi căn giữa. Rủi ro này <b>đã có sẵn</b> với "GIÁM ĐỐC" và "CHỦ TỊCH" — nới thêm
+        "TRƯỞNG" chỉ mở rộng, không tạo ra loại lỗi mới.</div>
+
+      <div class="label"><span class="pill pill-blue">Lỗi 4</span> Tiêu ngữ: sửa hoa/thường, KHÔNG sửa kiểu bỏ dấu</div>
+      <p>Điều 7.2 nói thẳng <i>"chữ cái đầu của các cụm từ được viết hoa"</i> — Tiêu ngữ có đúng một
+        dạng đúng. Nhưng <code>chuan_tieu_ngu()</code> trước đây chừa hẳn phần chữ, vì sợ đụng vào
+        "Hoà" / "Hòa".</p>
+      <div class="note"><b>Hai chuyện khác nhau.</b> Kiểu bỏ dấu là thói quen của từng đơn vị, quy
+        định không nói gì. Hoa/thường thì quy định nói rõ. <code>.lower()</code> của Python giữ
+        nguyên dấu tiếng Việt nên sửa hoa/thường <b>không</b> kéo theo đổi kiểu bỏ dấu.</div>
+      <p>Không đụng khi tách ra khác 3 cụm: lúc đó chuỗi không còn là Tiêu ngữ chuẩn (dính thêm chữ,
+        thiếu một cụm) và viết hoa lại theo công thức là đoán mò.</p>
+
+      <div class="label"><span class="pill pill-blue">Lỗi 5</span> Tab thụt đầu dòng + thụt 1 cm = thụt gấp đôi</div>
+      <p>Chỉ bỏ khoảng trắng đầu đoạn khi quy chuẩn <b>tự đặt</b> mức thụt cho thành phần đó
+        (<code>thut_cm</code> khác <code>None</code>). Lúc ấy tab gõ tay không còn là cách thụt lề
+        nữa mà là khoảng trống cộng thêm.</p>
+      <div class="note">Tab <b>giữa</b> dòng không bị đụng: đó là người soạn canh cột
+        ("- Swift Code &lt;tab&gt;&lt;tab&gt; : VBAAVNVX330"), bỏ đi là phá cách trình bày của họ.
+        Có test canh riêng.</div>
+
+      <div class="label"><span class="pill pill-blue">Lỗi 7</span> Một thuộc tính áp ngầm suốt từ đầu</div>
+      <p><code>le_trai_cm</code> có trong quy chuẩn, được <code>_dinh_dang_doan()</code> đọc và áp
+        lên văn bản (kéo lời văn về lề 0), nhưng màn Cấu hình <b>không vẽ ô nào cho nó</b> — đúng
+        thứ mà docstring đầu <code>frontend/pages/vb_format.py</code> dặn phải tránh: một luật sửa
+        văn bản mà người dùng không nhìn thấy và không tắt được.</p>
+      <p>Nguyên nhân: form dựng 28 thành phần từ dữ liệu backend, nhưng <b>danh sách 8 thuộc tính
+        của mỗi thành phần thì gõ tay ở frontend</b> — thêm thuộc tính thứ 9 bên
+        <code>quy_chuan.py</code> mà quên sửa ở đây thì không có gì báo.</p>
+      <div class="note"><b>Lưới an toàn mới:</b> <code>test_le_trai_doan_co_mat_tren_man_cau_hinh</code>
+        đọc thẳng mã nguồn frontend, so với danh sách khoá của <code>thanh_phan["noi_dung"]</code>.
+        Thêm thuộc tính mới mà quên vẽ ô là <b>test đỏ</b>, không phải "phát hiện sau ba tháng".</div>
+      <p>Ô <i>Thụt dòng đầu</i> nhân tiện cho <code>clearable</code> — bỏ trống = không đụng tới,
+        đồng bộ với hai ô giãn dòng / cách đoạn riêng đã có.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 8</span> Công văn không có tên loại nên trượt khỏi luật nối dài trích yếu</div>
+      <p>Luật "trích yếu dài xuống dòng thì dòng sau cũng là trích yếu" vốn chỉ chạy từ mốc
+        <b>tên loại văn bản</b> ("BÁO CÁO", "QUYẾT ĐỊNH"…). Công văn không có tên loại — trích yếu
+        của nó là dòng "V/v …" đứng ngay dưới số ký hiệu — nên nhánh đó không bao giờ với tới.</p>
+      <p>Dùng lại <b>chính hàm cũ</b>, chỉ thêm tham số mã đích, nên thừa hưởng nguyên bộ hàng rào
+        đã cân nhắc từ trước: dừng khi dòng trên đã kết câu, dừng khi đoạn sau đã có mã riêng
+        (Kính gửi, Căn cứ…), và nhiều nhất 2 dòng.</p>
+      <div class="note">Trên file thật dòng thứ hai nằm trong ô bảng nên chỉ mất cỡ chữ. Ngoài bảng
+        thì hỏng nặng hơn hẳn: dòng dưới bị áp <b>cỡ 14, căn đều hai bên, thụt dòng đầu 1 cm</b>
+        trong khi dòng trên là cỡ 12 canh giữa.</div>
+
+      <div class="label"><span class="pill pill-gray">Không làm</span></div>
+      <p>Dòng "GIÁM ĐỐC TRUNG TÂM THANH TOÁN" vẫn bị ép <b>IN HOA</b> theo mã
+        <code>quyen_han_chuc_vu</code>. Đúng với Phụ lục III, nhưng nếu đơn vị nào muốn dòng chức vụ
+        thứ hai in thường thì hiện chưa có cách tách hai dòng ra hai mã khác nhau. Chưa gặp yêu cầu,
+        chưa làm.</p>
+
+    </div>
+  </div>
+
+  <!-- VB5 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">VB5</span>
+      <span class="card-title">Chuẩn hoá văn bản — số tự động bị teo, số trang trùng, "Kính trình"</span>
+      <span class="badge badge-warn">Xong 4/5 — 1579 test pass; một lỗi còn lại chờ file</span>
+    </div>
+    <div class="card-body">
+
+      <p>Người dùng gửi năm ảnh chụp màn hình một Tờ trình, <b>không kèm file</b>. Ba lỗi tái hiện
+        được từ mã nguồn nên sửa luôn; hai lỗi còn lại không có đủ dữ liệu để chẩn đoán.</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 1</span> Số "4." "5." "I." "II." in ra bằng nửa con chữ</div>
+      <p>Số thứ tự và dấu chấm tròn của <b>danh sách tự động</b> không nằm trong một
+        <code>&lt;w:r&gt;</code> nào — Word sinh chúng lúc hiển thị và lấy định dạng từ
+        <code>rPr</code> của <b>dấu đoạn</b> (<code>w:pPr/w:rPr</code>). Cả engine từ trước tới nay
+        chỉ sửa cỡ chữ trên từng <code>run</code>, nên không bao giờ chạm tới chúng.</p>
+      <div class="caution">Đo trên bản dựng lại: lời văn đã về <b>14</b> nhưng dấu đoạn vẫn giữ
+        <code>w:sz = 16</code> — tức <b>8 pt</b>, đúng một nửa. Nhìn ra ngay khi in, mà
+        <b>không có lỗi nào báo và nhật ký cũng không ghi gì</b>: cỡ chữ của run đúng cả.</div>
+      <p><code>_dong_bo_dau_doan()</code> chép cỡ chữ / đậm / phông xuống <code>w:pPr/w:rPr</code>.
+        Chỉ ghi những thuộc tính thành phần thể thức <b>khai rõ</b> — <code>dam = None</code> nghĩa
+        là "giữ nguyên", ép vào đây là tự quyết thay người soạn.</p>
+      <div class="note"><b>Chỉ đụng đoạn CÓ đánh số tự động</b> (<code>_tim_numPr</code> khác
+        <code>None</code>). Đoạn thường thì <code>rPr</code> của dấu đoạn không hiện ra ở đâu cả —
+        ghi vào đó là sửa hàng nghìn đoạn mà không ai thấy khác gì, và mỗi đoạn lại đẻ một dòng
+        nhật ký vô nghĩa. Hàng rào này thêm vào sau khi bản đầu làm đúng như vậy.</div>
+
+      <div class="label"><span class="pill pill-red">Lỗi 2</span> Số trang bị đánh đè thành hai con số</div>
+      <p><code>_them_so_trang()</code> chỉ soi <b>header mặc định</b>. Văn bản đã đánh số ở chỗ khác
+        thì bị đánh thêm một lần nữa:</p>
+      <table>
+        <tr><th>Số trang có sẵn ở</th><th>Trước khi sửa</th><th>Sau khi sửa</th></tr>
+        <tr><td>Chân trang (footer)</td>
+            <td><span class="pill pill-red">2 con số</span></td>
+            <td><span class="pill pill-green">1</span></td></tr>
+        <tr><td>Header trang đầu</td>
+            <td><span class="pill pill-red">2 con số</span></td>
+            <td><span class="pill pill-green">1</span></td></tr>
+        <tr><td>Header mặc định</td><td>1 — vốn đã đúng</td><td>1</td></tr>
+        <tr><td>Chưa có ở đâu</td><td>1 — vẫn phải đánh</td><td>1</td></tr>
+      </table>
+      <p><code>_da_co_so_trang()</code> soi đủ <b>sáu</b> chỗ: header và footer, mỗi loại ba biến thể
+        (mặc định / trang đầu / trang chẵn).</p>
+
+      <div class="label"><span class="pill pill-red">Lỗi 3</span> "Kính trình:" không được nhận diện</div>
+      <p><code>RE_KINH_GUI</code> chỉ khớp "Kính gửi", nên dòng "Kính trình:" của Tờ trình rơi vào
+        <code>noi_dung</code> và bị áp thể thức lời văn. <b>Mẫu 16 Phụ lục V</b> (Phiếu trình chuyển)
+        in đúng chữ <i>"Kính trình:"</i> — cùng vai thể thức, cùng cách trình bày. Nay khớp cả hai.</p>
+
+      <div class="label"><span class="pill pill-green">Người dùng chốt 08/09</span> Bảng dựng để canh chỗ KHÔNG phải bảng số liệu</div>
+      <p>Giả thiết ở trên đúng: dòng "Kính trình:" nằm trong bảng. Nhưng kết luận thì sai — người
+        dùng chốt rằng bảng kiểu này <b>vẫn phải áp thể thức</b>, Điều 4.2 chỉ dành cho bảng số liệu.</p>
+      <p>Chẩn đoán lại, gốc rễ không phải Điều 4.2 mà là chỗ chia ô: "Kính trình:" và tên người nhận
+        nằm ở <b>hai ô khác nhau</b>. Ô đầu khớp <code>kinh_gui_ds</code> nên được sửa; ô thứ hai
+        không khớp thành phần nào → <code>bang</code> → <b>giữ nguyên cỡ 11</b>. Nửa dòng cỡ 14,
+        nửa dòng cỡ 11.</p>
+      <p>Nay mọi ô <b>cùng một bảng</b> với dòng "Kính gửi / Kính trình" được kéo theo thể thức của
+        khối đó. Ô trống chỉ để canh chỗ cũng không cắt khối.</p>
+      <div class="caution"><b>Ranh giới phải là CÁI BẢNG, không phải "ô liền kề".</b> Bản viết đầu
+        lan sang ô liền kề: ô vừa nâng lại thành điểm xuất phát mới, và một bảng số liệu dán sát
+        ngay sau bị <b>kéo theo trọn vẹn</b> — đo được cả 6 ô đều lên cỡ 14. Chặn bằng số ô tối đa
+        cũng không cứu được vì lan theo dây chuyền.</div>
+      <div class="caution"><b>Bẫy lxml: <code>id()</code> của proxy bị cấp lại.</b> Bản thứ hai dùng
+        <code>id()</code> của phần tử <code>w:tbl</code> lấy tại chỗ để nhóm ô. lxml <b>dựng proxy
+        theo yêu cầu rồi thu hồi</b>, nên <code>id()</code> vừa giải phóng được cấp cho phần tử
+        khác. Đo được: ô của cùng một bảng nhận số nhóm khác nhau, ô của hai bảng khác nhau lại
+        trùng số — bảng số liệu bị sửa <b>xen kẽ từng ô một</b>, nhìn như lỗi ngẫu nhiên.
+        <code>nhom_bang()</code> vì vậy gom cả danh sách <code>w:tbl</code> ra trước rồi so bằng
+        <code>is</code>: danh sách giữ tham chiếu nên mọi proxy sống tới hết hàm.</div>
+      <p><code>phan_loai()</code> nhận <code>nhom_bang</code> là tham số <b>tuỳ chọn</b>; gọi trực
+        tiếp mà không truyền thì luật này <b>không chạy</b> — thà không sửa còn hơn đoán ranh giới bảng.</p>
+
+      <div class="label"><span class="pill pill-gray">Chưa sửa — thiếu dữ liệu</span> Lỗi còn lại</div>
+      <table>
+        <tr><th>Hiện tượng</th><th>Vì sao chưa kết luận được</th></tr>
+        <tr><td>Khoảng cách từ số "III." / "IV." đến chữ không đều</td>
+            <td>Do <code>w:suff</code> và mốc tab trong <b>định nghĩa danh sách</b>
+                (<code>numbering.xml</code>), hay do hai mục nằm ở hai <i>level</i> khác nhau, hay do
+                thụt lề riêng của đoạn — ba nguyên nhân cho ra cùng một hình ảnh. Đo trên ảnh chụp
+                màn hình không tách được.</td></tr>
+        <tr><td>Khoảng cách từ "Kính trình:" tới tên người nhận quá xa</td>
+            <td>Đó là <b>bề ngang của ô bảng</b>, không phải khoảng cách chữ. Sửa nó là đổi bề ngang
+                cột — thuộc bố cục bảng do người soạn dựng, engine không đụng tới. Cần mở file mới
+                biết nên co cột hay gộp hai ô làm một.</td></tr>
+      </table>
+
+    </div>
+  </div>
+
+  <!-- VB4 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">VB4</span>
+      <span class="card-title">Chuẩn hoá văn bản — mục con của gạch đầu dòng</span>
+      <span class="badge badge-done">Xong — 1562 test pass</span>
+    </div>
+    <div class="card-body">
+
+      <p>Người dùng chỉ ra bốn dòng "Mẫu biểu 01…04" phải trình bày khác dòng cha
+        "- 04 Mẫu biểu, bao gồm:". Hai việc khác hẳn nhau nằm trong cùng một yêu cầu này.</p>
+
+      <div class="label"><span class="pill pill-red">Việc 1 — lỗi thật</span> Phần mềm xoá phẳng phân cấp tác giả ĐÃ viết ra</div>
+      <p>Quy chuẩn đặt <code>le_trai_cm = 0</code> cho lời văn, để dọn những khoảng thụt vô cớ do
+        sao chép qua lại. Nhưng <b>thụt lề là cách duy nhất trong <code>.docx</code> để nói "đây là
+        mục con"</b> — QĐ 979 chỉ đánh số tới cấp <i>điểm</i> (a, b, c), dưới đó không có cấp nào
+        được khai. Ép về 0 là bốn mục con nằm ngang hàng với chính mục cha của chúng: đọc ra thành
+        năm mục ngang cấp, sai nghĩa, không lỗi nào báo.</p>
+      <table>
+        <tr><th>Đoạn</th><th>Lề trái gốc</th><th>Trước khi sửa</th><th>Sau khi sửa</th></tr>
+        <tr><td><code>- Mẫu biểu 01 …</code></td><td>1,0 cm</td>
+            <td><span class="pill pill-red">0,0</span></td>
+            <td><span class="pill pill-green">1,0</span></td></tr>
+        <tr><td>Đoạn lời văn thụt vô cớ</td><td>1,0 cm</td>
+            <td>0,0</td><td>0,0 — vẫn dọn như cũ</td></tr>
+      </table>
+      <p>Phân biệt bằng ba điều kiện hẹp: mức chung phải là 0 (không đụng thành phần có thụt riêng),
+        đoạn thụt <b>sâu hơn</b> mức chung, và đoạn <b>mở đầu bằng gạch đầu dòng</b>.</p>
+
+      <div class="label"><span class="pill pill-green">Bổ sung 07/09</span> Khối tên đơn vị chia vai theo chữ đậm tác giả đã đặt</div>
+      <p>Cùng ngày, người dùng đưa tiếp một khối bốn dòng mà cách đoán bằng chữ không xử lý được:</p>
+      <table>
+        <tr><th>Dòng</th><th>Bản gốc</th><th>Trước khi sửa</th><th>Sau khi sửa</th></tr>
+        <tr><td>NGÂN HÀNG NÔNG NGHIỆP</td><td>thường</td><td>thường</td><td>thường</td></tr>
+        <tr><td>VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM</td><td>thường</td><td>thường</td><td>thường</td></tr>
+        <tr><td>BAN TRIỂN KHAI GP QLRR HOẠT ĐỘNG</td><td><b>ĐẬM</b></td>
+            <td><span class="pill pill-red">bị bỏ đậm</span></td>
+            <td><span class="pill pill-green">ĐẬM</span></td></tr>
+        <tr><td>TỔ TRIỂN KHAI NGHIỆP VỤ</td><td><b>ĐẬM</b></td><td>ĐẬM + kẻ</td><td>ĐẬM + kẻ</td></tr>
+      </table>
+      <p>Điều 8.2 cho phép <i>"tên đơn vị ban hành văn bản, tên đơn vị quản lý trực tiếp dài có thể
+        trình bày thành nhiều dòng"</i> — nên "dòng cuối là ban hành, các dòng trên là chủ quản"
+        chỉ đúng khi mỗi vai vừa một dòng. "TỔ TRIỂN KHAI NGHIỆP VỤ" mở đầu bằng danh từ nên
+        <code>_gom_ten_dv_nhieu_dong</code> (chỉ bắt liên từ và gạch nối) không nối được.</p>
+      <div class="note"><b>Tác giả đã nói rồi — chỉ cần đọc.</b> Điều 8.2 phân biệt hai vai bằng
+        đúng một thứ nhìn thấy được: ban hành thì <b>đậm</b> và có đường kẻ, chủ quản thì không.
+        Người soạn bôi đậm đúng những dòng thuộc tên đơn vị ban hành. Đó là dấu hiệu <b>do người
+        viết đặt</b>, chắc hơn mọi phép đoán trên con chữ.
+        <code>theo_dam_khoi_ten_dv()</code> chạy TRƯỚC <code>_dinh_dang_doan</code> — sau bước đó
+        thì tín hiệu gốc bị ép theo mã và mất sạch.</div>
+      <div class="caution"><b>Hai hàng rào, thiếu cái nào cũng biến tín hiệu tốt thành phép đoán:</b>
+        <br>1. Khối phải có <b>cả đậm lẫn không đậm</b>. Bôi đậm cả khối (hoặc không dòng nào) là
+        tác giả không phân biệt hai vai — quay về đoán bằng chữ. Đây đúng là ca ngày 03/09
+        ("NGÂN HÀNG NÔNG NGHIỆP" + "VÀ PHÁT TRIỂN…" đậm cả hai), nên hai luật không giẫm chân nhau.
+        <br>2. Các dòng đậm phải <b>liền nhau ở CUỐI khối</b>. Điều 8.2 đặt tên đơn vị ban hành
+        <i>"dưới tên đơn vị quản lý trực tiếp"</i>; đậm rải rác giữa khối là định dạng lỗi.</div>
+      <p>Kiểm lại cả ba ví dụ in ngay trong Điều 8 (chủ quản 2 dòng + CHI NHÁNH HÀ NỘI; chủ quản
+        3 dòng + PHÒNG GIAO DỊCH CHỢ MƠ) đều ra đúng, và chạy lại lần hai không đổi kết quả.</p>
+
+      <div class="label"><span class="pill pill-red">Việc 2 — không có gì để đọc</span> File của người dùng không mang dấu hiệu phân cấp nào</div>
+      <div class="caution">Đo trên "Bao cao nghiem thu NPA.docx": năm dòng đó <b>giống hệt nhau</b>
+        — cùng dấu <code>-</code>, cùng <code>firstLine=567</code> (1 cm), <b>không</b> lề trái,
+        <b>không</b> <code>numPr</code>, cùng style Normal. Việc 1 không cứu được file này. Muốn
+        trình bày khác thì phần mềm phải <b>tự suy</b>, tức là tự khẳng định một cấu trúc mà tác giả
+        không viết ra.</div>
+      <p><b>Người dùng chốt 07/09/2026:</b> có suy, và mục con dùng dấu <code>+</code> kèm thụt lề.
+        Đây là thói quen văn bản hành chính, <b>không phải điều khoản</b> — QĐ 979 chỉ nhắc "gạch
+        đầu dòng (-)" ở Kính gửi và Nơi nhận, không nói gì về cấp dưới.</p>
+
+      <div class="label"><span class="pill pill-blue">Quyết định</span> Mở danh sách con bằng ":", đóng bằng quy ước ";" … "."</div>
+      <p>Mở thì dễ: dấu <code>:</code> cuối một dòng gạch đầu dòng là lời hứa "liệt kê ngay dưới đây".
+        <b>Đóng mới là chỗ khó</b>, và bỏ qua nó thì hỏng ngay trong chính file đang sửa:</p>
+      <table>
+        <tr><th>Dòng</th><th>Chỉ dùng "đến dòng không phải gạch đầu dòng"</th><th>Có quy tắc đóng</th></tr>
+        <tr><td><code>- Xây dựng phương pháp luận …:</code></td><td>cấp 1</td><td>cấp 1</td></tr>
+        <tr><td><code>- Phương pháp xác định …;</code></td><td>cấp 2</td><td>cấp 2</td></tr>
+        <tr><td><code>- Các mẫu biểu, báo cáo liên quan.</code></td><td>cấp 2</td><td>cấp 2 (dòng cuối)</td></tr>
+        <tr><td><code>- Sản phẩm bàn giao: Tài liệu …</code></td>
+            <td><span class="pill pill-red">cấp 2 — SAI</span></td>
+            <td><span class="pill pill-green">cấp 1</span></td></tr>
+      </table>
+      <p>Quy tắc đóng lấy từ <b>Điều 15.4</b>: danh sách thì "cuối mỗi dòng dấu chấm phẩy, dòng
+        <b>cuối cùng</b> dấu chấm". Điều khoản đó viết cho Kính gửi và Nơi nhận, nhưng đó là quy
+        ước chấm câu của chính văn bản này và nó theo đúng.</p>
+      <div class="caution"><b>Hàng rào bắt buộc:</b> chỉ đóng khi danh sách con <b>đã chứng minh là
+        có dùng quy ước</b> — phải có ít nhất một dòng trước đó kết thúc bằng <code>;</code>. Người
+        soạn chấm câu mọi dòng bằng <code>.</code> thì dấu chấm không còn nói lên điều gì, và đóng
+        theo nó là <b>cắt danh sách ngay sau mục con đầu tiên</b>. Có test riêng canh ca này.</div>
+
+      <div class="label"><span class="pill pill-gray">Giới hạn còn lại</span> Không có dấu hiệu thì không đoán được</div>
+      <p>Danh sách con không dùng quy ước <code>;</code>/<code>.</code> sẽ chạy tới dòng đầu tiên
+        không phải gạch đầu dòng. Một mục ngang cấp đứng ngay sau danh sách con, không có dòng nào
+        chen giữa, <b>sẽ bị tụt xuống làm mục con</b>. Không có cách nào đọc ra được, nên không cố
+        đoán thêm — đổi lại, mọi dòng bị đổi cấp đều <b>hiện màu trong nhật ký</b>, và tắt được
+        bằng ô <i>Tự nhận mục con</i> ở tab Cấu hình.</p>
+      <p><code>noi_nhan_ds</code> và <code>kinh_gui_ds</code> <b>không</b> nằm trong phạm vi xét
+        (<code>_MA_XET_CAP_GACH</code> chỉ có <code>noi_dung</code>): hai khối đó cũng dùng
+        <code>-</code> nhưng là danh sách phẳng, cỡ chữ 11 riêng — đụng vào là hỏng khối cuối văn bản.</p>
+
+      <div class="label"><span class="pill pill-gray">Đánh đổi đã nhận</span> Dòng gãy của mục con lùi về lề của cấp cha</div>
+      <p>Mục con đặt <code>left_indent</code> 1 cm và giữ <code>first_line_indent</code> 1 cm, nên
+        dòng đầu ở 2 cm còn dòng gãy ở 1 cm. Đổi sang thụt treo (hanging) thì dòng gãy thẳng hàng
+        dưới chữ, đẹp hơn — nhưng phải đổi cho <b>mọi</b> gạch đầu dòng của cả phần mềm, không
+        riêng mục con. Để nguyên cho nhất quán với cấp ngoài.</p>
+
+    </div>
+  </div>
+
   <!-- VB3 -->
   <div class="card">
     <div class="card-header">
       <span class="card-num">VB3</span>
       <span class="card-title">Chuẩn hoá văn bản — bốn lỗi trên văn bản thật "TB Swift code Quảng Ninh"</span>
-      <span class="badge badge-done">Đã sửa — 1533 test pass (12 test mới)</span>
+      <span class="badge badge-done">Đã sửa — 1556 test pass</span>
     </div>
     <div class="card-body">
 
@@ -529,6 +861,29 @@
         <b>đoạn tên đơn vị có logo sẽ không bao giờ được kẻ</b> — mất vạch mà không lỗi nào báo.
         Ở <b>đoạn kế tiếp</b> vẫn nới tay như cũ: một đoạn rỗng chỉ chứa hình thì hình đó gần như
         chắc chắn là vạch.</div>
+      <p><b>Bổ sung 07/09:</b> rà lại thì còn <b>cách thứ ba</b> tạo vạch chưa được xử lý — viền
+        dưới của đoạn (<code>w:pBdr/w:bottom</code>). Đo được: văn bản có viền đoạn thì chuẩn hoá
+        xong vẫn còn viền <b>và</b> có thêm một vạch vẽ → hai vạch chồng nhau, đúng lại lỗi vừa
+        chữa nhưng đi từ cửa khác.</p>
+      <table>
+        <tr><th>Vạch có sẵn ở dạng</th><th>Xử lý</th><th>Vì sao</th></tr>
+        <tr><td>Hình vẽ (<code>&lt;v:line&gt;</code>, Straight Connector)</td>
+            <td><span class="pill pill-green">Giữ nguyên</span></td>
+            <td>Đúng hình thức quy định; đặt được độ dài tuỳ ý</td></tr>
+        <tr><td>Gạch chân <code>w:u</code></td>
+            <td><span class="pill pill-blue">Gỡ rồi vẽ lại</span></td>
+            <td>Luôn dài đúng bằng chữ, không ngắn hơn được</td></tr>
+        <tr><td>Viền dưới của đoạn <code>w:pBdr/w:bottom</code></td>
+            <td><span class="pill pill-blue">Gỡ rồi vẽ lại</span></td>
+            <td>Luôn dài hết bề ngang đoạn</td></tr>
+      </table>
+      <div class="caution"><b>Vì sao gỡ chứ không coi là "đã có vạch".</b> Coi viền đoạn là vạch
+        hợp lệ nghĩa là chấp nhận một vạch <b>sai độ dài</b> (Điều 8.2 đòi 1/3–1/2 dòng chữ ở tên
+        đơn vị và trích yếu) và bỏ luôn việc vẽ vạch đúng. Nên <code>da_co_duong_ke()</code> cố ý
+        KHÔNG nhận <code>w:pBdr</code>; việc gỡ nằm ở <code>go_gach_chan()</code>, chạy trước bước
+        vẽ. Chỉ nhấc riêng <code>w:bottom</code> — viền trên / trái / phải là thứ người soạn cố ý
+        đặt, xoá lây là mất thứ không ai yêu cầu xoá.</div>
+
       <div class="note"><b>Bẫy khi đếm vạch để kiểm tra:</b> Word ghi hình vẽ hai lần trong cùng
         một <code>&lt;mc:AlternateContent&gt;</code> — bản DrawingML ở <code>mc:Choice</code> và
         bản VML dự phòng ở <code>mc:Fallback</code>. Đếm <code>&lt;v:line</code> cộng

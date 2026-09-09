@@ -199,8 +199,12 @@ RE_CHU_DAU = re.compile(rf"^([{CHU_CAI_DIEM}]{{1,2}})\s*([).\/])\s+")
 RE_LA_MA_DAU = re.compile(r"^([IVXLCDM]+)\s*([.)/])\s+")
 
 
-def chuan_danh_so(txt: str, ma: str, cfg: dict) -> list[Sua]:
+def chuan_danh_so(txt: str, ma: str, cfg: dict,
+                  ky_tu_gach: str | None = None) -> list[Sua]:
     """Chuẩn hoá ký hiệu mở đầu đoạn: gạch đầu dòng, "1.", "a)", "I.".
+
+    `ky_tu_gach` ghi đè ký tự gạch đầu dòng cho riêng đoạn này — mục con dùng
+    ký tự khác cấp ngoài (xem `nhan_dien.cap_gach_dau_dong`).
 
     `ma` là mã thành phần thể thức — vài thành phần phải MIỄN vì ký hiệu đầu
     dòng của chúng không phải số thứ tự: "Số: 05/NHNo-TCKT" mà đem chuẩn hoá
@@ -216,7 +220,7 @@ def chuan_danh_so(txt: str, ma: str, cfg: dict) -> list[Sua]:
     if cfg.get("gach_dau_dong"):
         m = RE_GACH_DAU.match(txt)
         if m:
-            chuan = f"{cfg.get('ky_tu_gach', '-')} "
+            chuan = f"{ky_tu_gach or cfg.get('ky_tu_gach', '-')} "
             if m.group(0) != chuan and len(txt) > m.end():
                 return [(0, m.end(), chuan)]
             return []
@@ -256,6 +260,32 @@ def chuan_danh_so(txt: str, ma: str, cfg: dict) -> list[Sua]:
 RE_GACH_NGANG = re.compile(r"\s*[\u2010-\u2015\u2212-]\s*")
 
 
+def _hoa_thuong_tieu_ngu(s: str) -> str:
+    """Mỗi cụm từ: chữ cái đầu viết hoa, phần còn lại viết thường.
+
+    Điều 7.2 nói thẳng "chữ cái đầu của CÁC CỤM TỪ được viết hoa" — Tiêu ngữ có
+    đúng một dạng đúng, không phải chuyện thẩm mỹ để mỗi nơi làm một kiểu. Gặp
+    thật trên "TB Swift code Quảng Ninh.docx": "Độc lập - Tự do - Hạnh Phúc",
+    chữ P hoa giữa cụm.
+
+    Không đụng khi số cụm khác 3: lúc đó chuỗi không còn là Tiêu ngữ chuẩn nữa
+    (dính thêm chữ, thiếu một cụm) và viết hoa lại theo công thức là đoán mò.
+    `.lower()` giữ nguyên dấu tiếng Việt nên "Hoà" / "Hòa" không bị đổi kiểu bỏ dấu.
+    """
+    phan = s.split(" - ")
+    if len(phan) != 3:
+        return s
+    ket_qua = []
+    for cum in phan:
+        cum = cum.lower()
+        for i, c in enumerate(cum):
+            if c.isalpha():
+                cum = cum[:i] + c.upper() + cum[i + 1:]
+                break
+        ket_qua.append(cum)
+    return " - ".join(ket_qua)
+
+
 def chuan_tieu_ngu(txt: str) -> list[Sua]:
     """Đưa Tiêu ngữ về đúng dạng "Độc lập - Tự do - Hạnh phúc".
 
@@ -264,18 +294,64 @@ def chuan_tieu_ngu(txt: str) -> list[Sua]:
     kéo giãn bằng dấu cách — đổi cỡ chữ hay đổi lề một cái là lệch ngay, và
     không đúng thứ Điều 7.2 mô tả.
 
-    Chỉ sửa dấu nối và dấu cách; KHÔNG đụng tới chữ. Cách bỏ dấu tiếng Việt
-    ("Hòa" hay "Hoà") là thói quen của từng đơn vị, không phải chỗ máy can thiệp.
+    Sửa dấu nối, dấu cách và hoa/thường chữ cái đầu mỗi cụm — cả ba đều được
+    Điều 7.2 nói thẳng. KHÔNG đụng tới cách bỏ dấu tiếng Việt ("Hòa" hay "Hoà"):
+    đó là thói quen của từng đơn vị, quy định không nói gì.
     """
     goc = txt.strip()
     if not goc:
         return []
     moi = RE_GACH_NGANG.sub(" - ", goc)
     moi = re.sub(r"[ \t\u00a0]+", " ", moi).strip()
+    moi = _hoa_thuong_tieu_ngu(moi)
     if moi == goc:
         return []
     dau = len(txt) - len(txt.lstrip())
     return [(dau, dau + len(goc), moi)]
+
+
+# ── Quyền hạn người ký ───────────────────────────────────────────────────────
+# Điều 13: hình thức đề ký viết tắt kèm dấu chấm ("TM.", "KT.", "TL.", "TUQ.",
+# "Q."), rồi tới chức vụ. Mọi mẫu ở Phụ lục V đều có dấu cách sau dấu chấm.
+RE_TIEN_TO_QUYEN_HAN = re.compile(r"^(TM|KT|TL|TUQ|Q)\.(?=[^\s.])")
+
+
+def chuan_tien_to_quyen_han(txt: str) -> list[Sua]:
+    """Thêm dấu cách sau "TL." "KT." "TM." "TUQ." "Q." khi bị gõ dính.
+
+    Gặp thật: "TL.TỔNG GIÁM ĐỐC". Gõ dính không sai chính tả nên không ai để ý,
+    nhưng nó khác mẫu và khác mọi văn bản khác trong cùng tập hồ sơ.
+
+    Chỉ nhận tiền tố viết HOA đứng đầu dòng. Chữ thường ("tl.") thì đó là câu
+    lời văn chứ không phải khối chữ ký.
+    """
+    m = RE_TIEN_TO_QUYEN_HAN.match(txt or "")
+    if not m:
+        return []
+    return [(0, m.end(), m.group(0) + " ")]
+
+
+# ── Thụt đầu dòng gõ tay ─────────────────────────────────────────────────────
+RE_THUT_THU_CONG = re.compile(r"^[\t\u00a0 ]+")
+
+
+def bo_thut_thu_cong(txt: str) -> list[Sua]:
+    """Bỏ tab / dấu cách người soạn gõ ở ĐẦU đoạn để thụt dòng.
+
+    Chỉ gọi cho thành phần mà quy chuẩn có khai `thut_cm` — tức là phần mềm
+    đang tự đặt mức thụt dòng đầu cho đoạn đó. Lúc ấy tab gõ tay không còn là
+    cách thụt lề nữa mà là khoảng trống CỘNG THÊM: đo trên "TB Swift code Quảng
+    Ninh.docx", đoạn mở đầu bằng tab ra bản chuẩn hoá với thụt dòng đầu 1 cm mà
+    tab vẫn nằm đó — dòng ấy thụt gấp đôi mọi dòng khác, nhìn ra ngay là hỏng
+    mà không có lỗi nào báo.
+
+    Chỉ bỏ khoảng trắng ở ĐẦU. Tab giữa dòng là người soạn canh cột
+    ("- Swift Code<tab><tab> : VBAAVNVX330") — bỏ đi là phá cách trình bày của họ.
+    """
+    m = RE_THUT_THU_CONG.match(txt or "")
+    if not m or not (txt or "").strip():
+        return []
+    return [(0, m.end(), "")]
 
 
 # ── Cụm từ không tách dòng ───────────────────────────────────────────────────
