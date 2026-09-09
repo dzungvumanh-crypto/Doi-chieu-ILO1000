@@ -7,11 +7,22 @@ reach vào hàm `_private` của gói khác.
 """
 
 import fnmatch
+import re
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterator
+
+import pandas as pd
+
+_TOAN_CHU_SO = re.compile(r"[0-9]+")
+
+# Cột khoá SPT dạng số cần bọc `bao_ve_khoa_so_khoi_excel()` trước khi ghi CSV chi tiết — dùng
+# chung cho `doi_chieu_song_phuong_core/export.py` (HUB↔CORE) và `doi_chieu_song_phuong_kenh/
+# export.py` (HUB↔KÊNH), khai 1 chỗ duy nhất (review PR#75, Khánh, 2026-09-09 — trước đó khai
+# trùng ở cả 2 file, thêm cột khoá thứ 3 mà chỉ sửa 1 trong 2 nơi sẽ hỏng lặng lẽ đúng một nửa).
+COT_KHOA_HUB_CAN_BAO_VE = ("MSGREF", "TXID")
 
 
 def thu_muc_ngay_ung_vien(goc_dir: Path, ngay: str) -> list[Path]:
@@ -69,6 +80,38 @@ def tim_file_glob(goc_dir: Path, ngay: str, pattern: str) -> list[Path]:
         if matches:
             return matches
     return []
+
+
+def bao_ve_khoa_so_khoi_excel(s: pd.Series) -> pd.Series:
+    """Bọc `="..."` quanh các giá trị TOÀN CHỮ SỐ trước khi ghi CSV chi tiết — phát hiện từ bug
+    báo cáo 2026-09-04: khoá SPT (`TXID` phía hub, `MtId/MsgId` phía kênh) là chuỗi 16 chữ số
+    thuần, còn khoá SPRT (`MSGREF`, `MtId/MsgId` 34 ký tự) là chữ+số nên Excel tự nhận đúng là
+    text. Excel mở CSV trực tiếp tự suy luận cột toàn chữ số là kiểu Số — vượt giới hạn 15 chữ số
+    có nghĩa (giới hạn công bố chính thức của Excel) thì làm tròn chữ số cuối về 0, và số 0 đứng
+    đầu bị rụng mất. `="..."` buộc Excel hiểu ô là công thức trả về chuỗi, hiển thị đúng nguyên
+    văn — không đổi giá trị dòng lệnh mà tool khác (không phải Excel) đọc CSV này.
+
+    Chỉ bọc giá trị KHỚP TOÀN BỘ chuỗi chữ số (`fullmatch`) — giá trị có `-` (VD "GD chuyển
+    tiếp") hay bất kỳ ký tự nào khác giữ nguyên, nên không có `=`/`+`/`-`/`@`/dấu nháy kép nào từ
+    dữ liệu lọt được vào trong công thức tự tạo — không phát sinh rủi ro command/formula injection
+    dù `MtId/MsgId` đến từ file ngân hàng đối tác (nguồn ít tin cậy hơn dữ liệu nội bộ).
+
+    ⚠️ CHỈ dùng cho CSV là ĐẦU RA CUỐI (người dùng tải về mở bằng Excel, KHÔNG module nào trong hệ
+    thống đọc lại) — review PR#75 (Khánh, 2026-09-09) đã grep xác nhận đúng cho 3 file dùng hàm
+    này (`hub_chi_tiet.csv`, `kenh_chi_tiet.csv`). KHÔNG dùng cho CSV trung gian — điển hình là
+    `{ma_nh}_DEN.csv` của `doi_chieu_song_phuong_service`, file đó bị `doi_chieu_song_phuong_core
+    /load_core.py::load_core_den_csv()` đọc lại làm khoá đối chiếu (`UNIT`/`TRCD`/`BUSCD` cũng là
+    mã toàn chữ số, cùng dạng dữ liệu dễ dính lỗi này). Bọc `="..."` vào cột đó thì `load_core` đọc
+    nguyên văn `=\"0100\"` làm khoá → khớp trượt toàn bộ, IM LẶNG, không log/lỗi nào, kết quả ra
+    hàng loạt "HUB THỪA"/"CORE THỪA" sai — đúng kiểu hỏng lặng lẽ `docs/DESIGN.md` liệt kê.
+
+    Trần bộ nhớ/hiệu năng: `.str` accessor bên dưới nổ `AttributeError`/`TypeError` nếu `s` không
+    phải dtype string/object (VD toàn `NaN` dtype float64, hoặc lẫn số nguyên trong cột object) —
+    hỏng CẢ job xuất file, không chỉ 1 cột. Hiện AN TOÀN vì mọi hàm nạp dữ liệu của module này đọc
+    `dtype=str` (giữ object dtype kể cả cột trống hoàn toàn) — chỉ rủi ro nếu sau này có cột khoá
+    mới được TÍNH RA bằng số thay vì đọc thẳng từ file (review PR#75, không cần sửa ở PR đó)."""
+    la_so = s.str.fullmatch(_TOAN_CHU_SO) == True  # noqa: E712 — NaN == True là False, tránh warning downcast của .fillna
+    return s.where(~la_so, '="' + s + '"')
 
 
 def kiem_tra_du_lieu(ten_file_list: list[str], ngay: str, ma_nh: str) -> dict[str, str]:

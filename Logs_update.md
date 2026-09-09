@@ -373,6 +373,20 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
     + ⚠️ **Phải bật quyền thì nút mới hiện.** Vào **Phân quyền theo nhóm → Danh sách CN TTQT**,
       tick ô *"Xem lịch sử sửa đổi"* cho các nhóm cần dùng
 
+- 04/09/2026 Đối chiếu Song phương - **Sửa lỗi khoá SPT bị Excel làm sai khi mở trực tiếp file CSV chi tiết**
+    + Việc thật: người dùng báo cột **MtId/MsgId** (file `..._kenh_chi_tiet.csv`) và **TXID** (file
+      `..._hub_chi_tiet.csv`) của SP THƯỜNG bị sai sau khi xuất kết quả — SP REALTIME thì không sao
+    + Nguyên nhân: khoá SPT là chuỗi **16 chữ số thuần**. Excel mở CSV trực tiếp tự suy luận cột
+      toàn chữ số là kiểu Số: **số 0 đứng đầu bị rụng**, và số vượt quá 15 chữ số có nghĩa (giới hạn
+      của Excel) bị **làm tròn chữ số cuối về 0** — 16 chữ số của SPT vượt giới hạn này ở mọi giá trị
+    + Fix: các cột khoá này giờ được bọc `="..."` trước khi ghi CSV, ép Excel hiểu là công thức trả
+      về chuỗi và hiển thị đúng nguyên văn
+    + ⚠️ **File CSV trên đĩa đổi định dạng ở đúng các cột này.** Mở bằng Excel bằng cách
+      double-click vẫn ra đúng số như trước giờ, nhưng mở bằng trình soạn thảo văn bản, bằng
+      Power Query, hoặc công cụ khác đọc CSV thô sẽ thấy `="..."` bao quanh giá trị — không phải lỗi,
+      chỉ cần biết trước để khỏi bất ngờ
+    + ✅ Không đổi quyền, không cần thao tác gì thêm ngoài lưu ý trên
+
 - 04/09/2026 Chuẩn hoá văn bản - **Sửa 4 lỗi phát hiện trên văn bản thật (TB Swift code Quảng Ninh)**
     + **Số trang in ra sai — trang 2 ghi "24", trang 3 ghi "25".** Nguyên nhân: file gốc được cắt
       ra từ một tài liệu dài nên vẫn mang lệnh *"đánh số bắt đầu từ trang 23"* ẩn bên trong. Người

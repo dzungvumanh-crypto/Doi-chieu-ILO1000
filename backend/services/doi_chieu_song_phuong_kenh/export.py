@@ -24,7 +24,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import RECONCILE_UNITS
+from backend.services.doi_chieu_song_phuong_common import (
+    COT_KHOA_HUB_CAN_BAO_VE, bao_ve_khoa_so_khoi_excel,
+)
+
+from .config import KENH_KEY_COL, RECONCILE_UNITS
 
 _BANG1_COLS = [
     "Ngày", "Ngân hàng", "Loại", "Số món HUB (1)", "Số tiền HUB (2)",
@@ -122,9 +126,16 @@ def export_bao_cao(day_results: list[dict], out_dir: str | Path) -> list[Path]:
     # encoding="utf-8-sig" — đúng quy ước CSV khác của module (GL02/HUB), tránh lỗi hiển thị
     # tiếng Việt khi mở bằng Excel.
     hub_csv_path = out_dir / "doi_chieu_song_phuong_kenh_hub_chi_tiet.csv"
-    _gop_chi_tiet(day_results, "hub").to_csv(hub_csv_path, index=False, encoding="utf-8-sig")
+    hub_out = _gop_chi_tiet(day_results, "hub")
+    for c in COT_KHOA_HUB_CAN_BAO_VE:
+        if c in hub_out.columns:
+            hub_out[c] = bao_ve_khoa_so_khoi_excel(hub_out[c])
+    hub_out.to_csv(hub_csv_path, index=False, encoding="utf-8-sig")
 
     kenh_csv_path = out_dir / "doi_chieu_song_phuong_kenh_kenh_chi_tiet.csv"
-    _gop_chi_tiet(day_results, "kenh").to_csv(kenh_csv_path, index=False, encoding="utf-8-sig")
+    kenh_out = _gop_chi_tiet(day_results, "kenh")
+    if KENH_KEY_COL in kenh_out.columns:
+        kenh_out[KENH_KEY_COL] = bao_ve_khoa_so_khoi_excel(kenh_out[KENH_KEY_COL])
+    kenh_out.to_csv(kenh_csv_path, index=False, encoding="utf-8-sig")
 
     return [tonghop_path, hub_csv_path, kenh_csv_path]

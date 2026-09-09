@@ -297,6 +297,38 @@ class TestBuildTongHop:
         assert hang_tong["Số tiền CORE"] == 800000
 
 
+# ── export.export_excel — bọc khoá TXID/MSGREF toàn chữ số khi ghi CSV chi tiết ─
+
+class TestExportExcelBaoVeKhoaExcel:
+    def test_txid_toan_chu_so_duoc_boc_trong_csv_that(self, tmp_path):
+        """Bug báo bởi người dùng 2026-09-04: TXID của SP THƯỜNG (chuỗi 16 chữ số thuần) sai
+        khi mở file hub_chi_tiet.csv bằng Excel — verify bằng file CSV thật ghi ra đĩa, không chỉ
+        DataFrame trong bộ nhớ."""
+        core = _core_df([_core_row()])
+        core["KETQUADOICHIEU"] = [NHAN_CORE_THUA]
+        hub = _hub_df([_hub_row(txid="2620210308078343", msgref="MSG001")])
+        hub["KETQUADOICHIEU"] = [NHAN_HUB_THUA]
+
+        paths = export.export_excel({"core_df": core, "hub_df": hub}, tmp_path, "test")
+        hub_csv_path = paths[2]
+        # Đọc lại bằng chính bộ phân giải CSV (đúng cách Excel sẽ hiểu field có dấu ngoặc kép,
+        # không so khớp chuỗi thô — pandas tự nhân đôi dấu " khi ghi field chứa formula).
+        out = pd.read_csv(hub_csv_path, dtype=str, encoding="utf-8-sig")
+        assert out.loc[0, "TXID"] == '="2620210308078343"'
+        assert out.loc[0, "MSGREF"] == "MSG001"  # MSGREF chữ+số giữ nguyên, không bọc
+
+    def test_txid_chu_va_so_khong_bi_boc(self, tmp_path):
+        core = _core_df([_core_row()])
+        core["KETQUADOICHIEU"] = [NHAN_CORE_THUA]
+        hub = _hub_df([_hub_row(txid="TXID001", msgref="MSG001")])
+        hub["KETQUADOICHIEU"] = [NHAN_HUB_THUA]
+
+        paths = export.export_excel({"core_df": core, "hub_df": hub}, tmp_path, "test")
+        noi_dung = paths[2].read_text(encoding="utf-8-sig")
+        assert "TXID001" in noi_dung
+        assert '="TXID001"' not in noi_dung
+
+
 # ── pipeline: dò file theo ngày (T-3..T+3), kể cả file để rời ở thư mục cha ────
 
 class TestTimFile:
