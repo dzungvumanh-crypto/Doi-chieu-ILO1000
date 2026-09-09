@@ -125,7 +125,7 @@ def _load_staff_leave(db: sqlite3.Connection, lo: date, hi: date, lich: LichLamV
     rows = db.execute(
         """SELECT staff_id, start_date, end_date FROM leave_records
            WHERE status = 'approved' AND end_date >= ? AND start_date <= ?
-             AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')""",
+             AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))""",
         (lo.isoformat(), hi.isoformat()),
     ).fetchall()
 

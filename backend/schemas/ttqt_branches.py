@@ -69,3 +69,16 @@ class ImportResult(BaseModel):
     deleted: int
     skipped: int
     errors: list[str] = []
+
+
+class HistoryOut(BaseModel):
+    """Một dòng lịch sử = một trường đã đổi (hoặc một lần thêm/xoá cả bản ghi)."""
+    id: int
+    created_at: Optional[str] = None
+    actor_name: Optional[str] = None
+    action: str
+    action_label: str
+    field: Optional[str] = None
+    field_label: Optional[str] = None
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None

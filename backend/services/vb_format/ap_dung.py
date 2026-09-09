@@ -29,6 +29,8 @@ from docx.oxml.ns import nsdecls
 from docx.shared import Cm, Mm, Pt, RGBColor
 from docx.text.paragraph import Paragraph
 
+from . import nhan_dien
+
 _log = logging.getLogger(__name__)
 
 _CAN_LE = {
@@ -43,6 +45,37 @@ _TEN_CAN_LE = {"left": "trái", "center": "giữa", "right": "phải", "justify"
 # vài phần nghìn. Không có ngưỡng này thì lề 20 mm nào cũng bị coi là sai.
 _SAI_SO_MM = 0.3
 _SAI_SO_PT = 0.05
+
+
+def nhom_bang(doc, khoi) -> list[int | None]:
+    """Mỗi đoạn thuộc bảng THỨ MẤY — `None` nếu không nằm trong bảng nào.
+
+    `duyet_doan()` chỉ nói "có nằm trong bảng hay không", nên hai bảng dán sát
+    nhau nhìn ra y hệt một bảng. Thiếu thông tin này thì luật lan thể thức sang
+    ô cùng bảng sẽ kéo luôn cả bảng số liệu đứng ngay sau — đã thử, đúng vậy.
+
+    ## Vì sao gom cả danh sách bảng ra trước
+
+    Không dùng `id()` của phần tử lấy tại chỗ: lxml **dựng proxy theo yêu cầu
+    rồi thu hồi**, nên `id()` của một proxy vừa bị thu hồi được cấp lại cho
+    phần tử khác. Kết quả đo được: các ô của cùng một bảng nhận số nhóm khác
+    nhau, còn ô của hai bảng khác nhau lại trùng số — bảng số liệu bị sửa xen
+    kẽ từng ô một, nhìn như lỗi ngẫu nhiên.
+
+    Gom `doc.element.body.iter(w:tbl)` vào một danh sách rồi so bằng `is`:
+    danh sách giữ tham chiếu nên mọi proxy sống tới hết hàm, `is` mới đáng tin.
+    """
+    bang = list(doc.element.body.iter(qn("w:tbl")))
+    ket_qua: list[int | None] = []
+    for p, _ in khoi:
+        el, nhom = p._p.getparent(), None
+        while el is not None:
+            if el.tag == qn("w:tbl"):
+                nhom = next((k for k, b in enumerate(bang) if b is el), None)
+                break
+            el = el.getparent()
+        ket_qua.append(nhom)
+    return ket_qua
 
 
 def _so(v) -> str:
@@ -201,6 +234,90 @@ def _them(ds: list, loai: str, mo_ta: str) -> None:
         ds.append((loai, mo_ta))
 
 
+def _giu_thut_muc_con(p: Paragraph, hien_cm: float, mong_cm: float,
+                      chung: dict) -> bool:
+    """Đoạn gạch đầu dòng đang thụt sâu hơn mức chung — giữ nguyên, đừng ép về 0.
+
+    Quy chuẩn đặt `le_trai_cm = 0` cho lời văn để dọn những khoảng thụt vô cớ
+    do sao chép qua lại. Nhưng gạch đầu dòng thụt sâu hơn là **cách duy nhất
+    trong .docx để tác giả nói "đây là mục con"** — QĐ 979 chỉ đánh số tới
+    *điểm* (a, b, c), dưới đó không có cấp nào được khai, nên phân cấp chỉ còn
+    trông vào thụt lề.
+
+    Ép về 0 là **xoá phẳng phân cấp tác giả đã viết ra**: bốn mục con nằm ngang
+    hàng với chính mục cha của chúng, đọc ra thành năm mục ngang cấp — sai
+    nghĩa, không lỗi nào báo.
+
+    Chỉ giữ khi đủ ba điều, để không nhận nhầm khoảng thụt vô cớ thành phân cấp:
+    mức chung là 0 (không đụng tới thành phần có thụt riêng), đoạn thụt SÂU HƠN
+    mức chung, và đoạn mở đầu bằng dấu gạch đầu dòng.
+    """
+    if not chung.get("giu_thut_muc_con") or mong_cm != 0.0:
+        return False
+    if hien_cm <= mong_cm + 0.02:
+        return False
+    return bool(nhan_dien.RE_GACH_DAU.match((p.text or "").strip()))
+
+
+def _dong_bo_dau_doan(p: Paragraph, co, dam, phong: str | None) -> bool:
+    """Chép cỡ chữ / đậm / phông xuống `w:pPr/w:rPr`. Trả True nếu có sửa.
+
+    Số thứ tự và dấu chấm tròn của **danh sách tự động** không nằm trong một
+    `<w:r>` nào — Word sinh chúng lúc hiển thị và lấy định dạng từ `rPr` của
+    **dấu đoạn** (`w:pPr/w:rPr`). Sửa cỡ chữ cho từng run vì thế không chạm tới
+    chúng.
+
+    Đã gặp thật trên một Tờ trình: lời văn đã về cỡ 14 nhưng số "4." "5." và
+    "I." "II." vẫn in ra bằng nửa con chữ, vì dấu đoạn còn giữ `w:sz = 16`
+    (cỡ 8) của bản gốc. Nhìn ra ngay là hỏng, mà không có lỗi nào báo và nhật
+    ký cũng không ghi gì — cỡ chữ của run đúng cả.
+
+    Chỉ đụng vào đoạn CÓ đánh số / dấu chấm tròn tự động. Đoạn thường thì `rPr`
+    của dấu đoạn không hiện ra ở đâu cả — ghi vào đó là sửa hàng nghìn đoạn mà
+    không ai thấy khác gì, và mỗi đoạn lại đẻ một dòng nhật ký vô nghĩa.
+
+    Chỉ ghi những thuộc tính thành phần thể thức KHAI RÕ: `dam = None` nghĩa là
+    "giữ nguyên", ép vào đây là tự quyết thay người soạn. Đoạn rỗng đã bị lọc
+    từ trước (`ma == "trong"`), nên không lo đổi chiều cao dòng trắng.
+    """
+    if co is None and dam is None and not phong:
+        return False
+    if _tim_numPr(p) is None:
+        return False
+    pPr = p._p.get_or_add_pPr()
+    rPr = pPr.find(qn("w:rPr"))
+    if rPr is None:
+        rPr = parse_xml(f'<w:rPr {nsdecls("w")}/>')
+        # rPr phải là con CUỐI của pPr theo lược đồ; sai chỗ thì Word bỏ qua cả đoạn.
+        pPr.append(rPr)
+
+    da_sua = False
+
+    def _dat(ten: str, thuoc: dict) -> None:
+        nonlocal da_sua
+        cu = rPr.find(qn(f"w:{ten}"))
+        moi = parse_xml(
+            f'<w:{ten} {nsdecls("w")} '
+            + " ".join(f'w:{k}="{v}"' for k, v in thuoc.items()) + "/>")
+        if cu is not None:
+            if all(cu.get(qn(f"w:{k}")) == str(v) for k, v in thuoc.items()):
+                return
+            rPr.remove(cu)
+        rPr.append(moi)
+        da_sua = True
+
+    if co:
+        nua_diem = str(int(round(float(co) * 2)))
+        _dat("sz", {"val": nua_diem})
+        _dat("szCs", {"val": nua_diem})
+    if dam is not None:
+        _dat("b", {"val": "1" if dam else "0"})
+        _dat("bCs", {"val": "1" if dam else "0"})
+    if phong:
+        _dat("rFonts", {"ascii": phong, "hAnsi": phong, "cs": phong})
+    return da_sua
+
+
 def _dinh_dang_doan(p: Paragraph, ma: str, tp: dict, chung: dict) -> list[tuple[str, str]]:
     """Áp cỡ chữ / kiểu chữ / căn lề cho đoạn.
 
@@ -258,6 +375,11 @@ def _dinh_dang_doan(p: Paragraph, ma: str, tp: dict, chung: dict) -> list[tuple[
                 setattr(r.font, thuoc, bool(mong_muon))
                 _them(ghi_nhan, "rieng", f"{nhan} → {'bật' if mong_muon else 'tắt'}")
 
+    # ── Dấu đoạn: nơi Word lấy định dạng cho SỐ tự động ──
+    if _dong_bo_dau_doan(p, co, tp.get("dam"),
+                         chung.get("phong_chu") if chung.get("ep_phong_chu") else None):
+        _them(ghi_nhan, "chung", "định dạng của số/gạch đầu dòng tự động")
+
     # ── Căn lề ──
     can = tp.get("can")
     if can in _CAN_LE:
@@ -278,7 +400,9 @@ def _dinh_dang_doan(p: Paragraph, ma: str, tp: dict, chung: dict) -> list[tuple[
     if le_trai is not None:
         hien = _hieu_luc_doan(p, "left_indent")
         hien_cm = 0.0 if hien is None else hien.cm
-        if abs(hien_cm - float(le_trai)) > 0.02:
+        if _giu_thut_muc_con(p, hien_cm, float(le_trai), chung):
+            _them(ghi_nhan, "chung", "giữ nguyên thụt lề của mục con")
+        elif abs(hien_cm - float(le_trai)) > 0.02:
             pf.left_indent = Cm(float(le_trai))
             _them(ghi_nhan, "chung", "lề trái đoạn theo từng thành phần thể thức")
 
@@ -446,13 +570,75 @@ def _go_danh_so_tu_dong(doc, p: Paragraph) -> None:
         _log.warning("Không đổi được style danh sách về Normal")
 
 
+def go_bullet_tu_dong(doc, khoi, ky_tu: str = "-") -> set[int]:
+    """Đổi mọi danh sách CHẤM TRÒN tự động thành gạch đầu dòng gõ tay.
+
+    Trả chỉ số (0-based, theo `khoi`) các đoạn đã đổi.
+
+    ## Vì sao phải chạy TRƯỚC khi phân loại thể thức
+
+    Dấu chấm tròn của danh sách tự động không nằm trong `p.text` — Word vẽ nó
+    lúc hiển thị. Nên `nhan_dien` đọc dòng "Như trên;" mà không thấy dấu gạch
+    đầu dòng nào, trong khi luật nhận khối Nơi nhận là "các dòng mở đầu bằng
+    gạch đầu dòng, gặp dòng khác thì dừng". Kết quả đo được trên "TB Swift code
+    Quảng Ninh.docx": cả sáu dòng Nơi nhận rơi vào mã `bang`, mà `bang` thì
+    bước áp dụng cố ý không đụng cỡ chữ — khối Nơi nhận giữ nguyên mọi thứ của
+    bản gốc, không cỡ 11, không căn trái, không giãn dòng đơn.
+
+    Đổi trước rồi mới phân loại thì `p.text` đã có "- " thật và luật nhận khối
+    chạy đúng như với văn bản gõ tay. Cùng lý do với `bo_ngat_trang_thu_cong()`.
+    """
+    da_doi: set[int] = set()
+    for i, (p, _tb) in enumerate(khoi):
+        # Đoạn RỖNG trong danh sách bullet phải để yên. Người soạn gõ Enter hai
+        # lần giữa danh sách là có một mục trống; thêm "- " vào đó là biến một
+        # dòng trắng thành một gạch đầu dòng không có chữ, và đoạn ấy từ mã
+        # `trong` nhảy sang `noi_dung` — sai cả nhật ký lẫn số đoạn đếm được.
+        if not p.text.strip():
+            continue
+        if _kieu_danh_so(doc, p) != "bullet":
+            continue
+        _go_danh_so_tu_dong(doc, p)
+        if p.runs:
+            p.runs[0].text = f"{ky_tu} " + p.runs[0].text
+        else:
+            p.add_run(f"{ky_tu} ")
+        da_doi.add(i)
+    return da_doi
+
+
 # ── Số trang ─────────────────────────────────────────────────────────────────
+def _da_co_so_trang(section) -> bool:
+    """Section này đã có trường PAGE ở bất kỳ đầu/chân trang nào chưa.
+
+    Phải soi đủ SÁU chỗ. Trước đây chỉ soi header mặc định, nên văn bản đã đánh
+    số ở **chân trang** hoặc ở **header trang đầu** sẽ bị đánh thêm một số nữa —
+    in ra hai con số chồng nhau, đúng thứ người dùng gặp trên một Tờ trình.
+    """
+    for ten in ("header", "first_page_header", "even_page_header",
+                "footer", "first_page_footer", "even_page_footer"):
+        phan = getattr(section, ten, None)
+        if phan is None:
+            continue
+        try:
+            xml = phan._element.xml
+        except AttributeError:                                # noqa: PERF203
+            continue
+        if "PAGE" in xml or "fldSimple" in xml:
+            return True
+    return False
+
+
 def _them_so_trang(section, co_chu: float, phong: str) -> bool:
     """Chèn số trang canh giữa vào lề trên, bỏ trang đầu (Điều 4.4).
 
-    Chỉ chèn khi header đang TRỐNG. Header có sẵn thường là logo hoặc dòng chỉ
-    dẫn của đơn vị — ghi đè lên đó là xoá mất nội dung người dùng cố ý đặt.
+    Chỉ chèn khi header đang TRỐNG và văn bản CHƯA đánh số ở đâu cả. Header có
+    sẵn thường là logo hoặc dòng chỉ dẫn của đơn vị — ghi đè lên đó là xoá mất
+    nội dung người dùng cố ý đặt; còn đánh thêm khi đã có số ở chân trang là in
+    ra hai con số.
     """
+    if _da_co_so_trang(section):
+        return False
     section.different_first_page_header_footer = True
     header = section.header
     header.is_linked_to_previous = False
@@ -472,6 +658,81 @@ def _them_so_trang(section, co_chu: float, phong: str) -> bool:
             r._r.append(parse_xml(
                 f'<w:instrText {nsdecls("w")} xml:space="preserve">{noi_dung}</w:instrText>'))
     return True
+
+
+def _dat_lai_so_trang_dau(section) -> int | None:
+    """Ép số trang đếm từ 1. Trả số cũ nếu có sửa, `None` nếu vốn đã đúng.
+
+    `<w:pgNumType w:start="N"/>` trong `sectPr` bắt Word đếm trang từ N chứ
+    không từ 1. Nó theo chân văn bản mỗi khi người soạn cắt một phần ra khỏi
+    tài liệu dài rồi lưu thành file riêng — thứ hay gặp nhất ở đây.
+
+    Đã xảy ra thật: "TB Swift code Quảng Ninh.docx" mang `w:start="23"`, nên
+    dù số trang được chèn đúng chỗ (canh giữa lề trên, bỏ trang đầu) thì trang
+    2 vẫn in ra "24". Chèn đúng mà đếm sai thì nhìn vẫn là sai.
+    """
+    pgnum = section._sectPr.find(qn("w:pgNumType"))
+    if pgnum is None:
+        return None
+    cu = pgnum.get(qn("w:start"))
+    if cu is None or cu == "1":
+        return None
+    pgnum.set(qn("w:start"), "1")
+    try:
+        return int(cu)
+    except ValueError:
+        return None
+
+
+def bo_ngat_trang_thu_cong(doc) -> int:
+    """Gỡ mọi ngắt trang do người soạn đặt tay. Trả số chỗ đã gỡ.
+
+    ## Vì sao phải gỡ
+
+    Ngắt trang tay được đặt theo BỐ CỤC CŨ của văn bản. Chuẩn hoá làm chữ cao
+    lên (giãn dòng 1,2 theo Điều 12.6, lề trên 20 mm theo Điều 4) nên chỗ
+    xuống trang dịch đi — dấu ngắt cũ rơi vào giữa chừng và đẻ ra một trang
+    gần như trống.
+
+    Đo trên "TB Swift code Quảng Ninh.docx": bản gốc 2 trang; chuẩn hoá xong
+    thành **3 trang**, trong đó trang 2 chỉ có đúng MỘT đoạn văn. Gỡ dấu ngắt
+    thì trở lại 2 trang, chữ chảy liền mạch. Đã kiểm riêng từng nguyên nhân:
+    trả lề trên về 15 mm vẫn 3 trang, đổi dấu ngắt thành `pageBreakBefore`
+    cũng vẫn 3 trang — chỉ gỡ hẳn mới hết.
+
+    ## Gỡ thế nào cho không mất chữ
+
+    Dấu ngắt nằm trong một `<w:r>`. Đoạn nào CHỈ chứa dấu ngắt thì bỏ cả đoạn
+    (nó không phải lời văn, chỉ là chỗ chêm); đoạn có chữ thì chỉ nhấc riêng
+    thẻ `<w:br>` ra, giữ nguyên chữ. `<w:pageBreakBefore/>` trong `pPr` cũng
+    là ngắt trang, gỡ cùng.
+
+    Việc này ghi vào nhật ký "Sửa chung" nên người dùng thấy được; tắt bằng ô
+    *Bỏ ngắt trang thủ công* trong tab Cấu hình khi văn bản thật sự cần sang
+    trang mới (Phụ lục ban hành kèm theo Quyết định chẳng hạn).
+    """
+    so = 0
+    for p in list(doc.paragraphs):
+        el = p._p
+        brs = [b for b in el.iter(qn("w:br")) if b.get(qn("w:type")) == "page"]
+        pbb = el.find(qn("w:pPr"))
+        pbb = pbb.find(qn("w:pageBreakBefore")) if pbb is not None else None
+        if not brs and pbb is None:
+            continue
+        so += 1
+        if pbb is not None:
+            pbb.getparent().remove(pbb)
+        # Đoạn rỗng có thể đang giữ dấu NGẮT SECTION (`sectPr` trong `pPr`) —
+        # xoá nó là gộp hai section làm một, mất luôn khổ giấy / lề / hướng
+        # trang riêng của phần sau. Chỉ nhấc thẻ ngắt trang ra, giữ lại đoạn.
+        giu_sect = (el.find(qn("w:pPr")) is not None
+                    and el.find(qn("w:pPr")).find(qn("w:sectPr")) is not None)
+        if brs and not p.text.strip() and not giu_sect:
+            el.getparent().remove(el)
+            continue
+        for b in brs:
+            b.getparent().remove(b)
+    return so
 
 
 def dat_trang(doc, cfg_trang: dict) -> list[str]:
@@ -504,6 +765,11 @@ def dat_trang(doc, cfg_trang: dict) -> list[str]:
                                   "Times New Roman"):
                     if "đánh số trang (bỏ trang đầu)" not in ghi_nhan:
                         ghi_nhan.append("đánh số trang (bỏ trang đầu)")
+                cu = _dat_lai_so_trang_dau(section)
+                if cu is not None:
+                    mo_ta = f"đánh số trang lại từ 1 (văn bản gốc đánh từ {cu})"
+                    if mo_ta not in ghi_nhan:
+                        ghi_nhan.append(mo_ta)
             except Exception as e:                        # noqa: BLE001
                 _log.warning("Không chèn được số trang: %s", e)
     return ghi_nhan

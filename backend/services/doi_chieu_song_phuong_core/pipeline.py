@@ -35,6 +35,7 @@ from .config import NHAN_HUB_T_CORE_T
 
 def _tim_file_hub(
     goc_dir: Path, ngay: str, ma_nh: str, log: Callable[[str], None] = lambda msg: None,
+    ngay_goc: str | None = None,
 ) -> Path | None:
     """Khớp glob `doichieugd_{ngay}__{code}_DEN_9999_N*.zip` — KHÔNG đòi tên chính xác, cùng lý
     do CSV CORE/OSB đã vá (dữ liệu export thủ công có thể kèm hậu tố).
@@ -43,8 +44,20 @@ def _tim_file_hub(
     coi như chưa xác định được, trả None kèm log riêng biệt với "không tìm thấy". Lý do: nhiều
     người dùng có thể trỏ chung 1 thư mục server (mode 2) cùng lúc — tự đoán "mới nhất" dễ đọc
     nhầm file người khác vừa thả vào, ra kết quả sai mà không ai biết (chỉ có 1 dòng cảnh báo dễ
-    bỏ qua)."""
+    bỏ qua).
+
+    `ngay_goc`: ngày T gốc của cả lần chạy — dò THÊM thư mục ứng viên của ngày này nếu không thấy
+    theo `ngay` riêng của offset đang xét (2026-09-08, phát hiện qua phản biện vòng 3 trước PR:
+    cùng cơ chế lỗi đã vá cho CSV/ZIP core — người dùng gom file HUB nhiều ngày (T, T-1, T-2, T-3)
+    vào 1 thư mục đặt tên theo ngày T thay vì mỗi ngày 1 thư mục riêng. Hậu quả nếu KHÔNG vá: thiếu
+    HUB T-1 không chỉ "thiếu dữ liệu" mà làm CORE đáng lẽ khớp "hub T-1 core T" bị rơi xuống gắn
+    nhầm nhãn "CORE THỪA" — sai nhãn âm thầm, job vẫn báo "Hoàn thành" bình thường, xem
+    `match.py::classify_core` bước khớp `OFFSET_HUB_KHI_XU_LY_CORE`. Tên file HUB tự mang đúng
+    ngày giao dịch nên không cần đọc nội dung để xác minh như CSV core — chỉ cần mở rộng thư mục
+    tìm kiếm."""
     matches = tim_file_glob(goc_dir, ngay, hub_filename_glob(ngay, ma_nh))
+    if not matches and ngay_goc is not None and ngay_goc != ngay:
+        matches = tim_file_glob(goc_dir, ngay_goc, hub_filename_glob(ngay, ma_nh))
     if not matches:
         return None
     if len(matches) > 1:
@@ -56,8 +69,93 @@ def _tim_file_hub(
     return matches[0]
 
 
+_DUOI_EXCEL_CORE = {".xlsx", ".xls"}
+
+
+def _doc_trdate_1_file(path: Path, log: Callable[[str], None]) -> tuple[str | None, str]:
+    """Đọc TRDATE THẬT bên trong 1 file core đã phân loại (CSV hoặc Excel, 2026-09-09) — tên file
+    (`{ma_nh}_DEN*.csv`/`.xlsx`) KHÔNG mang ngày giao dịch, chỉ mở đọc nội dung mới biết đúng ngày
+    nào. Trả `(ngay_hoac_None, ly_do)`, `ly_do` một trong:
+    - `"ok"`: đọc được đúng 1 ngày, `ngay` là giá trị thật.
+    - `"khong_co_cot"`: file không có cột `TRDATE` — cột này KHÔNG nằm trong hợp đồng cột bắt buộc
+      của file đã phân loại (`config.CORE_REQUIRED_COLS`, xem `load_core.py`), nên đây KHÔNG phải
+      lỗi/dữ liệu hỏng — chỉ là không có cách xác minh ngày bằng nội dung file. Caller (fast-path
+      offset T) tự quyết định có chấp nhận không.
+    - `"nhieu_ngay"`: TRDATE lẫn ≥2 ngày khác nhau trong cùng 1 file — tình huống THẬT (xem
+      `ilo1000/pipeline.py::_filter_core_by_date`, xác nhận thật 2026-08-19: 1 file GL02 gốc có
+      thể chứa nhiều ngày vì người dùng phân loại gộp nhiều đợt zip 1 lượt), KHÔNG phải dữ liệu
+      hỏng/gộp nhầm. PR này CHƯA lọc lấy đúng phần của từng ngày (khác `ilo1000`) — chỉ loại cả
+      file khỏi việc gán offset, không đoán ngày nào là "đúng". Muốn dùng CSV loại này, tách file
+      theo từng ngày trước khi nạp.
+    - `"loi_doc"`: file hỏng/không mở được (khác 2 trường hợp trên).
+
+    Không đoán ở mọi nhánh lỗi — chỉ log rõ rồi loại file đó khỏi việc gán offset (không chặn cả
+    job). Mirror `doi_chieu_song_phuong_core_di/pipeline.py::_doc_trdate_1_file` khi module chiều
+    đi mở PR lên develop (2026-09-09: mới có ở worktree riêng, CHƯA merge — chưa tồn tại trên
+    nhánh này) — 2 chiều dùng chung nguồn GL02 nên nên cùng 1 luật, không viết lại logic khác
+    nhau."""
+    try:
+        if path.suffix.lower() in _DUOI_EXCEL_CORE:
+            cols = pd.read_excel(path, dtype=str, engine="calamine", nrows=0).columns
+        else:
+            cols = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig",
+                                nrows=0).columns
+    except Exception as e:
+        log(f"[LỖI] Không đọc được file {path.name} ({e}) — bỏ qua file này khi dò theo ngày.")
+        return None, "loi_doc"
+    if "TRDATE" not in cols:
+        log(f"{path.name} không có cột TRDATE — file đã phân loại sẵn KHÔNG bắt buộc phải có cột "
+            f"này, không phải lỗi. Không tự xác minh được file đại diện đúng ngày nào.")
+        return None, "khong_co_cot"
+    try:
+        if path.suffix.lower() in _DUOI_EXCEL_CORE:
+            col = pd.read_excel(path, dtype=str, engine="calamine",
+                                 usecols=["TRDATE"])["TRDATE"].str.strip()
+        else:
+            col = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig",
+                               usecols=["TRDATE"])["TRDATE"].str.strip()
+    except Exception as e:
+        log(f"[LỖI] Không đọc được cột TRDATE của {path.name} ({e}) — bỏ qua file này khi dò theo "
+            f"ngày.")
+        return None, "loi_doc"
+    uniq = col.unique()
+    if len(uniq) != 1:
+        log(f"[LỖI] {path.name} có TRDATE lẫn {len(uniq)} ngày khác nhau trong cùng 1 file — "
+            f"không tự chọn ngày nào là đúng, bỏ qua CẢ file này khi dò theo ngày (không phải dữ "
+            f"liệu hỏng — nếu đây là 1 file gộp nhiều đợt xuất, tách lại theo từng ngày rồi nạp "
+            f"riêng).")
+        return None, "nhieu_ngay"
+    return uniq[0], "ok"
+
+
+def _doc_trdate_theo_file(
+    files: list[Path], cache: dict[Path, tuple[str | None, str]], log: Callable[[str], None],
+) -> dict[Path, tuple[str | None, str]]:
+    """Đọc TRDATE (nếu đọc được) của từng file trong `files` (đã dò sẵn ở tầng gọi — KHÔNG tự glob
+    lại 1 thư mục ở đây, vì `files` có thể đến từ NHIỀU thư mục ứng viên khác nhau gộp lại, xem
+    `_tim_file_core_hoac_csv`), trả `{file: (ngay_hoac_None, ly_do)}`.
+
+    Cache khoá theo TỪNG FILE riêng lẻ (2026-09-09, sửa theo review PR#81 — trước đó khoá theo TỔ
+    HỢP file gộp được ở mỗi offset, đã tự nhận là chưa tối ưu triệt để trong comment cũ tại
+    `doi_chieu_hub_core()`: `ngay`/`ngay_goc` trỏ tới thư mục ứng viên khác nhau theo từng offset
+    thì tổ hợp gộp được đổi theo, cache-key đổi theo, vài file bị đọc lại). Khoá theo file đơn lẻ
+    thì MỌI offset dùng chung 1 lần đọc/file, kể cả trường hợp phổ biến nhất — đúng 1 file khớp
+    (`_tim_file_core_hoac_csv` giờ luôn mở đọc file đó để xác minh ngày, xem docstring ở đó) — chỉ
+    đọc 1 lần dù được hỏi lại ở cả 4 offset. `cache` truyền từ `doi_chieu_hub_core`, sống theo lần
+    gọi — KHÔNG dùng biến module-level để tránh rò rỉ qua nhiều job của tiến trình server chạy
+    dài."""
+    ket_qua: dict[Path, tuple[str | None, str]] = {}
+    for p in files:
+        if p not in cache:
+            cache[p] = _doc_trdate_1_file(p, log)
+        ket_qua[p] = cache[p]
+    return ket_qua
+
+
 def _tim_file_core_hoac_csv(
     goc_dir: Path, ngay: str, ma_nh: str, off: int, log: Callable[[str], None] = lambda msg: None,
+    cache_ngay_csv: dict[Path, tuple[str | None, str]] | None = None,
+    ngay_goc: str | None = None,
 ) -> tuple[str, Path] | None:
     """Ưu tiên `{ma_nh}_DEN*.csv` (đã phân loại sẵn, đọc thẳng — không giải mã) — khớp glob,
     KHÔNG đòi tên chính xác `{ma_nh}_DEN.csv`: dữ liệu thật xuất thủ công (ngoài module Phân
@@ -65,37 +163,103 @@ def _tim_file_core_hoac_csv(
     nhận 2026-08-28 đây đúng là dữ liệu CORE của ngày trong tên thư mục, không phải ngày trong
     tên file).
 
-    CHỈ thử CSV khi `off == 0` (2026-09-03, vá lỗi báo bởi người dùng). Pattern
-    `{ma_nh}_DEN*.csv` KHÔNG mang ngày giao dịch, mà `doi_chieu_hub_core()` gọi hàm này trong
-    vòng lặp quét 4 ngày T/T+1/T+2/T+3 — cùng 1 file CSV khớp cho CẢ 4 offset, tự nhân dữ liệu
-    ngày T lên 3 ngày không hề có dữ liệu. ZIP không dính vì tên `GL02_{ngay}_1000.zip` tự mang
-    ngày, offset khác ngày không khớp.
+    Tên file CSV KHÔNG mang ngày giao dịch — mọi trường hợp đều MỞ ĐỌC cột TRDATE thật bên trong
+    file để biết nó đại diện đúng ngày nào rồi mới gán vào đúng offset (2026-09-08), kể cả khi
+    đúng 1 file khớp và đang hỏi offset 0 (ngày T). Thay hẳn luật cũ "CHỈ dùng CSV cho offset 0"
+    (2026-09-03, chặn cứng vì sợ 1 file để rời khớp nhầm cả 4 offset). Luật cũ chặn luôn cả trường
+    hợp hợp lệ: người dùng có sẵn CSV đã phân loại cho CẢ ngày T lẫn T+1 (2 đợt xuất trong 1 phiên)
+    — báo lỗi thật của người dùng 2026-09-08, mirror đúng lỗi đã sửa ở chiều đi (worktree riêng,
+    2026-09-09: `doi_chieu_song_phuong_core_di/pipeline.py::_tim_file_core_hoac_csv_di` — module
+    này CHƯA merge lên develop, đường dẫn chỉ để tham chiếu khi module đó mở PR).
 
-    ⚠ Lỗi này KHÔNG phải do bỏ chế độ "chọn thư mục máy chủ" (PR#70, 2026-09-02) sinh ra — nó
-    có từ 2026-08-28, ngay lúc thêm nhánh CSV. `tim_file_glob()` LUÔN thử `goc_dir` sau các thư
-    mục ngày, nên một CSV để rời ở thư mục gốc (đúng kiểu dùng mà quyết định 2026-08-26 cố ý hỗ
-    trợ) đã khớp cả 4 offset ngay khi còn thư mục con theo ngày. PR#70 chỉ khiến nó xảy ra 100%
-    thay vì thỉnh thoảng. Luật rút ra: pattern không mang ngày thì KHÔNG được dùng trong vòng
-    lặp quét theo ngày, bất kể thư mục có cấu trúc thế nào.
+    2026-09-09 (review PR#81, Khánh): đúng 1 file khớp KHÔNG còn nghĩa là "tin thẳng theo vị trí
+    offset" nữa — trước khi trả `("csv", file)` cho offset 0, vẫn đọc TRDATE để xác minh file đó
+    đúng là ngày T, không phải lỡ chỉ có CSV của ngày khác. 2 nhánh:
+    - File KHÔNG có cột `TRDATE` (`ly_do == "khong_co_cot"`): cột này không nằm trong hợp đồng cột
+      bắt buộc của file đã phân loại (`config.CORE_REQUIRED_COLS`) — không có cách xác minh nào
+      khác, CHẤP NHẬN cho offset 0 để giữ tương thích ngược với mọi file cũ chưa từng có cột này
+      (và với chính test fixture hiện có của module). Offset khác 0 thì KHÔNG chấp nhận (không có
+      gì bảo đảm đó đúng ngày đang hỏi).
+    - File CÓ TRDATE mà khác `ngay` đang hỏi: KHÔNG dùng — đây chính là ca lỗi PR#81 sửa (trước đó
+      tin mù theo offset, người dùng nạp nhầm CSV của T+1 vẫn được job dùng làm CORE T, sai ngày mà
+      không một dòng log/lỗi nào).
 
-    CSV đã phân loại sẵn chỉ đại diện cho ĐÚNG 1 ngày — muốn có CORE cho T+1..T+3 phải có ZIP
-    đúng ngày đó (không suy ra được từ tên file CSV).
+    Vẫn giữ nguyên tắc KHÔNG tự đoán khi mơ hồ: TRDATE lẫn nhiều ngày trong 1 file (tình huống
+    THẬT, không phải dữ liệu hỏng — xem `_doc_trdate_1_file`), hoặc 2 file cùng đại diện 1 ngày,
+    đều bị loại + log lỗi rõ ràng, không dùng liều — chỉ khác chỗ "mơ hồ" giờ xét trên NGÀY THẬT
+    đọc được, không còn xét trên tên file/vị trí offset.
 
-    Nhiều file CSV cùng khớp ở offset 0 — KHÔNG tự đoán (đổi 2026-08-30, cùng lý do `_tim_file_hub`,
-    tránh đọc nhầm file khi nhiều người dùng chung thư mục server), trả None. Không thấy CSV nào
-    mới tới `GL02_{ngay}_1000.zip` (cần giải mã AES + phân loại). Trả `(loai, path)`, `loai` là
-    `"csv"`/`"zip"`, hoặc `None` nếu không thấy/không xác định được cái nào."""
-    if off == 0:
-        matches = tim_file_glob(goc_dir, ngay, f"{ma_nh}_DEN*.csv")
-        if matches:
-            if len(matches) > 1:
-                log(f"[LỖI] {len(matches)} file khớp '{ma_nh}_DEN*.csv' cùng lúc trong "
-                    f"{matches[0].parent} — KHÔNG tự chọn (tránh đọc nhầm khi nhiều người dùng chung "
-                    f"thư mục): {', '.join(p.name for p in matches)}. Cần dọn bớt file trùng hoặc "
-                    f"dùng thư mục riêng cho mỗi phiên.")
-                return None
-            return ("csv", matches[0])
+    CSV đã phân loại sẵn chỉ đại diện cho ĐÚNG 1 ngày/file — muốn có CORE cho offset khác phải có
+    ZIP đúng ngày đó, hoặc 1 CSV khác đại diện đúng ngày đó (đọc được qua TRDATE thật). Không thấy
+    CSV nào khớp ngày đang hỏi thì mới tới `GL02_{ngay}_1000.zip` (cần giải mã AES + phân loại).
+    Trả `(loai, path)`, `loai` là `"csv"`/`"zip"`, hoặc `None` nếu không thấy/không xác định được
+    cái nào.
+
+    `ngay_goc`: ngày T gốc của cả lần chạy (bằng `ngay` khi `off == 0`, khác khi `off != 0`) —
+    dùng để dò thư mục làm việc chứa CSV, THÊM VÀO chỗ dò theo `ngay` của offset đang xét, KHÔNG
+    thay thế. Lý do (phát hiện qua phản biện trước PR, 2026-09-08): `tim_file_glob()` chọn thư mục
+    ứng viên theo NGÀY ĐANG HỎI qua `thu_muc_ngay_ung_vien()`; người dùng thường gom mọi CSV của cả
+    phiên (nhiều ngày khác nhau) vào 1 thư mục ĐẶT TÊN THEO NGÀY T — nếu chỉ dò theo ngày riêng của
+    offset≠0, thư mục `D.M` của ngày đó không tồn tại, `tim_file_glob` rơi thẳng về `goc_dir`
+    (KHÔNG đệ quy vào thư mục con `D.M` của ngày T) → không thấy file dù nó đang nằm ngay đó. Dò cả
+    2 ngày (gộp, khử trùng) vừa chịu được cách tổ chức "gom vào thư mục ngày T" vừa chịu được cách
+    tổ chức "mỗi ngày 1 thư mục riêng" (bên nào tồn tại thì dùng).
+
+    2026-09-09 (yêu cầu Business Owner): file đã phân loại sẵn giờ chấp nhận CẢ `.csv` lẫn
+    `.xlsx` — cùng 1 cơ chế TRDATE thật, chỉ khác cách mở file (`load_core.load_core_den_csv()`
+    tự dò đuôi). Không có ưu tiên .csv hơn .xlsx hay ngược lại — 2 định dạng bình đẳng, nếu cả 2
+    cùng đại diện 1 ngày thì vẫn là "2 file cùng đại diện 1 ngày", chặn như nhau."""
+    patterns = [f"{ma_nh}_DEN*.csv", f"{ma_nh}_DEN*.xlsx"]
+    cac_ngay_do = {ngay} if ngay_goc is None else {ngay, ngay_goc}
+    matches: list[Path] = []
+    da_thay: set[Path] = set()
+    for nv in cac_ngay_do:
+        for pattern in patterns:
+            for p in tim_file_glob(goc_dir, nv, pattern):
+                if p not in da_thay:
+                    da_thay.add(p)
+                    matches.append(p)
+    matches.sort()
+    if matches:
+        cache = cache_ngay_csv if cache_ngay_csv is not None else {}
+        ket_qua = _doc_trdate_theo_file(matches, cache, log)
+        if len(matches) == 1:
+            p = matches[0]
+            d, ly_do = ket_qua[p]
+            if ly_do == "ok":
+                if d == ngay:
+                    return ("csv", p)
+                log(f"[LỖI] {p.name} có TRDATE={d} thật, KHÔNG khớp ngày {ngay} đang cần cho "
+                    f"offset này — không dùng file này (tránh gán sai ngày).")
+            elif ly_do == "khong_co_cot" and off == 0:
+                log(f"chấp nhận {p.name} cho ngày T dù không đọc được TRDATE để xác minh (file "
+                    f"không có cột này, không phải lỗi) — muốn có CORE cho ngày khác (T+1...), "
+                    f"phải nạp GL02 zip đúng ngày đó hoặc 1 CSV khác có cột TRDATE đúng ngày đó.")
+                return ("csv", p)
+            # else (khong_co_cot & off != 0, nhieu_ngay, loi_doc): không dùng được cho offset này
+            # — log đã ghi trong _doc_trdate_1_file (2 trường hợp cuối) hoặc ở trên (khong_co_cot).
+        else:
+            theo_ngay: dict[str, list[Path]] = {}
+            for p, (d, ly_do) in ket_qua.items():
+                if ly_do == "ok":
+                    theo_ngay.setdefault(d, []).append(p)
+            log(f"[CORE] {len(matches)} file CSV core đã phân loại — đã đọc TRDATE thật để tự "
+                f"gán đúng ngày (KHÔNG dựa tên file/thư mục): "
+                + ", ".join(f"{d}={[x.name for x in fs]}" for d, fs in sorted(theo_ngay.items())))
+            cac_file = theo_ngay.get(ngay, [])
+            if len(cac_file) == 1:
+                return ("csv", cac_file[0])
+            if len(cac_file) > 1:
+                log(f"[LỖI] {len(cac_file)} file cùng đại diện ngày {ngay} theo TRDATE thật "
+                    f"({', '.join(f.name for f in cac_file)}) — KHÔNG tự chọn, cần dọn bớt file "
+                    f"trùng.")
+
     p = tim_file(goc_dir, ngay, f"GL02_{ngay}_1000.zip")
+    if p is None and ngay_goc is not None and ngay_goc != ngay:
+        # Cùng lý do CSV ở trên (2026-09-08): GL02 zip của offset≠0 có thể bị gom vào thư mục đặt
+        # tên theo ngày T thay vì thư mục riêng đúng ngày của nó — thử thêm thư mục ứng viên của
+        # `ngay_goc`, tên file vẫn phải đúng `GL02_{ngay}_1000.zip` (tên tự mang ngày, không đổi).
+        p = tim_file(goc_dir, ngay_goc, f"GL02_{ngay}_1000.zip")
     if p is not None:
         return ("zip", p)
     return None
@@ -137,11 +301,13 @@ def _doc_hub_tu_da_loc(hub_da_loc_base: pd.DataFrame, log: Callable[[str], None]
 
 
 def _doc_core(loai: str, path: Path, ma_nh: str, log: Callable[[str], None]) -> pd.DataFrame:
-    """`loai="csv"`: đọc thẳng `{ma_nh}_DEN.csv` đã phân loại sẵn — không giải mã. `loai="zip"`:
-    giải mã + phân loại GL02 (tái dùng `doi_chieu_song_phuong_service.process_zip`, không sửa
-    module phân loại) rồi đọc đúng file `{ma_nh}_DEN.csv` vừa sinh ra."""
+    """`loai="csv"`: đọc thẳng `{ma_nh}_DEN.csv`/`.xlsx` đã phân loại sẵn — không giải mã (tên
+    `loai` giữ "csv" làm nhãn chung cho "đã phân loại sẵn", `load_core_den_csv()` tự dò đuôi thật,
+    xem `_tim_file_core_hoac_csv`). `loai="zip"`: giải mã + phân loại GL02 (tái dùng
+    `doi_chieu_song_phuong_service.process_zip`, không sửa module phân loại) rồi đọc đúng file
+    `{ma_nh}_DEN.csv` vừa sinh ra."""
     if loai == "csv":
-        log(f"đọc thẳng CSV đã phân loại sẵn {path.name} (bỏ qua giải mã GL02)...")
+        log(f"đọc thẳng file đã phân loại sẵn {path.name} (bỏ qua giải mã GL02)...")
         csv_path = path
     else:
         log(f"đang giải mã + phân loại {path.name}...")
@@ -182,9 +348,18 @@ def doi_chieu_hub_core(
             continue
         p = _tim_file_hub(
             goc_dir, cong_ngay(ngay, off), ma_nh, lambda m, nhan=nhan: log(f"[HUB {nhan}] {m}"),
+            ngay_goc=ngay,
         )
         if p is None:
-            log(f"[HUB {nhan}] không tìm thấy file" + (" — BẮT BUỘC" if off in (0, -1) else " (bỏ qua)"))
+            if off == 0:
+                nhac = " — BẮT BUỘC"
+            elif off == -1:
+                nhac = (" — BẮT BUỘC nhưng KHÔNG chặn: giao dịch CORE hôm nay đáng lẽ khớp HUB "
+                        "hôm qua sẽ bị xếp NHẦM thành 'CORE THỪA' thay vì 'hub T-1 core T'. Cần "
+                        "nạp thêm HUB zip ngày T-1.")
+            else:
+                nhac = " (bỏ qua)"
+            log(f"[HUB {nhan}] không tìm thấy file" + nhac)
             continue
         log(f"[HUB {nhan}] đang đọc {p.name}...")
         with do_thoi_gian(log, f"đọc+parse HUB {nhan}"):
@@ -194,11 +369,18 @@ def doi_chieu_hub_core(
         raise ValueError(f"Không tìm thấy file HUB ngày {ngay} cho NH {ma_nh} — không thể đối chiếu.")
 
     core_theo_offset: dict[int, pd.DataFrame] = {}
+    # Cache TRDATE→file (2026-09-08, khoá lại theo TỪNG FILE riêng lẻ 2026-09-09 — review PR#81)
+    # dùng chung cho cả 4 offset trong 1 lần gọi: mỗi file chỉ đọc TRDATE đúng 1 lần dù được hỏi
+    # lại ở nhiều offset, kể cả trường hợp phổ biến nhất (đúng 1 file khớp — từ 2026-09-09,
+    # `_tim_file_core_hoac_csv` luôn mở đọc file đó để xác minh ngày, không còn "đường nhanh không
+    # đọc gì" nữa). Xem `_doc_trdate_theo_file`.
+    cache_ngay_csv: dict[Path, tuple[str | None, str]] = {}
     for off in (0, 1, 2, 3):
         nhan = nhan_offset(off)
         found = _tim_file_core_hoac_csv(
             goc_dir, cong_ngay(ngay, off), ma_nh, off,
             lambda m, nhan=nhan: log(f"[CORE {nhan}] {m}"),
+            cache_ngay_csv=cache_ngay_csv, ngay_goc=ngay,
         )
         if found is None:
             # 2026-09-03: T+1 gắn nhãn BẮT BUỘC (config.py — tài liệu không ghi "nếu có") nhưng
@@ -209,7 +391,8 @@ def doi_chieu_hub_core(
             elif off == 1:
                 nhac = (" — BẮT BUỘC nhưng KHÔNG chặn: giao dịch HUB hôm nay mà CORE hạch toán "
                         "sang ngày mai sẽ bị xếp thành 'HUB THỪA'. Cần nạp thêm GL02 zip ngày "
-                        "T+1 (CSV đã phân loại sẵn chỉ đại diện đúng ngày T).")
+                        "T+1, hoặc 1 CSV/Excel khác đã phân loại sẵn mà TRDATE thật đúng là "
+                        "ngày T+1 (từ 2026-09-08, CSV không còn bị buộc chỉ đại diện ngày T).")
             else:
                 nhac = " (bỏ qua)"
             log(f"[CORE {nhan}] không tìm thấy file CSV/GL02" + nhac)

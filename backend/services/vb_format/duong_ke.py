@@ -46,22 +46,82 @@ TY_LE = {
 _DAI_TOI_THIEU_PT = 20.0
 
 
+# Dấu hiệu của một đối tượng ĐƯỜNG THẲNG. Word cũ ghi bằng VML (`<v:line>`),
+# Word từ 2007 ghi bằng DrawingML: một shape có hình dựng sẵn là "line" (menu
+# Insert → Shapes → Line, Word gọi là "Straight Connector").
+_HINH_DUONG_KE = ('<v:line', 'prstGeom prst="line"', 'prst="straightConnector1"')
+
+
+def _co_hinh_duong_ke(xml: str) -> bool:
+    return any(dau in xml for dau in _HINH_DUONG_KE)
+
+
 def da_co_duong_ke(p) -> bool:
-    """Đoạn ngay sau `p` đã là một đường kẻ rồi hay chưa."""
+    """Đã có sẵn một đường kẻ cho đoạn `p` rồi hay chưa.
+
+    Phải soi HAI chỗ, vì có hai cách người soạn đặt vạch:
+
+    * **Đoạn kế tiếp** — cách phần mềm này vẽ: một đoạn riêng chỉ chứa vạch.
+    * **Chính đoạn `p`** — cách Word đặt khi người dùng vẽ tay: hình được
+      *neo* vào đoạn có chữ, `positionV relativeFrom="paragraph"` đẩy nó
+      xuống dưới dòng chữ. Nhìn trên màn hình y hệt, nhưng nằm trong cùng một
+      `<w:p>` với chữ.
+
+    Bỏ sót vế thứ hai là **vẽ chồng vạch thứ hai lên văn bản vốn đã đúng** —
+    đã xảy ra thật với "TB Swift code Quảng Ninh.docx": cả Tiêu ngữ lẫn tên
+    đơn vị ban hành đều có sẵn một Straight Connector neo trong đoạn, chuẩn
+    hoá xong thành hai vạch chồng nhau.
+
+    Ở chính đoạn `p` chỉ nhận đúng hình ĐƯỜNG THẲNG, không nhận mọi
+    `<w:drawing>`: đoạn tên đơn vị hay có logo kèm theo, coi logo là vạch thì
+    văn bản thiếu hẳn đường kẻ mà không có lỗi nào báo.
+    """
+    if _co_hinh_duong_ke(p._p.xml):
+        return True
     ke = p._p.getnext()
     if ke is None or ke.tag != qn("w:p"):
         return False
     xml = ke.xml
-    return "<v:line" in xml or "<w:drawing" in xml or "<v:rect" in xml
+    # Đoạn kế tiếp: nới tay hơn — một đoạn RỖNG chỉ chứa hình thì hình đó gần
+    # như chắc chắn là vạch, và đó cũng đúng thứ phần mềm này tự vẽ ra.
+    return _co_hinh_duong_ke(xml) or "<w:drawing" in xml or "<v:rect" in xml
 
 
 def go_gach_chan(p) -> bool:
-    """Bỏ gạch chân trên đoạn. Trả True nếu có gì bị gỡ."""
+    """Bỏ mọi cách kẻ vạch SAI HÌNH THỨC trên đoạn. Trả True nếu có gì bị gỡ.
+
+    Hai cách đều cho ra một vạch nhìn giống đường kẻ ngang, và cả hai đều
+    không làm được thứ Điều 7.2 / 8.2 đòi:
+
+    * **Gạch chân** (`w:u`) luôn dài đúng bằng chữ, không ngắn hơn được.
+    * **Viền dưới của đoạn** (`w:pBdr/w:bottom`) luôn dài hết bề ngang đoạn.
+
+    Quy định đòi vạch dưới tên đơn vị và trích yếu chỉ dài **1/3 đến 1/2** dòng
+    chữ — cả hai cách trên đều chịu. Gỡ đi rồi vẽ lại bằng đối tượng đường
+    thẳng rời, đúng cách mẫu 979 làm.
+
+    Không gỡ thì thành **hai vạch chồng nhau**: `da_co_duong_ke()` cố ý không
+    nhận `w:pBdr` là "đã có vạch", vì nhận nó nghĩa là chấp nhận một vạch sai
+    độ dài và bỏ luôn việc vẽ vạch đúng.
+
+    Chỉ nhấc riêng `w:bottom`, không xoá cả `w:pBdr`: đoạn có thể đang có viền
+    trên / trái / phải mà người soạn cố ý đặt.
+    """
     da_go = False
     for r in p.runs:
         if r.font.underline:
             r.font.underline = False
             da_go = True
+
+    pPr = p._p.find(qn("w:pPr"))
+    pBdr = pPr.find(qn("w:pBdr")) if pPr is not None else None
+    if pBdr is not None:
+        duoi = pBdr.find(qn("w:bottom"))
+        if duoi is not None:
+            pBdr.remove(duoi)
+            da_go = True
+        if len(pBdr) == 0:
+            pBdr.getparent().remove(pBdr)
     return da_go
 
 

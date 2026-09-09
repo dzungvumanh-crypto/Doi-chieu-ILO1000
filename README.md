@@ -328,12 +328,63 @@ Truy cập:
 - Banner "Phép còn lại" tính đủ hạn mức nhập tay + ngày chuyển kỳ, khớp đúng tab Hạn mức phép
 - Đơn nghỉ vắt qua ranh giới năm (vd 29/12 → 02/01) được chia đúng cho từng năm khi tính hạn mức
 - Nghỉ thai sản / bảo hiểm (không trừ vào hạn mức phép năm), chọn khoảng ngày bằng lịch cuộn
+- **Nghỉ không lương** và **Họp/Công tác** — đi đủ 3 bước duyệt như đơn thường nhưng **không trừ hạn
+  mức phép năm**. *Nghỉ không lương* chọn khoảng ngày liên tục; *Họp/Công tác* chọn lẻ từng ngày như
+  phép năm. Ở bảng công phòng Kế toán, Họp/Công tác vào ký hiệu **`CT` = đủ 1 công** (đang đi làm, chỉ
+  không có mặt tại trụ sở), nghỉ không lương vào `P` = 0 công
+- **Nghỉ "Khác"**: người tạo đơn tự chọn nút gạt *Trừ vào hạn mức phép năm* — bật thì tính y hệt đơn
+  nghỉ phép năm (trừ hạn mức, cộng vào số ngày đã nghỉ, có thể phải ứng phép năm sau); tắt thì chỉ ghi
+  nhận ngày nghỉ, không đụng tới hạn mức — giống thai sản / bảo hiểm / không lương / họp-công tác.
+  Cột `leave_records.other_deduct_quota`; đơn "Khác" tạo **trước 06/09/2026** mặc định là **có trừ**,
+  đúng bằng hành vi cũ
 - Nhập hạn mức phép hàng loạt từ file Excel (xem trước / áp dụng / hoàn tác); sửa tay số ngày "Đã dùng" của từng người — cả hai cách đều thay thế lẫn nhau, không cộng dồn
 - Bản ghi hạn mức nhập từ Excel / sửa tay không phải đơn nghỉ thật: bị ẩn khỏi danh sách đơn, lịch, kiểm tra trùng ngày, số liệu Dashboard, Trang chủ và Báo cáo bàn giao
 - Khai báo hộ; ngày nghỉ lẻ không liên tục (`spread_dates`)
 - Bảng nghỉ phép hôm nay trên Trang chủ theo từng phòng — **chỉ đếm đơn đã duyệt** (lịch tháng trong menu thì hiện cả đơn đang chờ, kèm nhãn trạng thái)
 - Chống duyệt trùng: hai người (hoặc hai tab) bấm duyệt cùng lúc thì chỉ lần đầu có hiệu lực, lần sau báo đơn đã được xử lý
 - Resubmit đơn bị từ chối; huỷ đơn đang chờ hoặc đã duyệt
+- **Nghỉ phép bắt buộc (NPBB)**: đơn đã "Hoàn thành" có nút *Điều chỉnh ngày NPBB* — tạo **đơn mới**
+  liên kết qua `leave_records.adjusts_leave_id`, đi lại đủ 3 bước duyệt; đơn gốc chỉ chuyển
+  *"Đã hủy - Đã điều chỉnh"* khi đơn mới duyệt xong. Màn chi tiết hiện cả hai chiều liên kết.
+  **Không điều chỉnh chồng lên một đơn điều chỉnh** — mọi đơn điều chỉnh luôn trỏ về đúng một đơn gốc
+  duy nhất, vì báo cáo Mẫu 18/19 chỉ dò một cấp cha-con (xếp chuỗi hai cấp làm nhân sự biến mất khỏi
+  báo cáo). Muốn điều chỉnh lại: rút/hủy đơn điều chỉnh hiện tại, **đơn gốc tự trở lại "Hoàn thành"**
+  rồi lập đơn điều chỉnh mới — không giới hạn số lần. Dialog điều chỉnh **để trống lịch chọn ngày**
+  (ngày đơn gốc ghi ở dòng chữ riêng phía trên để đối chiếu), tránh tưởng nhầm đã chọn xong
+- Mẫu đơn xin nghỉ phép năm **riêng theo chức danh** (nhân viên / trưởng - phó phòng / GĐ / PGĐ).
+  Đơn của GĐ kính gửi **Tổng Giám đốc Agribank**, không phải Giám đốc TTTT; mẫu NPBB của diện HĐTV
+  gửi **Ban Tổ chức Nhân sự**
+- Mẫu đơn cá nhân NPBB (đăng ký / điều chỉnh — "Mẫu 1 TCNS") và báo cáo tổng hợp
+  **Mẫu 18** (nội bộ) / **Mẫu 19** (gửi TCNS):
+  `GET /api/leaves/export/npbb-batch?year=&mau=18|19[&month=][&preview=true]`.
+  Bỏ trống `month` = cả năm. Bấm vào mẫu sẽ **mở xem trước** (PDF do Word chuyển tạm) rồi mới tải;
+  máy chủ không chuyển được PDF thì **tự tải thẳng bản `.docx` gốc** — báo cáo này không phụ thuộc Word
+
+- **Ứng phép năm sau khi vượt hạn mức**: vượt quỹ năm nay mà năm sau còn chỗ thì API trả **409**
+  `{"code":"quota_exceeded_borrow", ...}` thay vì chặn cứng 400; frontend hỏi xác nhận rồi gọi lại với
+  `confirm_borrow_next_year=true`. Phần vượt lưu ở `leave_records.borrow_next_year_days` và **trừ thật**
+  vào quỹ năm sau. Vượt cả năm sau thì chặn hẳn. Cả 3 bước duyệt + duyệt lô đều cảnh báo trước khi duyệt
+  đơn có ứng phép
+- **KSV thay thế**: Trưởng/Phó phòng **cùng phòng** với người nộp đơn duyệt được bước KSV dù không phải
+  `ksv_approver_id` (`_is_alt_ksv`) — đơn không còn kẹt khi người được chỉ định vắng mặt. Đây là *bước
+  duyệt của hồ sơ*, không phải quyền truy cập; xem mục **Phân quyền** trong `docs/DESIGN.md`
+- Tab **Báo cáo tổng hợp** (tên cũ: Báo cáo năm) — **Báo cáo chấm công**
+  `GET /api/leaves/export/attendance-monthly?year=[&month=]`: bỏ trống `month` = cả năm, mỗi tháng một
+  sheet (chỉ tới tháng hiện tại). Nhóm theo phòng; `X` = đi làm, `P` = nghỉ phép, `BB` = phép bắt buộc,
+  `CT` = họp/công tác — tất cả suy từ đơn đã duyệt. Ô tô màu để trống = T7/CN/lễ, ô **không tô màu** để
+  trống = ngày chưa tới. Riêng cột xếp loại thi đua không có nguồn dữ liệu, phòng Tổng hợp điền tay
+- **Báo cáo nghỉ phép năm** `GET /api/leaves/export/annual?year=`: theo đúng mẫu giấy phòng Tổng hợp
+  đang dùng — nhóm theo phòng (dòng tổng đứng trước danh sách nhân sự), cột *Đã nghỉ* tính đến **đúng
+  ngày bấm xuất file**. Sau 31/03 phép chuyển kỳ hết hiệu lực nên cột *Tổng phép* tụt về hạn mức gốc
+  trong khi *Đã nghỉ* vẫn đếm cả ngày quý I đã tiêu bằng phép chuyển kỳ — *Còn lại* kẹp về 0 (khớp tab
+  Hạn mức phép), nên dòng đó có thể hiện *Đã nghỉ* lớn hơn *Tổng phép*
+  > ⚠️ **Số ngày phép năm đổi mốc thâm niên 4 → 5 năm** (`compute_annual_leave()`, đúng Điều 114 BLLĐ:
+  > khớp 67/72 người trên báo cáo thật 2026, mốc 4 năm cũ khớp 12/72). Người vào ngành đủ 4/8/12… năm
+  > **giảm 1 ngày**; chưa có bước rà ai đã nghỉ quá hạn mức mới — xem card **NP2** trong
+  > [`docs/Implementation-notes.html`](docs/Implementation-notes.html)
+  > Mốc hết hạn phép chuyển kỳ **31/03** so theo **ngày bắt đầu nghỉ** của đơn, không phải ngày bấm
+  > nộp đơn (`_check_quota_or_borrow(eff_start=...)`) — nộp 25/03 xin nghỉ 15/06 thì không còn được
+  > cộng phép chuyển kỳ. Cùng mốc với chỗ in phiếu (`_build_form_ctx`)
 
 ### Module Chứng từ Hậu kiểm
 - **Bàn giao**: GDV nhập số tờ theo ngày, HKV/KSV xác nhận từng ô
@@ -344,6 +395,7 @@ Truy cập:
     GDV bấm **Mượn lại** (xin → HKV duyệt), hoặc HKV/KSV bấm **Chuyển trả GDV** ở panel lịch sử để đẩy thẳng
     `đã xác nhận → đang mượn` (bắt buộc nhập lý do, feature `handovers.return_entry`, chặn cứng `chuyen_vien`).
     Cả hai đường đều kết thúc bằng GDV **Bàn giao lại** → HKV xác nhận
+  - *Cột ngày nghỉ*: T7/CN **và ngày nghỉ lễ** tô vàng ở dòng tiêu đề lẫn ô trống. Ngày lễ do backend trả về (`holidays` trong `GET /api/handovers/grid`, lấy qua `tai_lich()` — hợp `public_holidays` với `duty_special_days`), không tính lại ở frontend. Ô **đã có số** vẫn giữ màu theo trạng thái, vì chứng từ phát sinh đúng ngày lễ là chuyện có thật
   - *Cán bộ chuyển phòng*: chứng từ hiển thị theo phòng tại **ngày giao dịch** — trước ngày chuyển ở phòng cũ, từ ngày chuyển ở phòng mới (lịch sử đổi phòng lưu ở bảng `staff_department_history`). Nhập bù chứng từ tháng cũ cho cán bộ đã chuyển vẫn vào đúng phòng cũ; do giới hạn phạm vi phòng ở trên, việc nhập bù này do người hậu kiểm thực hiện
 - **Gom tập tự động**:
   - Max 350 tờ/tập
@@ -360,7 +412,7 @@ Truy cập:
   - *Tab "In bìa hồ sơ"*: Nạp file Excel tra cứu hồ sơ (`LT_HS_TRACUU_*.xls`) xuất từ chương trình lưu trữ → điền vào mẫu bìa **M01/LHS** (`templates/Phòng KSNB&HTVH/Bàn giao cho lưu trữ/Bia_ho_so.docx`), giữ nguyên toàn bộ định dạng của mẫu. Lấy cột **I** *Mã vạch* (ký hiệu thông tin + chuỗi barcode), cột **C** *Tên hồ sơ* (dòng tiêu đề + **Ngày mở** = ngày **đầu tiên** xuất hiện trong tên), cột **F** *Ngày CVKT*, cột **G** *Số tờ*. Chọn hồ sơ cần in trên bảng rồi tải về **1 file Word nhiều trang** (mỗi hồ sơ 1 trang) hoặc **ZIP mỗi hồ sơ 1 file**. Máy in phải cài font **"3 of 9 Barcode"**, nếu không dòng mã vạch in ra thành chữ thường và máy quét không đọc được
 - **Báo cáo** (menu con):
   - *Báo cáo hậu kiểm*: Xuất Excel tổng hợp theo phòng
-  - *Báo cáo bàn giao chứng từ*: Số chứng từ nộp đúng hạn / quá hạn theo phòng; chi tiết cán bộ nào nộp chậm chứng từ ngày nào, chậm bao nhiêu ngày làm việc. **Xuất Word A4 ngang** đúng kỳ đang xem (bảng tổng hợp theo phòng + chi tiết quá hạn, phần chi tiết chỉ ghi họ tên, không ghi User IPCAS)
+  - *Báo cáo bàn giao chứng từ*: Số chứng từ nộp đúng hạn / quá hạn theo phòng; chi tiết cán bộ nào nộp chậm chứng từ ngày nào, chậm bao nhiêu ngày làm việc. **Xuất Word A4 ngang** đúng kỳ đang xem (bảng tổng hợp theo phòng + chi tiết quá hạn, phần chi tiết chỉ ghi họ tên, không ghi User IPCAS). File Word in ra giấy được ngay: **số trang ở đầu trang, bỏ trống trang 1**; bảng tràn sang trang sau thì **dòng tiêu đề cột (STT, Họ và tên…) tự lặp lại**; cuối báo cáo có ô ký **LẬP BẢNG / KIỂM SOÁT** chừa chỗ ký tươi, **không in sẵn tên** (người lập và người kiểm soát đổi theo kỳ). Lưu ý: cột "Họ và tên" gộp ô theo cán bộ, nên khi cụm của một người bị cắt ngang trang thì các dòng ở đầu trang sau **để trống tên** — Word không lặp được nội dung ô đã gộp
 - **Báo cáo tổng hợp**: Báo cáo riêng cho phòng Tổng hợp
 - **Lịch sử thay đổi**: Ghi log mọi thao tác xác nhận, mượn, trả chứng từ
 
@@ -375,7 +427,15 @@ Truy cập:
   tách nhóm CN còn hoạt động với nhóm đã đóng BIC. Mặc định chỉ **thêm mới + cập nhật**; tích ô
   *"Xoá CN không có trong file"* nếu muốn đồng bộ hoàn toàn theo file
 - **Xuất Excel** theo đúng bộ lọc đang xem; file xuất ra nhập lại được (cùng định dạng file gốc)
-- Phân quyền riêng theo nhóm (`menu.ttqt_branches` + `ttqt_branches.create/edit/delete/import/export`)
+- **Lịch sử sửa đổi** (nút 🕘 ở cuối mỗi dòng): ngày giờ — người sửa — sửa mục nào — giá trị cũ →
+  giá trị mới. Ghi cho cả sửa tay lẫn nhập Excel, **mỗi trường một dòng**; nhập lại đúng file cũ
+  không sinh dòng nào vì không có gì đổi. Lịch sử giữ lại cả khi chi nhánh bị xoá, và theo được
+  sang bản ghi mới nếu chi nhánh đó được nhập lại cùng mã CN
+- Phân quyền riêng theo nhóm (`menu.ttqt_branches` +
+  `ttqt_branches.create/edit/delete/import/export/history`)
+
+  > Mã `ttqt_branches.history` là mã mới — **chưa nhóm nào được tick sẵn**. Vào
+  > **Phân quyền theo nhóm → Danh sách CN TTQT** bật lên thì nút Lịch sử mới hiện.
 
 ### Module Lịch trực
 - Xếp lịch trực tự động cho phòng Thanh toán
@@ -487,17 +547,11 @@ Truy cập:
 - **Thẻ Đối chiếu đến** (`/api/doi_chieu_song_phuong_kenh_core`): chạy **Kênh↔Hub rồi Hub↔Core**
   tự động nối tiếp trong 1 job cho 1 ngân hàng + 1 ngày mỗi lượt — không phải 2 tính năng rời
   nhau, lỗi 1 bước không chặn bước còn lại, chỉ khi cả 2 đều lỗi mới đánh dấu job lỗi. Từ
-  02/09/2026 chỉ nhận **tải file lên** (HUB zip, kênh xlsx, GL02 zip/CSV, OSB xlsx cùng lúc) —
+  02/09/2026 chỉ nhận **tải file lên** (HUB zip, kênh xlsx, GL02 zip / CORE csv-xlsx, OSB xlsx cùng lúc) —
   đã bỏ hẳn chế độ "chọn thư mục server" cùng nút "Duyệt..." — 2 endpoint cũ nhận `folder_path`
   tuỳ ý không qua allowlist nào, tiền lệ giống lỗ hổng `/api/fs/browse` đã gỡ ở ACH trước đó (xem
   `docs/Implementation-notes.html` card 113). Backend ghi **thẳng từng khối** xuống đĩa job
   (`save_upload_to`), không gom vào RAM trước — cùng khuôn mẫu upload của module ACH
-- **Nạp CORE bằng CSV đã phân loại sẵn thì chỉ có dữ liệu của đúng ngày đối chiếu.** Bước
-  Hub↔Core nhìn tới CORE của T+1..T+3, nhưng tên `{mã NH}_DEN*.csv` không mang ngày nên không
-  suy ra được nó là ngày nào — từ 03/09/2026 CSV chỉ được nhận cho ngày T (trước đó 1 file CSV bị
-  dùng nhầm cho cả 4 ngày, tự nhân dữ liệu lên ngày không có thật). Giao dịch hôm nay mà CORE hạch
-  toán sang hôm sau sẽ xếp thành "HUB THỪA" nếu thiếu — muốn chấm đủ thì nạp thêm **GL02 zip của
-  ngày hôm sau** (`docs/Implementation-notes.html` card 117)
 - **Thẻ Đối chiếu đi** (`/api/doi_chieu_song_phuong_kenh_core_di`): cùng kiến trúc 1 job/1 kết quả
   cuối như "Đối chiếu đến", nhưng thuật toán Hub↔Core khác đáng kể (không tái dùng được — package
   riêng `doi_chieu_song_phuong_core_di/`): khoá HUB dùng `SE_TRACE` (tự suy từ TRACE, cột nguồn
@@ -506,6 +560,47 @@ Truy cập:
   hơn đến (không lọc "-"/trace-huỷ trước khi khớp). Chi tiết đầy đủ + các bug thật phát hiện khi
   verify (lstrip số 0 SE_TRACE, guard MtId/MsgId theo NH không áp dụng được cho chiều đi...) xem
   `docs/Implementation-notes.html` card 118
+- **File CORE đã phân loại sẵn: nhận cả `.csv` lẫn `.xlsx`, và ngày lấy từ NỘI DUNG file**
+  (từ 09/09/2026, PR #81). Bước Hub↔Core nhìn tới CORE của T+1..T+3, nhưng tên `{mã NH}_DEN*.csv`
+  không mang ngày. Luật cũ 03/09 vá bằng cách chỉ nhận CSV cho ngày T — chặn luôn cả trường hợp
+  hợp lệ là người dùng đã có sẵn file của T+1. Nay hệ thống **mở file đọc cột `TRDATE`** để gán
+  đúng offset, nộp nhiều file khác ngày một lượt và trộn `.csv` với `.xlsx` đều được
+  (`docs/Implementation-notes.html` card 129)
+  - `TRDATE` **không** nằm trong `CORE_REQUIRED_COLS` — file không có cột này vẫn được nhận cho
+    **ngày T** (tương thích ngược), nhưng không dùng được cho offset khác
+  - File mà `TRDATE` bên trong **lẫn nhiều ngày** (phân loại gộp nhiều đợt zip một lượt) bị **từ
+    chối cả file** — đổi so với trước, khi nó được nhận cho ngày T kèm luôn dòng của ngày khác.
+    Cách xử lý: phân loại lại từng ngày rồi nộp riêng. Module ILO1000 gặp cùng dạng file này thì
+    **lọc theo `TRDATE`** (`ilo1000/pipeline.py::_filter_core_by_date`); chiều ĐẾN chưa làm vậy
+  - Cùng một ngày mà có 2 file (kể cả 1 `.csv` + 1 `.xlsx` cùng nội dung) thì **không tự chọn**,
+    báo lỗi yêu cầu bỏ bớt — cùng nguyên tắc "không đoán khi mơ hồ" của `_tim_file_hub()`
+  - ⚠️ Bảng **"đủ/thiếu" hiện trước khi bấm Chạy** (`common.kiem_tra_du_lieu()`) vẫn chỉ dò theo
+    **TÊN** file, không mở file ra xem — nên có thể báo "đủ" rồi lúc chạy mới dừng vì ngày bên
+    trong không khớp. Docstring hàm đó nói "tái dùng đúng luật dò tên của pipeline" đã **không
+    còn đúng** kể từ PR #81
+  - ⚠️ Tham số `ngay_goc` (dò thêm thư mục ngày T) chỉ có tác dụng khi thư mục nguồn có thư mục
+    con dạng `D.M`. `/start_upload` ghi phẳng qua `safe_filename()` nên **hiện là no-op** — nó
+    chuẩn bị cho chế độ thư mục máy chủ đã bị gỡ ở PR #70
+  - **Chiều ĐI dùng chung cơ chế này** (`doi_chieu_song_phuong_core_di/pipeline.py::
+    _tim_file_core_hoac_csv_di()`, từ 09/09/2026) — cùng luật TRDATE thật, cùng nhận cả `.csv`
+    lẫn `.xlsx`, khác đúng 1 điểm: cửa sổ CORE rộng gấp đôi (T-3..T+3, phục vụ nhánh "huỷ chéo
+    ngày" chỉ chiều đi mới có)
+- **3 file CSV chi tiết bọc `="..."` quanh cột khoá toàn chữ số** (từ 09/09/2026) —
+  `MSGREF`/`TXID` ở hai file `..._hub_chi_tiet.csv`, `MtId/MsgId` ở `..._kenh_chi_tiet.csv`.
+  Khoá SP THƯỜNG là chuỗi **16 chữ số thuần**, vượt trần **15 chữ số có nghĩa** của Excel: mở CSV
+  bằng double-click thì Excel tự coi cột đó là kiểu Số — rụng số 0 đứng đầu và làm tròn chữ số
+  cuối về 0. SP REALTIME không dính vì khoá có chữ cái nên Excel tự nhận là văn bản. Mở bằng
+  double-click nay ra đúng nguyên văn, nhưng **Power Query hoặc công cụ khác đọc CSV thô sẽ thấy
+  `="..."` bao quanh giá trị** — không phải lỗi. Cột `TRACE`/`CHI_NHANH` cùng dạng dữ liệu
+  **chưa** bọc (`docs/Implementation-notes.html` card 128)
+- **Chiều ĐI: HUB "TPAY" không còn tính là khớp CORE** (từ 09/09/2026) — quay về đúng văn bản gốc
+  chỉ tính `TRANG_THAI_LENH == "SCNL"`, theo xác nhận trực tiếp của Phòng nghiệp vụ (đảo lại một
+  đợt thử nghiệm tạm trước đó dựa trên tương quan dữ liệu quan sát được, xem
+  `doi_chieu_song_phuong_core_di/config.py::TRANG_THAI_HUB_DOI_CHIEU`)
+- **Chiều ĐI: file kết quả có thêm sheet "GhiChu"** (từ 09/09/2026) — tự giải thích vì sao bảng
+  tổng hợp Kênh↔Hub và file chi tiết CSV khác số dòng (cố ý khác phạm vi: bảng chỉ tính SCNL, chi
+  tiết giữ nguyên mọi trạng thái) và ngày nào bị thiếu file HUB/CORE khiến thiếu nhãn T±k — trước
+  đây chỉ giải thích được qua trao đổi trực tiếp, không nằm trong chính file kết quả
 - Phân quyền riêng theo nhóm: `menu.doi_chieu_song_phuong` (xem trang/kiểm tra dữ liệu, cả 3 thẻ),
   `doi_chieu_song_phuong.process` (chạy Phân loại dữ liệu),
   `doi_chieu_song_phuong_kenh_core.process` (chạy Đối chiếu đến),
@@ -545,9 +640,24 @@ Truy cập:
 - Ngoài 5 cổng còn 2 kênh cộng vào tổng CITAD: **Napas** và **PSS - MDP** (chỉ 2 ô *IH Đến —
   Món/Tiền*). Kênh **Ebanking** đã ngừng: bỏ khỏi màn hình 14/08/2026, bỏ nốt khỏi file Excel
   20/08/2026 — số liệu các ngày đã chấm vẫn nằm nguyên trong DB, chỉ không hiện/in ra nữa
-- Mỗi ngày là **một bản ghi chung cả phòng** (`doi_chieu_citad_sessions`, khoá theo `ngay`) —
-  ai lưu sau cùng là bản hiện hành; mỗi lần bấm Lưu ghi thêm 1 dòng vào
-  `doi_chieu_citad_history` để xem/tải lại từng bản cũ
+- Mỗi bảng khoá theo `id` riêng (`doi_chieu_citad_sessions`, từ 07/09/2026) — **1 người có thể
+  có nhiều bảng độc lập trong cùng 1 ngày**: bấm "Tải" một bảng đã lưu để sửa/lưu tiếp tại chỗ,
+  còn gõ ngày rồi Lưu mà KHÔNG bấm "Tải" thì luôn sinh **1 bảng mới hoàn toàn tách biệt** (kể cả
+  sau khi 1 bảng cũ đã "Lưu bảng cuối" rồi chấm lại). "Lưu bảng tạm" cho phép người khác vào góp
+  riêng Napas/PSS-MDP; mỗi lần Lưu ghi thêm 1 dòng vào `doi_chieu_citad_history` để xem/tải lại
+  từng bản cũ. Đổi ô ngày sau khi đã "Tải" 1 bảng sẽ tự tách khỏi bảng đó (không ghi đè nhầm)
+- Vào bảng **tạm** của người khác (qua tab *Lịch sử*) vẫn chỉ bổ sung được Napas/PSS-MDP như cũ,
+  không sửa được ô nào khác và không chốt bản cuối hộ được
+- **Sổ trực cuối ngày** coi một ngày là *đã đối chiếu, đã khớp* nếu **bất kỳ** bảng nào của ngày
+  đó đã "Lưu bảng cuối" và khớp. ⚠️ Nghĩa là nếu người A chốt bảng khớp còn người B chốt bảng
+  lệch cho cùng ngày, Sổ trực **không** cảnh báo — cảnh báo này chỉ là nhắc phụ trợ, không chặn
+- Hai ô **Napas** / **PSS - MDP** **không gõ tay được nữa** (từ 05/09/2026), chỉ nạp qua nút
+  *"Nạp CITAD"*. Extension quét ở trang PaymentHub vẫn gửi hai mục này lên nhưng phần mềm chủ
+  động bỏ qua và báo *"Lệnh quyết toán lô bắt buộc phải quét dữ liệu từ cổng Citad"* —
+  **không phải lỗi**, và **không cần cài lại Extension** (Extension không đổi gì)
+- **Ba bảng chênh lệch** thay vì một (từ 05/09/2026): bảng *Gộp* cả 3 loại tiền như cũ, thêm
+  bảng **VNĐ** riêng và bảng **Ngoại tệ** (USD + EUR gộp chung) — nhìn ra ngay lệch nằm ở nhóm
+  tiền nào, không phải đọc dòng ghi chú cuối trang. Công thức và file Excel xuất ra không đổi
 - Xuất Excel theo mẫu *"Báo cáo đối chiếu giao dịch hệ thống thanh toán điện tử liên ngân hàng"*
   đã duyệt (`build_xlsx` — không đổi format/công thức khi sửa)
 - Kèm **Extension trình duyệt** (`extension_citad/`) tự lấy số liệu từ trang CITAD/PaymentHub:
@@ -559,10 +669,11 @@ Truy cập:
   Tên không nằm trong danh sách (người đã nghỉ / chuyển phòng / gõ tay kiểu khác) vẫn được giữ
   nguyên khi mở lại bảng cũ — hai lỗi mất tên và **Xuất Excel 422** của 23/08/2026 đã vá
   25/08/2026, xem `docs/Implementation-notes.html` mục Z8
-- Tab **Lịch sử** (từ 25/08/2026): mỗi người bấm *Lưu* là **một dòng riêng** mang đúng tên người
-  đó, không còn gộp các lần lưu tạm của nhiều người vào một dòng mang tên người lập bảng.
-  ⚠️ Ô lọc **Tên người chấm** và cột *User chấm đối chiếu* vẫn chỉ tìm theo **người lập bảng** —
-  tìm tên người chỉ bổ sung Napas/PSS-MDP sẽ không ra ngày nào, phải bung dòng ra mới thấy
+- Tab **Lịch sử** (từ 07/09/2026, chia 3 tầng): **người lập bảng** (nhóm theo ngày + người) →
+  **từng bảng độc lập** của người đó → **từng lần lưu** trong bảng đó (mỗi người bấm *Lưu* là
+  một dòng riêng mang đúng tên, không gộp nhiều người vào một dòng mang tên người lập bảng). Có
+  dòng ngăn cách khi sang tháng khác. ⚠️ Ô lọc **Tên người chấm** vẫn chỉ tìm theo **người lập
+  bảng** — tìm tên người chỉ bổ sung Napas/PSS-MDP sẽ không ra ngày nào, phải bung bảng ra mới thấy
 - Phân quyền riêng theo nhóm (`menu.doi_chieu_citad`)
 
 ### Module Đối chiếu CITAD - PaymentHub (Phòng QLTK Nostro, Vostro)
@@ -611,11 +722,22 @@ Truy cập:
   nhưng kênh chưa ghi ngày trả thì chưa phải xác nhận thật — lệnh CITAD tương ứng rơi vào nhóm
   **Chỉ CITAD** để người dùng tự xác minh. Hệ quả: **số dòng lệch có thể tăng**, số liệu
   trước/sau mốc này không so sánh trực tiếp được
-- 🔴 **Điểm mù đã biết của quy tắc trên**: dòng IPCAS nói trên bị loại ngay lúc đọc file, nên nếu
-  CITAD **không hề có** lệnh đó thì dòng biến mất khỏi báo cáo — trước đây nó hiện ở nhóm
-  **Chỉ Agribank**. Đây đúng là ca đáng ngờ nhất (IPCAS ghi đã đi kênh mà CITAD chưa từng thấy).
-  `total_ipcas` trong tab Lịch sử cũng đếm thiếu đúng số dòng này. Xem
-  `docs/Implementation-notes.html` (card 109)
+- 🔴 **Điểm mù đã biết của quy tắc trên** (từ 09/09/2026 vá được một nửa): dòng IPCAS nói trên nay
+  **vẫn được giữ lại** khi đọc file, nên nếu CITAD **có** lệnh tương ứng thì dòng "Chỉ CITAD" nay
+  kèm luôn **Số RefHub** để tra cứu bên Agribank, và `total_ipcas` trong tab Lịch sử **hết đếm
+  thiếu**. Nửa còn lại chưa vá: nếu CITAD **không hề có** lệnh đó thì dòng vẫn biến mất khỏi báo
+  cáo, không hiện ở nhóm **Chỉ Agribank** — đây đúng là ca đáng ngờ nhất (IPCAS ghi đã đi kênh mà
+  CITAD chưa từng thấy), đang chờ Phòng Thanh toán chốt vì cho hiện sẽ làm số dòng lệch tăng thêm.
+  Xem `docs/Implementation-notes.html` (card 109, 127)
+- ⚠️ **`total_ipcas` từ 09/09/2026 không so sánh trực tiếp được với các lượt chấm cũ** — cùng một
+  file IPCAS nay cho con số lớn hơn trước, vì hết đếm thiếu nhóm dòng nói trên (không phải do dữ
+  liệu thay đổi)
+- **Cột "Dịch vụ" đã bỏ, thay bằng cột "Số RefHub"** (09/09/2026, yêu cầu Phòng Thanh toán) — trên
+  cả Excel xuất ra lẫn bảng "Kết quả" trên màn hình. Nội dung cột "Dịch vụ" cũ suy thẳng được từ
+  cột **Loại GD** (IH = giá trị cao, IL = giá trị thấp) ngay bên cạnh. "Số RefHub" đặt **cuối nhóm
+  AGRIBANK (IPCAS)** vì đó là dữ liệu gốc của file IPCAS, phía CITAD không có
+- 🔴 **Dòng nhóm "Lệch trạng thái" hiện vẫn để trống cột Số RefHub** dù IPCAS có sẵn giá trị đó —
+  đúng nhóm cần tra cứu nhất. Đang chờ vá; xem `docs/Implementation-notes.html` (card 127)
 - Cảnh báo khi chọn **trùng nội dung file** (băm SHA-256 toàn bộ byte, không dựa vào tên file).
   ⚠️ Chỉ là cảnh báo, bấm qua được — nhưng chọn nhầm trùng file nay khiến **mỗi dòng đẻ 1 dòng
   lệch giả**, không còn bị lọc âm thầm như trước
@@ -663,6 +785,31 @@ Truy cập:
   1 phiên gần nhất), có dòng ngăn cách khi sang tháng khác; xuất Excel vẫn bắt buộc chọn khoảng ngày
 - Phân quyền: `menu.so_truc` (vào module, xem lịch sử) + `so_truc.ksv_confirm`
   (được xuất hiện trong danh sách chọn KSV)
+
+### Module Báo cáo dữ liệu thanh toán (Phòng Tổng hợp)
+- Menu: **Báo cáo → Phòng Tổng hợp → Báo cáo dữ liệu thanh toán**. Quyền: `menu.th_reports`
+- Nhận 2 file Excel xuất từ hệ thống SWIFT — **Lệnh đến (IN)** và **Lệnh đi (OUT)** — điền vào mẫu
+  `D00054-...-ST-M-01.xlsx` của NHNN rồi trả về. Sheet dữ liệu tên `Result` hoặc `Export Worksheet`;
+  sheet `SQL` (nếu có) chỉ chứa câu truy vấn, không phải dữ liệu
+- Cột dùng tới: IN cần `CTHED`, `STTLM_AMT`, `TOTAL`; OUT cần thêm `CUST_TYPE`
+  (`CN` cá nhân / `DN` doanh nghiệp / `TCTD`+`TCTDO` tổ chức tín dụng). Giá trị chia 1.000, làm tròn
+  2 số lẻ
+- **Việt Nam luôn để 0**, cố ý — báo cáo này chỉ tính giao dịch với nước ngoài
+- **Dòng tổng cuối file bị loại theo cột `CTHED` để trống** (09/09/2026). Công cụ export lúc có lúc
+  không thêm dòng này — `OUT_202606` không có, `OUT_202608` có — nên phải nhận diện tường minh; giữ
+  lại là số liệu nhân đôi
+
+⚠️ **Báo cáo có thể ra ít hơn file nguồn — màn hình sẽ báo rõ.** Mẫu D00054 chỉ có **195 dòng quốc
+gia**, trong khi SWIFT báo theo mã ISO nên còn kèm vùng lãnh thổ (Bermuda, Cayman, Guam, Réunion…).
+Nơi nào không có dòng để điền thì bị bỏ khỏi báo cáo. Từ 09/09/2026, sau khi tạo báo cáo màn hình
+hiện **thẻ vàng liệt kê từng nơi bị bỏ kèm số điện và giá trị** — trước đây bỏ hoàn toàn im lặng,
+người làm báo cáo không có cách nào biết. Đo trên dữ liệu thật: kỳ 202606 hụt 59 điện, kỳ 202608 hụt
+43 điện.
+
+- Thấy cảnh báo thì **kiểm lại trước khi nộp**. Đang chờ chốt hai việc: (1) có gộp vùng lãnh thổ về
+  nước mẹ không (Cayman → United Kingdom, Guam → United States…); (2) **South Sudan** — quốc gia
+  thành viên LHQ từ 2011 nhưng mẫu D00054 (soạn khoảng 2010) không có dòng, không gộp vào đâu được,
+  phải hỏi NHNN
 
 ### Module Ôn tập (Quizz)
 - Nhóm **Tính năng khác** → **Ôn tập** (`/quiz`). Dùng chung cho cả cơ quan, không thuộc phòng nào
@@ -720,6 +867,78 @@ Truy cập:
   phông sẽ in qua Pillow. "NGÂN HÀNG NÔNG NGHIỆP VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM" cỡ 12 đậm đo được
   238,0 pt / ô 241,2 pt. Tràn thì nén `w:spacing` tối đa **−24 twip** (đúng mức Phụ lục V dùng),
   **không hạ cỡ chữ**; hết trần vẫn tràn thì dừng và ghi cảnh báo
+- **Ba cách kẻ vạch sẵn, ba cách xử lý**: hình vẽ (`<v:line>`, Straight Connector) thì **giữ
+  nguyên**; gạch chân (`w:u`) và viền dưới của đoạn (`w:pBdr/w:bottom`) thì **gỡ rồi vẽ lại** — hai
+  cách sau không cắt ngắn được (gạch chân dài đúng bằng chữ, viền đoạn dài hết bề ngang đoạn) nên
+  không làm được yêu cầu "1/3 đến 1/2 dòng chữ". Chỉ nhấc riêng `w:bottom`, giữ viền trên/trái/phải
+- **Không vẽ chồng lên đường kẻ có sẵn**: Word neo hình vẽ tay vào *chính đoạn có chữ*
+  (`positionV relativeFrom="paragraph"`), không đặt ở đoạn riêng. Chỉ soi đoạn kế tiếp là vẽ thêm
+  vạch thứ hai. Ở chính đoạn chỉ nhận đúng hình đường thẳng (`<v:line>`, `prstGeom prst="line"`,
+  `straightConnector1`) — nhận mọi `<w:drawing>` thì đoạn tên đơn vị có logo sẽ không bao giờ được kẻ
+- **Số trang đếm lại từ 1**: `<w:pgNumType w:start="N"/>` theo chân văn bản khi người soạn cắt một
+  phần ra khỏi tài liệu dài. Chèn số trang đúng chỗ mà đếm từ 23 thì nhìn vẫn là sai — nay ép về 1
+  và ghi số cũ vào nhật ký
+- **Bỏ ngắt trang thủ công** (bật sẵn, tắt được ở tab Cấu hình): dấu ngắt tay đặt theo bố cục *cũ*;
+  chuẩn hoá làm chữ cao lên nên nó rơi vào giữa chừng và đẻ ra một trang gần như trống. Đoạn chỉ
+  chứa dấu ngắt thì bỏ cả đoạn, đoạn có chữ thì chỉ nhấc thẻ `<w:br>` — không mất chữ. Tắt khi văn
+  bản thật sự cần sang trang mới (Phụ lục ban hành kèm theo Quyết định)
+- **Mục con của gạch đầu dòng** — QĐ 979 chỉ đánh số tới cấp *điểm* (a, b, c), dưới đó không có
+  cấp nào được quy định nên đây là **thói quen trình bày, không phải điều khoản**:
+  - **Giữ thụt lề tác giả đã tự đặt**: gạch đầu dòng thụt sâu hơn mức chung là cách duy nhất trong
+    `.docx` để nói "đây là mục con"; ép `left_indent` về 0 là xoá phẳng phân cấp đó. Lời văn thường
+    thụt vô cớ thì vẫn dọn về 0 như cũ
+  - **Tự nhận mục con** (bật sẵn): dòng gạch đầu dòng kết thúc bằng `:` mở một danh sách con; mục
+    con dùng ký tự `+` và thụt thêm 1 cm. Danh sách con **đóng** ở dòng kết thúc bằng `.` — nhưng
+    chỉ khi các dòng trên đã dùng `;` (quy ước Điều 15.4), vì người soạn chấm câu mọi dòng bằng `.`
+    thì dấu chấm không nói lên điều gì — hoặc ở dòng đầu tiên không phải gạch đầu dòng
+  - Không áp cho danh sách **Nơi nhận** và **Kính gửi**: cũng dùng `-` nhưng là danh sách phẳng, cỡ chữ riêng
+- **Số của danh sách tự động ăn theo cỡ chữ của đoạn**: số thứ tự / dấu chấm tròn do Word sinh lúc
+  hiển thị, lấy định dạng từ `w:pPr/w:rPr` (dấu đoạn) chứ không từ `<w:r>` nào — sửa cỡ chữ từng run
+  không chạm tới nó, nên số "4." "I." in ra bằng nửa con chữ. Chỉ đồng bộ ở đoạn CÓ `numPr`
+- **Không đánh thêm số trang khi văn bản đã có**: soi đủ sáu chỗ (header/footer × mặc định/trang
+  đầu/trang chẵn). Trước đây chỉ soi header mặc định nên văn bản đánh số ở chân trang bị đè thêm
+- **"Kính trình:"** được nhận như "Kính gửi" — Mẫu 16 Phụ lục V (Phiếu trình chuyển) dùng đúng chữ này
+- **Bảng dựng để canh chỗ vẫn được áp thể thức**: khối "Kính gửi / Kính trình" hay được dựng bằng
+  bảng (một ô nhãn, một ô tên người nhận). Mọi ô **cùng một bảng** với dòng đó ăn theo thể thức của
+  khối — Điều 4.2 chỉ dành cho bảng số liệu. Ranh giới là **cái bảng** (`ap_dung.nhom_bang()`), không
+  phải "ô liền kề": lan theo ô liền kề thì một bảng số liệu dán sát ngay sau bị kéo theo trọn vẹn
+- **Danh sách chấm tròn tự động được đổi thành gạch đầu dòng TRƯỚC khi nhận diện thể thức.** Dấu
+  chấm tròn do Word vẽ lúc hiển thị, không nằm trong `p.text` — mà luật nhận khối **Nơi nhận** lại
+  đi tìm đúng dấu gạch đầu dòng đó. Khối Nơi nhận dựng bằng nút bullet của Word vì thế trượt hết
+  mọi luật, mang mã `bang` và giữ nguyên cỡ chữ gốc. `ap_dung.go_bullet_tu_dong()` chạy trước
+  `phan_loai()` (cùng chỗ với `bo_ngat_trang_thu_cong()`). Tắt ô *"Chuyển danh sách chấm tròn tự
+  động…"* thì lỗi này quay lại — cố ý không vá bằng cách dạy bộ nhận diện đọc `numPr`, nó chỉ đọc
+  con chữ và phải giữ đúng một nguồn dữ liệu
+- **Quyền hạn người ký chiếm được hai dòng** (Điều 13.2): "TL. TỔNG GIÁM ĐỐC" rồi "GIÁM ĐỐC TRUNG
+  TÂM THANH TOÁN". Dòng thứ hai lọt qua phép thử họ tên (5 từ, từ nào cũng mở đầu chữ hoa) nên từng
+  bị nhận là **họ tên**, và họ tên thật nằm dưới khoảng chừa chữ ký thì không còn ai nhận. Nay xét
+  **chức danh trước, họ tên sau**, đi tối đa 2 dòng
+- **Từ khoá chức danh dùng "TRƯỞNG" để trần**, không liệt kê từng chức danh ghép: đã có TRƯỞNG
+  PHÒNG / BAN / ĐƠN VỊ / BỘ PHẬN mà "TRƯỞNG NHÓM" vẫn lọt, khiến cả khối chữ ký của một Báo cáo
+  không được áp thể thức
+- **Tiêu ngữ được sửa cả hoa/thường**, không chỉ dấu nối và dấu cách: Điều 7.2 nói thẳng "chữ cái
+  đầu của các cụm từ được viết hoa" nên "Hạnh **P**húc" là sai. Kiểu bỏ dấu ("Hoà" / "Hòa") vẫn
+  **không** bị đụng — quy định không nói gì, đó là thói quen từng đơn vị. Không sửa khi chuỗi tách
+  ra khác 3 cụm
+- **Bỏ tab / dấu cách thụt đầu dòng gõ tay** ở thành phần mà quy chuẩn tự đặt `thut_cm`: để lại thì
+  dòng đó thụt gấp đôi (tab + 1 cm). Tab **giữa** dòng không bị đụng — đó là canh cột
+- **Trích yếu công văn xuống dòng cũng được nối dài**: luật nối dài vốn chỉ chạy từ mốc *tên loại
+  văn bản*, mà công văn thì không có tên loại — trích yếu của nó là dòng `V/v …` ngay dưới số ký
+  hiệu. Dòng thứ hai vì thế rơi vào lời văn và bị áp cỡ 14 / căn đều hai bên / thụt 1 cm, trong khi
+  dòng trên là cỡ 12 canh giữa. Dùng lại chính hàm cũ nên thừa hưởng nguyên các hàng rào của nó
+- **Thêm dấu cách sau tiền tố đề ký**: "TL.TỔNG GIÁM ĐỐC" → "TL. TỔNG GIÁM ĐỐC" (TM. / KT. / TL. /
+  TUQ. / Q., chỉ nhận tiền tố viết hoa đứng đầu dòng)
+- **Khối tên đơn vị chia vai theo chữ đậm tác giả đã đặt** (Điều 8.2 — ban hành thì đậm + có đường
+  kẻ, chủ quản thì không). Đây là dấu hiệu do người viết đặt, dùng trước mọi phép đoán trên con chữ;
+  bắt được cả trường hợp tên đơn vị ban hành dài trải hai dòng mà dòng sau mở đầu bằng danh từ
+  ("BAN TRIỂN KHAI … / TỔ TRIỂN KHAI …"). Bỏ qua khi cả khối cùng đậm (tác giả không phân biệt) hoặc
+  khi các dòng đậm không liền nhau ở cuối khối
+- **Tên đơn vị dài trình bày nhiều dòng** (Điều 8.2): khối in hoa đầu văn bản được gom thành từng
+  **cụm** trước khi lấy cụm cuối làm đơn vị ban hành. "NGÂN HÀNG NÔNG NGHIỆP / VÀ PHÁT TRIỂN NÔNG
+  THÔN VIỆT NAM" là MỘT tên xuống dòng — đọc mỗi dòng là một cấp đơn vị thì nửa trên bị bỏ in đậm.
+  Dấu hiệu nhận cụm cố ý để hẹp: chỉ dòng mở đầu bằng liên từ hoặc gạch nối (`VÀ`, `-`, `–`, `—`),
+  vì không tên cơ quan nào bắt đầu như vậy. Khối hai cấp thật ("… VIỆT NAM" / "CHI NHÁNH HÀ NỘI")
+  không đổi
 - **Trích yếu xuống dòng**: dòng nối tiếp cũng được nhận là trích yếu (tối đa 3 dòng, dừng khi gặp
   `Căn cứ` / `Điều` / `Kính gửi`…), nếu không thì dòng thứ hai bị căn đều hai bên và không in đậm
   trong khi dòng trên căn giữa

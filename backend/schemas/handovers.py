@@ -30,6 +30,8 @@ class GridResponse(BaseModel):
     users: List[StaffOut]
     entries: List[GridEntryOut]
     days_in_month: int
+    # Ngày trong tháng là ngày nghỉ lễ (1..days_in_month) — lưới tô vàng như T7/CN
+    holidays: List[int] = []
 
 class EntryUpsertRequest(BaseModel):
     staff_id: int

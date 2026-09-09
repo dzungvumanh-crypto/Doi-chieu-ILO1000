@@ -35,6 +35,7 @@ CREATE TABLE leave_records (id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INT, 
     ksv_approved_at TEXT, ksv_comment TEXT, tong_hop_approver_id INT, tong_hop_approved_at TEXT,
     tong_hop_comment TEXT, gd_approver_id INT, gd_approved_at TEXT, gd_comment TEXT,
     spread_dates TEXT, direct_by INT, is_direct INT, recall_reason TEXT,
+    adjusts_leave_id INT, borrow_next_year_days REAL DEFAULT 0, other_deduct_quota INT DEFAULT 1,
     created_at TEXT, updated_at TEXT);
 CREATE TABLE leave_action_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, leave_id INT, actor_id INT,
     action TEXT, comment TEXT, from_status TEXT, to_status TEXT, created_at TEXT);

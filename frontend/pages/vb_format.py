@@ -365,7 +365,18 @@ async def vb_format_page():
                                           label="Căn lề").props("dense outlined").classes("w-36")
                         o_thut = ui.number(label="Thụt dòng đầu", value=tp["thut_cm"],
                                            step=0.1, format="%g").props(
-                            'dense outlined suffix="cm"').classes("w-32")
+                            'dense outlined clearable suffix="cm"').classes("w-32")
+                        o_thut.tooltip("Để trống = không đụng tới thụt dòng đầu")
+                        # Lề trái của CẢ đoạn. Trước đây thuộc tính này có
+                        # trong quy chuẩn và vẫn được áp lên văn bản, nhưng
+                        # không có ô nào trên màn hình — đúng thứ docstring đầu
+                        # file dặn phải tránh: một luật sửa văn bản mà người
+                        # dùng không có cách nào nhìn thấy hay tắt đi.
+                        o_le = ui.number(label="Lề trái đoạn",
+                                         value=tp.get("le_trai_cm"),
+                                         step=0.5, format="%g").props(
+                            'dense outlined clearable suffix="cm"').classes("w-32")
+                        o_le.tooltip("Để trống = không đụng tới lề trái của đoạn")
                         # Để TRỐNG = theo giá trị chung của cả văn bản. Khối thể
                         # thức đầu và cuối trang khai riêng dòng đơn / 0pt vì
                         # Điều 7.3 và 8.2 đòi chúng "cách nhau dòng đơn".
@@ -378,7 +389,7 @@ async def vb_format_page():
                             'dense outlined clearable suffix="pt"').classes("w-36")
                         o_cd.tooltip("Để trống = theo cách đoạn chung của cả văn bản")
                         w[("thanh_phan", ma)] = (o_co, o_dam, o_ngh, o_hoa, o_can,
-                                                 o_thut, o_gd, o_cd)
+                                                 o_thut, o_le, o_gd, o_cd)
 
                 def _g(v) -> str:
                     f = float(v)
@@ -441,6 +452,24 @@ async def vb_format_page():
                                            cfg)
                                     _o_bat("chung", "bo_khoang_truoc_doan",
                                            "Bỏ khoảng trống trước đoạn (Spacing Before → 0)", cfg)
+                                with ui.row().classes("gap-4 flex-wrap items-center"):
+                                    _o_bat("chung", "nen_chu_cho_vua_dong",
+                                           "Nén chữ cho dòng thể thức vừa một dòng", cfg)
+                                    _o_so("chung", "nen_toi_da_twip",
+                                          "Nén tối đa", cfg, "twip", 1)
+                                    _o_bat("chung", "go_gach_chan_the_thuc",
+                                           "Bỏ gạch chân ở dòng thể thức", cfg)
+                                    _o_bat("chung", "ve_duong_ke_ngang",
+                                           "Vẽ đường kẻ ngang dưới Tiêu ngữ / tên đơn vị / trích yếu",
+                                           cfg)
+                                    _o_bat("chung", "bo_ngat_trang_thu_cong",
+                                           "Bỏ ngắt trang thủ công", cfg)
+                                ui.label(
+                                    "Ngắt trang tay được đặt theo bố cục CŨ. Chuẩn hoá làm chữ "
+                                    "cao lên nên chỗ xuống trang dịch đi, giữ lại thì hay đẻ ra "
+                                    "một trang gần như trống. Tắt ô này khi văn bản thật sự cần "
+                                    "sang trang mới — Phụ lục ban hành kèm theo Quyết định."
+                                ).classes("text-xs text-gray-500")
                                 ui.label(
                                     "Điều 12.6 cho một dải: giãn dòng tối thiểu dòng đơn (1), "
                                     "tối đa 1,5; cách đoạn tối thiểu 6 pt. Mặc định lấy 1,2 vì "
@@ -519,6 +548,26 @@ async def vb_format_page():
                                                  value=cfg["danh_so"]["ky_tu_gach"]).props(
                                         "dense outlined").classes("w-28")
                                     w[("danh_so", "ky_tu_gach")] = o
+                                    o2 = ui.input(label="Ký tự mục con",
+                                                  value=cfg["danh_so"].get(
+                                                      "ky_tu_gach_cap2", "+")).props(
+                                        "dense outlined").classes("w-28")
+                                    w[("danh_so", "ky_tu_gach_cap2")] = o2
+                                with ui.row().classes("items-center gap-3 flex-wrap"):
+                                    _o_bat("chung", "phan_cap_gach_dau_dong",
+                                           "Tự nhận mục con (dòng kết thúc bằng «:» mở "
+                                           "danh sách con)", cfg)
+                                    _o_so("chung", "thut_muc_con_cm",
+                                          "Thụt mỗi cấp", cfg, "cm", 0.5)
+                                    _o_bat("chung", "giu_thut_muc_con",
+                                           "Giữ thụt lề mục con tác giả đã tự đặt", cfg)
+                                ui.label(
+                                    "QĐ 979 chỉ đánh số tới cấp «điểm» (a, b, c) — dưới đó "
+                                    "không có cấp nào được quy định, nên đây là thói quen "
+                                    "trình bày, không phải điều khoản. Danh sách con đóng lại "
+                                    "ở dòng kết thúc bằng dấu chấm (khi các dòng trên đã dùng "
+                                    "dấu chấm phẩy), hoặc ở dòng đầu tiên không phải gạch đầu dòng."
+                                ).classes("text-xs text-gray-500")
                                 _o_bat("danh_so", "chuan_khoan_diem",
                                        "Chuẩn hoá số khoản «1)» «1/» → «1.» và điểm «a.» «a/» → «a)»",
                                        cfg)
@@ -597,7 +646,8 @@ async def vb_format_page():
                     for khoa, o in w.items():
                         nhom, ten = khoa
                         if nhom == "thanh_phan":
-                            o_co, o_dam, o_ngh, o_hoa, o_can, o_thut, o_gd, o_cd = o
+                            (o_co, o_dam, o_ngh, o_hoa, o_can, o_thut, o_le,
+                             o_gd, o_cd) = o
                             cfg["thanh_phan"][ten] = {
                                 "co": o_co.value,
                                 "dam": _ma_sang_bool(o_dam.value),
@@ -605,6 +655,7 @@ async def vb_format_page():
                                 "hoa": o_hoa.value or None,
                                 "can": o_can.value or None,
                                 "thut_cm": o_thut.value,
+                                "le_trai_cm": o_le.value,
                                 # Ô trống → None → thành phần này đi theo giá trị
                                 # chung. Không đổi 0 thành None: 0 pt là một lựa
                                 # chọn có thật (khối đầu trang không cách đoạn).

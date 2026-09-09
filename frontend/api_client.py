@@ -25,6 +25,20 @@ class ApiFileError(Exception):
         self.filenames = filenames or []
 
 
+class QuotaExceededBorrowError(Exception):
+    """Lỗi 409 khi tạo/nộp lại/khai báo hộ đơn nghỉ phép vượt hạn mức năm nay —
+    backend trả detail dạng dict {"code":"quota_exceeded_borrow", "year", "next_year",
+    "remaining", "borrow_days"} (xem _check_quota_or_borrow ở backend/api/leaves.py).
+    FE dùng để hỏi xác nhận "ứng phép năm sau" thay vì chặn cứng."""
+
+    def __init__(self, detail: dict):
+        super().__init__("Vượt quá số ngày phép còn lại")
+        self.year = detail.get("year")
+        self.next_year = detail.get("next_year")
+        self.remaining = detail.get("remaining")
+        self.borrow_days = detail.get("borrow_days")
+
+
 class SessionExpiredError(Exception):
     """Raised khi backend trả 401 — session đã hết hạn hoặc đã logout."""
     pass
@@ -200,6 +214,9 @@ def _raise_http_error(e: httpx.HTTPStatusError):
         raw_detail = None
     if isinstance(raw_detail, dict) and "filenames" in raw_detail:
         raise ApiFileError(raw_detail.get("message") or str(raw_detail), raw_detail.get("filenames"))
+    if (e.response.status_code == 409 and isinstance(raw_detail, dict)
+            and raw_detail.get("code") == "quota_exceeded_borrow"):
+        raise QuotaExceededBorrowError(raw_detail)
     raise Exception(_parse_error(e))
 
 
@@ -284,11 +301,24 @@ def delete(path: str) -> Any:
 
 def post_upload_bytes(path: str, files: dict) -> bytes:
     """Multipart POST, nhận bytes response (ZIP, Excel…). Dùng cho generate-dept-zip."""
+    return _post_upload_bytes_raw(path, files).content
+
+
+def post_upload_bytes_with_headers(path: str, files: dict) -> tuple[bytes, dict]:
+    """Như post_upload_bytes nhưng trả kèm header của response.
+
+    Cần cho /api/th-reports/generate: thân response là file Excel, còn cảnh báo
+    "quốc gia không có dòng trong mẫu" nằm ở header X-Skipped-Countries."""
+    r = _post_upload_bytes_raw(path, files)
+    return r.content, dict(r.headers)
+
+
+def _post_upload_bytes_raw(path: str, files: dict):
     try:
         h = {k: v for k, v in _headers().items() if k != "Content-Type"}
         r = _download_client.post(f"{BACKEND_URL}{path}", headers=h, files=files)
         r.raise_for_status()
-        return r.content
+        return r
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 401:
             clear_auth()
@@ -353,10 +383,19 @@ def post_download(path: str, data: dict = None, timeout: float = None) -> bytes:
         raise Exception(str(e))
 
 
-def download(path: str, params: dict = None) -> bytes:
-    """Download file (docx, xlsx, etc.)"""
+def download(path: str, params: dict = None, timeout: float = None) -> bytes:
+    """Download file (docx, xlsx, etc.)
+
+    timeout=None giữ mặc định 60s của _download_client — không đủ cho phiếu nghỉ
+    phép PDF: backend cho phép Word khởi động nguội mất tới 150s
+    (leave_pdf._CONVERT_TIMEOUT) trước khi coi là treo thật. Trước đây route này
+    không có cách nào nâng timeout như post_upload()/post_download() ở trên nên
+    ai bấm "Tải phiếu" đúng lúc Word chưa ấm sẽ bị rớt về bản .docx chưa ký dù
+    server không hề lỗi, chỉ đang xử lý chậm — xem caller ở leaves.py.
+    """
     try:
-        r = _download_client.get(f"{BACKEND_URL}{path}", headers=_headers(), params=params)
+        kw = {"timeout": timeout} if timeout is not None else {}
+        r = _download_client.get(f"{BACKEND_URL}{path}", headers=_headers(), params=params, **kw)
         r.raise_for_status()
         return r.content
     except httpx.HTTPStatusError as e:

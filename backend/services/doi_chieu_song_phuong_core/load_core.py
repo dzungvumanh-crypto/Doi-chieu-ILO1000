@@ -36,13 +36,14 @@ def load_core_den_csv(path: str | Path) -> pd.DataFrame:
     chặn nào phát hiện RA sớm hơn thế; cần Business Owner biết nếu thấy dòng "CORE THỪA" bất
     thường sau khi đổi sang nộp Excel.
 
-    ⚠ 2026-09-09, phát hiện qua rà soát điểm mù kỹ thuật: đường nhanh của
-    `_tim_file_core_hoac_csv_di` (đúng 1 file + offset 0) đưa thẳng file vào đây mà KHÔNG qua
-    `_doc_trdate_1_file` (hàm duy nhất có try/except quanh việc đọc file) — 1 file `.xlsx` hỏng/
-    giả (đổi đuôi từ file khác, hoặc corrupt) sẽ ném thẳng lỗi gốc của `calamine`/`pandas` (VD
-    `CalamineError: Cannot detect file format`) lên tận `job["error"]`, không tên file, không
-    tiếng Việt — khác hẳn quy ước mọi lỗi khác của module này. Bọc try/except NGAY TẠI ĐÂY (điểm
-    hẹp nhất, mọi đường đọc core đều đi qua) thay vì rải lại ở từng nơi gọi.
+    ⚠ 2026-09-09, phát hiện qua rà soát điểm mù kỹ thuật: đường nhanh của `_tim_file_core_hoac_csv`
+    (chiều đến) / `_tim_file_core_hoac_csv_di` (chiều đi) (đúng 1 file + offset 0) đưa thẳng file
+    vào đây mà KHÔNG qua `_doc_trdate_1_file` (hàm duy nhất có try/except quanh việc đọc file) —
+    1 file `.xlsx` hỏng/giả (đổi đuôi từ file khác, hoặc corrupt) sẽ ném thẳng lỗi gốc của
+    `calamine`/`pandas` (VD `CalamineError: Cannot detect file format`) lên tận `job["error"]`,
+    không tên file, không tiếng Việt — khác hẳn quy ước mọi lỗi khác của module này. Bọc
+    try/except NGAY TẠI ĐÂY (điểm hẹp nhất, mọi đường đọc core đều đi qua) thay vì rải lại ở từng
+    nơi gọi.
 
     Không đặt trần dung lượng riêng cho `.xlsx` (đã thử rồi bỏ, 2026-09-09): số đo "Excel giải nén
     phồng RAM ~40 lần" là thật, nhưng file kênh Excel (`doi_chieu_song_phuong_kenh/load_kenh.py`,

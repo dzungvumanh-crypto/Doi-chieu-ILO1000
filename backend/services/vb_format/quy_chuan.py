@@ -146,6 +146,21 @@ QUY_CHUAN_MAC_DINH: dict = {
         # bằng 7 thẻ <v:line>, không dùng gạch chân chỗ nào.
         "go_gach_chan_the_thuc": True,
         "ve_duong_ke_ngang": True,
+        # Ngắt trang tay được đặt theo bố cục CŨ. Chuẩn hoá làm chữ cao lên
+        # (giãn dòng 1,2, lề trên 20 mm) nên chỗ xuống trang dịch đi và dấu
+        # ngắt cũ đẻ ra một trang gần như trống. Tắt ô này khi văn bản thật sự
+        # cần sang trang mới — Phụ lục ban hành kèm theo Quyết định chẳng hạn.
+        "bo_ngat_trang_thu_cong": True,
+        # QĐ 979 chỉ đánh số tới *điểm* (a, b, c) — dưới đó không có cấp nào
+        # được khai, nên phân cấp chỉ còn trông vào thụt lề. Gạch đầu dòng thụt
+        # sâu hơn mức chung là tác giả đang nói "đây là mục con"; ép về 0 là xoá
+        # phẳng phân cấp đó.
+        "giu_thut_muc_con": True,
+        # Suy ra mục con khi tác giả KHÔNG để lại dấu hiệu nào: dòng gạch đầu
+        # dòng kết thúc bằng ":" thì các dòng gạch đầu dòng ngay sau là mục con.
+        # Xem `nhan_dien.cap_gach_dau_dong` để biết danh sách con đóng ở đâu.
+        "phan_cap_gach_dau_dong": True,
+        "thut_muc_con_cm": 1.0,
     },
     "thanh_phan": {
         # Cỡ chữ khối đầu lấy theo con số ĐẾM ĐƯỢC trên cả 18 mẫu của Phụ lục V
@@ -235,6 +250,10 @@ QUY_CHUAN_MAC_DINH: dict = {
     "danh_so": {
         "gach_dau_dong": True,      # mọi ký tự gạch đầu dòng → "- " (đúng một dấu cách)
         "ky_tu_gach": "-",
+        # Mục con dùng ký tự khác cấp ngoài. QĐ 979 không quy định gì dưới cấp
+        # *điểm*, nên đây là thói quen văn bản hành chính chứ không phải điều
+        # khoản: cấp ngoài "-", cấp trong "+".
+        "ky_tu_gach_cap2": "+",
         "chuan_khoan_diem": True,   # "1)" / "1/" → "1."   |   "a." / "a/" → "a)"
         "chuan_muc_la_ma": True,    # "I)" / "I/" → "I."
         "bo_bullet_tu_dong": True,  # danh sách chấm tròn của Word → gõ thẳng "- "

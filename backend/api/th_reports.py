@@ -1,4 +1,5 @@
 """API endpoints báo cáo dữ liệu thanh toán SWIFT — Phòng Tổng hợp."""
+import json
 import logging
 from urllib.parse import quote
 
@@ -60,7 +61,7 @@ async def generate_payment_report(
 
     # ── Fill template ─────────────────────────────────────────────────────────
     try:
-        excel_bytes = await run_heavy(fill_template, incoming, outgoing, period)
+        excel_bytes, bo_qua = await run_heavy(fill_template, incoming, outgoing, period)
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="Template báo cáo không tìm thấy trên server")
     except Exception as e:
@@ -68,8 +69,13 @@ async def generate_payment_report(
         raise HTTPException(status_code=500, detail=f"Lỗi tạo báo cáo: {e}")
 
     filename = f"D00054-01204001-01204001-{period}-ST-M-01.xlsx"
+    headers = _dl_headers(filename)
+    # Cảnh báo đi kèm THÂN FILE nên phải nhét vào header: đổi response sang JSON
+    # bọc file base64 thì phình 33% và hỏng đường tải xuống hiện có.
+    # URL-encode vì header HTTP chỉ chở được latin-1.
+    headers["X-Skipped-Countries"] = quote(json.dumps(bo_qua, ensure_ascii=True))
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers=_dl_headers(filename),
+        headers=headers,
     )
