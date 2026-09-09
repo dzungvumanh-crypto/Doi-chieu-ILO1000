@@ -28,7 +28,6 @@ import datetime
 import json
 import logging
 from decimal import Decimal
-from urllib.parse import quote
 
 from nicegui import ui
 from starlette.requests import Request as _StarletteRequest
@@ -245,7 +244,22 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
     # chốt — khoá hết, không ai sửa/lưu được nữa qua đây, kể cả người lập
     # bảng). Dict để mọi closure trong trang đọc/ghi được mà không cần
     # `nonlocal`. Xem _apply_view_mode().
-    view_state = {"mode": "edit", "ngay_dang_xem": "", "created_by": None, "created_by_name": ""}
+    # "session_id": None nghĩa là form TRẮNG chưa "Tải" bảng nào — lưu sẽ LUÔN
+    # tạo bảng MỚI (07/09/2026: 1 người có thể có nhiều bảng độc lập/ngày, xem
+    # docstring đầu doi_chieu_citad_service.py). Có giá trị = đang sửa/lưu
+    # tiếp ĐÚNG bảng đó (của chính mình hoặc napas_only vào bảng người khác).
+    view_state = {
+        "mode": "edit", "ngay_dang_xem": "", "session_id": None,
+        "created_by": None, "created_by_name": "",
+        # True trong lúc _load_session()/_load_history_entry() đang gán lại
+        # ngay_input.value — chặn _on_ngay_changed_sync()/_check_ngay_da_co_bang()
+        # tưởng nhầm đây là NGƯỜI DÙNG tự đổi ngày (bug thật, review 07/09/2026:
+        # đừng dựa vào thứ tự chạy trước/sau giữa apply_session_data() và
+        # _apply_view_mode() để "tự ghi đè lại" — on_value_change ASYNC bị
+        # NiceGUI hoãn sang background task nên chạy SAU CẢ khối đó, không
+        # phải ngay trong lúc gán .value như tưởng).
+        "dang_tai": False,
+    }
     current_user = api.get_current_user() or {}
 
     # Dữ liệu số (float) — nguồn sự thật để tính chênh lệch, tách khỏi text hiển thị trên ô nhập
@@ -589,7 +603,12 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         _set_input(inputs["pssmdpE"]["den_ih_t"], fmt(data["pssmdp"]["den_ih_t"]))
         recalc()
 
-    def _apply_view_mode(mode: str, created_by: int | None = None, created_by_name: str = ""):
+    def _apply_view_mode(
+        mode: str,
+        session_id: int | None = None,
+        created_by: int | None = None,
+        created_by_name: str = "",
+    ):
         """Khoá/mở form theo 3 chế độ — xem giải thích ở khai báo `view_state`
         đầu hàm doi_chieu_citad_page(). Khoá bằng prop `readonly` của Quasar
         trên TỪNG ô — chặn gõ thật ở phía trình duyệt, không chỉ ẩn nút (phòng
@@ -602,6 +621,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         cùng hàm doi_chieu_citad_page(), nhưng closure chỉ đọc lúc GỌI hàm
         này (sau khi trang đã dựng xong)."""
         view_state["mode"] = mode
+        view_state["session_id"] = session_id
         view_state["created_by"] = created_by
         view_state["created_by_name"] = created_by_name
 
@@ -658,11 +678,10 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
 
     async def _admin_unlock():
         ngay = view_state["ngay_dang_xem"] or ngay_input.value
-        # Bảng đang xem (mode='locked') — có thể KHÔNG phải bảng của chính
-        # Admin đang bấm nút này, nên phải mở khoá VÀ tải lại ĐÚNG bảng đó,
-        # không phải bảng của Admin (xem session_admin_unlock() trong service —
-        # created_by giờ bắt buộc vì 1 ngày có thể có nhiều bảng đã chốt).
-        owner_id = view_state["created_by"]
+        # Bảng đang xem (mode='locked') — xác định trực tiếp qua `session_id`
+        # (07/09/2026: 1 ngày có thể nhiều bảng đã chốt của nhiều người, id là
+        # đủ, không cần suy qua ngay/created_by nữa) — xem session_admin_unlock().
+        session_id = view_state["session_id"]
         with ui.dialog() as dialog, ui.card():
             ui.label(f"Mở khoá ngày {ngay}?").classes("text-base font-bold text-red-700")
             ui.label(
@@ -677,7 +696,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                     try:
                         await asyncio.to_thread(
                             api.post,
-                            f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}/unlock?created_by={owner_id}",
+                            f"/api/doi-chieu-citad/session-by-id/{session_id}/unlock",
                             {},
                         )
                     except Exception as e:
@@ -686,7 +705,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                         ui.notify(f"Lỗi mở khoá: {e}", type="negative")
                         return
                     ui.notify(f"Đã mở khoá ngày {ngay}", type="positive")
-                    await _load_ngay_hien_hanh(ngay, created_by=owner_id)
+                    await _load_session(session_id)
                     if history_refresh.get("fn"):
                         await history_refresh["fn"]()
 
@@ -724,13 +743,12 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
             "ebank_t": data["ebank"]["den_ih_t"],
             "pssmdp_m": data["pssmdp"]["den_ih_m"],
             "pssmdp_t": data["pssmdp"]["den_ih_t"],
-            # napas_only = đang góp vào bảng NGƯỜI KHÁC (view_state["created_by"]
-            # là id người đó) — báo cho backend biết lưu vào đúng bảng nào, thay
-            # vì bảng của chính mình. Chế độ khác (edit) luôn None — bảng của
-            # chính mình, xem session_save() trong service.
-            "target_created_by": (
-                view_state["created_by"] if view_state["mode"] == "napas_only" else None
-            ),
+            # None = form TRẮNG (chưa "Tải" bảng nào) → LUÔN tạo bảng MỚI, kể
+            # cả khi đã có bảng khác cùng ngày (07/09/2026: 1 người có thể
+            # nhiều bảng độc lập/ngày). Có giá trị = đang lưu tiếp ĐÚNG bảng đó
+            # (của chính mình ở mode='edit', hoặc góp Napas/PSS-MDP vào bảng
+            # người khác ở mode='napas_only') — xem session_save() trong service.
+            "session_id": view_state["session_id"],
         }
 
     async def load_citad_buffer():
@@ -881,30 +899,29 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         # thông báo "positive" chung chung của các mục nạp thành công khác.
         ui.notify(msg, type="warning" if skipped_napas else ("positive" if count else "warning"))
 
-    def _mode_for_meta(sess: dict) -> tuple[str, int | None, str]:
+    def _mode_for_meta(sess: dict) -> tuple[str, int | None, int | None, str]:
         """Suy ra mode xem/sửa từ _meta_status/_meta_created_by(_username) —
         xem session_get()/get_history_entry_data() trong service. Trả
-        (mode, created_by, created_by_name)."""
+        (mode, session_id, created_by, created_by_name)."""
         status = sess.get("_meta_status")
+        session_id = sess.get("_meta_session_id")
         created_by = sess.get("_meta_created_by")
         created_by_name = sess.get("_meta_created_by_username") or ""
         if status == "final":
-            return "locked", created_by, created_by_name
+            return "locked", session_id, created_by, created_by_name
         if created_by and created_by != current_user.get("id"):
-            return "napas_only", created_by, created_by_name
-        return "edit", created_by, created_by_name
+            return "napas_only", session_id, created_by, created_by_name
+        return "edit", session_id, created_by, created_by_name
 
-    async def _load_ngay_hien_hanh(ngay: str, created_by: int | None = None):
-        """Tải bản HIỆN HÀNH (session_get — khác _load_history_entry() luôn
-        lấy đúng 1 dòng lịch sử cụ thể) của 1 ngày vào form, áp đúng mode
-        theo _meta_* — gọi sau khi Lưu (bảng CỦA CHÍNH MÌNH, `created_by` bỏ
-        trống) hoặc sau khi Admin mở khoá (bảng của người vừa mở khoá — có
-        thể KHÔNG phải admin, phải truyền đúng `created_by`) để form phản
-        ánh đúng trạng thái mới nhất, không cần F5."""
-        params = {"created_by": created_by} if created_by is not None else None
+    async def _load_session(session_id: int):
+        """Tải bản HIỆN HÀNH của ĐÚNG 1 bảng theo `session_id` (session_get —
+        khác _load_history_entry() luôn lấy đúng 1 dòng lịch sử cụ thể) vào
+        form, áp đúng mode theo _meta_* — gọi sau khi Lưu (backend trả về
+        đúng `session_id` vừa lưu, kể cả bảng MỚI vừa tạo) hoặc sau khi Admin
+        mở khoá, để form phản ánh đúng trạng thái mới nhất, không cần F5."""
         try:
             sess = await asyncio.to_thread(
-                api.get, f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}", params
+                api.get, f"/api/doi-chieu-citad/session-by-id/{session_id}"
             )
         except Exception as e:
             if _handle_api_error(e):
@@ -914,25 +931,20 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         if not sess:
             _apply_view_mode("edit")
             return
-        apply_session_data(sess)
-        view_state["ngay_dang_xem"] = ngay
-        mode, created_by, created_by_name = _mode_for_meta(sess)
-        _apply_view_mode(mode, created_by, created_by_name)
+        view_state["dang_tai"] = True
+        try:
+            apply_session_data(sess)
+            view_state["ngay_dang_xem"] = sess.get("ngay") or ngay_input.value
+            mode, session_id, created_by, created_by_name = _mode_for_meta(sess)
+            _apply_view_mode(mode, session_id, created_by, created_by_name)
+        finally:
+            view_state["dang_tai"] = False
 
     async def _save_session_now(status: str):
-        # Chốt CHỦ BẢNG đang lưu TRƯỚC khi gọi API — napas_only đang góp vào
-        # bảng NGƯỜI KHÁC (view_state["created_by"]), không phải bảng của
-        # chính mình. Bug thật (review Người 1, PR#76): tải lại sau lưu từng
-        # gọi _load_ngay_hien_hanh() KHÔNG truyền created_by → luôn lấy bảng
-        # của người gọi; với B đang góp Napas vào bảng A (B chưa có bảng riêng
-        # ngày đó), API trả rỗng → rơi vào mode='edit' trong khi số liệu CŨ
-        # của A vẫn còn nguyên trên màn hình (apply_session_data không chạy) —
-        # B bấm Lưu lần nữa sẽ tạo bảng MỚI của B chứa toàn bộ số liệu của A.
-        owner = view_state["created_by"] if view_state["mode"] == "napas_only" else None
         payload = get_session_payload()
         payload["status"] = status
         try:
-            await asyncio.to_thread(api.post, "/api/doi-chieu-citad/session", payload)
+            resp = await asyncio.to_thread(api.post, "/api/doi-chieu-citad/session", payload)
         except Exception as e:
             if _handle_api_error(e):
                 return
@@ -943,10 +955,11 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
         )
         if history_refresh.get("fn"):
             await history_refresh["fn"]()
-        # Tải lại ĐÚNG bảng vừa lưu — người lập bảng lưu tạm vẫn ở 'edit',
-        # người khác lưu tạm Napas vẫn ở 'napas_only' (đúng bảng của owner),
-        # lưu bản cuối -> 'locked'.
-        await _load_ngay_hien_hanh(ngay_input.value, created_by=owner)
+        # Tải lại ĐÚNG bảng vừa lưu — backend luôn trả về session_id thật sự
+        # đã lưu (mới tạo hoặc lưu tiếp), không còn suy qua ngay/created_by
+        # (07/09/2026: 1 ngày có thể nhiều bảng của nhiều người/của cùng 1
+        # người, suy qua ngay sẽ mơ hồ không biết đúng bảng nào vừa lưu).
+        await _load_session(resp["session_id"])
 
     def do_save_session(status: str):
         # Phòng vệ thêm — nút tương ứng đã ẩn theo mode (_apply_view_mode),
@@ -1004,16 +1017,27 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                 return
             ui.notify(f"Lỗi tải bản lịch sử: {e}", type="negative")
             return
-        apply_session_data(sess)
-        view_state["ngay_dang_xem"] = ngay_hien_thi
-        mode, created_by, created_by_name = _mode_for_meta(sess)
-        _apply_view_mode(mode, created_by, created_by_name)
+        view_state["dang_tai"] = True
+        try:
+            apply_session_data(sess)
+            view_state["ngay_dang_xem"] = ngay_hien_thi
+            mode, session_id, created_by, created_by_name = _mode_for_meta(sess)
+            _apply_view_mode(mode, session_id, created_by, created_by_name)
+        finally:
+            view_state["dang_tai"] = False
         tabs.set_value(tab_doi_chieu)
+        # entry_staff_name = người THỰC SỰ lưu ĐÚNG dòng lịch sử vừa bấm "Tải"
+        # (khác created_by_name — chủ bảng, cố định suốt vòng đời bảng). Thiếu
+        # tên này thì bấm "Tải" vào dòng của B vẫn chỉ thấy tên A (chủ bảng)
+        # khắp màn hình, tưởng nhầm A tự lưu hết — phản hồi thật 07/09/2026.
+        entry_staff_name = sess.get("_meta_entry_staff_name") or ""
         msg = {
             "edit": "Đang xem bảng tạm của bạn — sửa/lưu tiếp được",
             "napas_only": f"Đang xem bảng tạm của {created_by_name} — chỉ bổ sung được Napas/PSS-MDP",
             "locked": "Đang xem bảng đã chốt (chỉ đọc)",
         }.get(mode, "Đang xem")
+        if entry_staff_name and entry_staff_name != created_by_name:
+            msg += f" (dòng này do {entry_staff_name} lưu)"
         ui.notify(f"{msg} — ngày {ngay_hien_thi}", type="positive")
 
     async def _show_edit_log(history_id: int):
@@ -1143,62 +1167,201 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                         "text-xs font-semibold text-white"
                     ):
                         ui.label("Ngày").classes("w-28 border-r border-white/30 pr-2 mr-2")
-                        ui.label("User chấm đối chiếu").classes("w-44 border-r border-white/30 pr-2 mr-2")
-                        ui.label("Số lần lưu").classes("w-24 text-center border-r border-white/30 pr-2 mr-2")
-                        ui.label("Cập nhật lúc").classes("flex-1")
-                    for i, r in enumerate(rows, start=1):
-                        _day_row(r, is_last=(i == len(rows)))
+                        ui.label("Người chấm").classes("w-44 border-r border-white/30 pr-2 mr-2")
+                        ui.label("Số bảng").classes("w-24 text-center border-r border-white/30 pr-2 mr-2")
+                        ui.label("Cập nhật gần nhất").classes("flex-1")
+                    # TẦNG 1 = (ngày, created_by) — `rows` đã sắp (ngày, tên chủ
+                    # bảng) LIỀN NHAU từ backend (xem get_reconciliation_days()),
+                    # nên chỉ cần duyệt tuần tự gom các dòng liền kề cùng
+                    # (ngay, created_by) thành 1 nhóm, không cần tự sort lại.
+                    # 07/09/2026: đổi từ "1 dòng/bảng" sang "1 dòng/người" vì 1
+                    # người giờ có thể có NHIỀU bảng độc lập/ngày (xem docstring
+                    # đầu doi_chieu_citad_service.py) — mỗi bảng của người đó là
+                    # 1 dòng TẦNG 2 lồng bên trong, không phải 1 dòng TẦNG 1 riêng.
+                    groups = []
+                    for r in rows:
+                        if groups and groups[-1][0] == r["ngay"] and groups[-1][1] == r["created_by"]:
+                            groups[-1][2].append(r)
+                        else:
+                            groups.append((r["ngay"], r["created_by"], [r]))
+                    # Dòng ngăn cách xanh mỗi khi sang tháng khác — cùng kiểu
+                    # đã dùng ở tab Lịch sử của Sổ trực (so_truc.py). `ngay`
+                    # ở đây là dd/mm/yyyy (khác truc_date ISO của Sổ trực) nên
+                    # lấy tháng/năm bằng cách tách chuỗi thay vì cắt 7 ký tự đầu.
+                    current_month = None
+                    for gi, (ngay, owner_id, bang_list) in enumerate(groups):
+                        try:
+                            _, m, y = ngay.split("/")
+                            month_key = f"{y}-{m}"
+                        except Exception:
+                            month_key = None
+                        if month_key is not None and month_key != current_month:
+                            current_month = month_key
+                            with ui.row().classes(
+                                "w-full items-center px-3 py-1.5 bg-emerald-400"
+                                + ("" if gi == 0 else " border-t border-gray-200")
+                            ):
+                                ui.label(f"{int(m)}/{y}").classes("text-xs font-bold text-emerald-950")
+                        _person_row(ngay, bang_list, is_last=(gi == len(groups) - 1))
 
-        def _day_row(r: dict, is_last: bool):
-            # `created_by` (id người lập bảng NÀY) — bắt buộc phải truyền khi
-            # gọi .../history bên dưới: 1 ngày giờ có thể có nhiều dòng (nhiều
-            # bảng của nhiều người), không còn suy được "bảng nào" chỉ từ `ngay`.
-            ngay, owner_id = r["ngay"], r["created_by"]
-            nguoi_hien_thi = r.get("created_by_name") or r["created_by_username"] or "—"
+        def _session_row(ngay: str, r: dict, idx: int, is_last: bool):
+            """TẦNG 2 — 1 bảng (`session_id`) ĐỘC LẬP của người ở dòng TẦNG 1
+            cha (cùng ngày). Bảng chỉ có ĐÚNG 1 lần lưu thì GỘP LUÔN thành 1
+            dòng duy nhất kèm sẵn nút Tải/Ai đã sửa — không bắt bấm thêm 1
+            lần mở rộng chỉ để thấy lại đúng thông tin đã có ở dòng tóm tắt
+            (phản hồi thực tế 07/09/2026: 2 dòng đó trùng lặp vô ích). Bảng
+            có TỪ 2 lần lưu trở lên mới cần bấm để bung TẦNG 3 (danh sách
+            thật sự có ý nghĩa để xem — tái dùng _render_history_entries).
+
+            Dòng gộp dùng thẳng `r["last_history_id"]` (MAX(h.id) tính sẵn ở
+            get_reconciliation_days(), review 07/09/2026) — KHÔNG gọi thêm
+            GET .../history nữa: trước đây mỗi bảng 1-lần-lưu bắn 1 request
+            RIÊNG khi bung Tầng 1, người có N bảng/ngày phải chờ N lượt
+            đi-về tuần tự chỉ để lấy đúng 1 con số mỗi lần (N+1 request)."""
+            session_id = r["session_id"]
+
+            def _draw_expandable():
+                # Dạng bấm-mở-rộng gốc (Tầng 2 tóm tắt -> bấm bung Tầng 3) —
+                # dùng cho bảng có TỪ 2 lần lưu trở lên, VÀ dùng làm phương án
+                # lùi về khi `last_history_id` thiếu bất thường (xem bên dưới)
+                # để không mất hẳn chức năng Tải/Ai-đã-sửa, người dùng bấm lại
+                # được để thử tải lần nữa thay vì thấy 1 dòng cụt không rõ lý do.
+                expanded = {"open": False}
+                with ui.column().classes("w-full" + ("" if is_last else " border-b border-gray-100")):
+                    with ui.row().classes(
+                        "w-full items-center gap-0 px-3 py-1.5 cursor-pointer hover:bg-gray-50"
+                    ) as row:
+                        ui.label(f"Bảng {idx}").classes(
+                            "w-28 text-sm text-gray-600 border-r border-gray-200 pr-2 mr-2"
+                        )
+                        with ui.row().classes("w-44 items-center gap-1 border-r border-gray-200 pr-2 mr-2"):
+                            if r.get("status") == "final":
+                                ui.badge("Chính thức").props('color="positive"')
+                            else:
+                                ui.badge("Tạm").props('color="grey-7"')
+                        ui.label(str(r["so_lan_luu"])).classes(
+                            "w-24 text-center border-r border-gray-200 pr-2 mr-2"
+                        )
+                        ui.label(r["updated_at"] or "").classes("flex-1 text-xs text-gray-400")
+                        ui.icon("expand_more").classes("text-gray-500")
+                    detail_area = ui.column().classes("w-full pl-4")
+
+                    async def toggle_detail():
+                        if expanded["open"]:
+                            detail_area.clear()
+                            expanded["open"] = False
+                            return
+                        try:
+                            entries = await asyncio.to_thread(
+                                api.get, f"/api/doi-chieu-citad/session-by-id/{session_id}/history"
+                            )
+                        except Exception as e:
+                            if _handle_api_error(e):
+                                return
+                            ui.notify(f"Lỗi: {e}", type="negative")
+                            return
+                        expanded["open"] = True
+                        _render_history_entries(detail_area, ngay, entries)
+
+                    row.on("click", toggle_detail)
+
+            if r["so_lan_luu"] != 1:
+                _draw_expandable()
+                return
+
+            hid = r.get("last_history_id")
+            if hid is None:
+                # so_lan_luu nói có 1 lần lưu nhưng last_history_id lại rỗng —
+                # dữ liệu không khớp (không nên xảy ra, cả 2 field cùng lọc
+                # theo session_id trong 1 câu SQL, nhưng nếu có thì KHÔNG
+                # được che giấu bằng cách vẽ dòng thiếu nút im lặng) — lùi về
+                # dạng bấm-mở-rộng để người dùng còn thấy bất thường và tự
+                # kiểm tra được, thay vì tưởng bảng này không có nút nào.
+                ui.notify(f"Bảng {idx}: dữ liệu lịch sử không khớp — bấm dòng để tải lại", type="warning")
+                _draw_expandable()
+                return
+
+            with ui.row().classes(
+                "w-full items-center gap-0 px-3 py-1.5"
+                + ("" if is_last else " border-b border-gray-100")
+            ):
+                ui.label(f"Bảng {idx}").classes(
+                    "w-28 text-sm text-gray-600 border-r border-gray-200 pr-2 mr-2"
+                )
+                with ui.row().classes("w-44 items-center gap-1 border-r border-gray-200 pr-2 mr-2"):
+                    if r.get("status") == "final":
+                        ui.badge("Chính thức").props('color="positive"')
+                    else:
+                        ui.badge("Tạm").props('color="grey-7"')
+                # "1" cố định (so_lan_luu == 1 ở nhánh này) — giữ ĐÚNG 4 cột
+                # như _draw_expandable() (w-28/w-44/w-24/flex-1), không thì 2
+                # kiểu dòng Tầng 2 lệch cột "Cập nhật" khi đứng cạnh nhau
+                # (thẩm mỹ, review 07/09/2026).
+                ui.label("1").classes("w-24 text-center border-r border-gray-200 pr-2 mr-2")
+                ui.label(r["updated_at"] or "").classes("flex-1 text-xs text-gray-400")
+                ui.button(
+                    icon="group", on_click=lambda _, h=hid: _show_edit_log(h)
+                ).props("flat dense round size=sm color=red-8").tooltip("Ai đã sửa bảng tạm này")
+                ui.button(
+                    icon="download", on_click=lambda _, h=hid, ng=ngay: _load_history_entry(h, ng)
+                ).props("outline dense round size=sm").tooltip("Tải bản này")
+
+        def _person_row(ngay: str, bang_list: list, is_last: bool):
+            """TẦNG 1 — 1 người lập bảng trong 1 ngày. Bung ra thấy TẦNG 2 =
+            từng bảng ĐỘC LẬP người đó đã tạo cho ngày này — mỗi lần họ gõ
+            lại đúng ngày rồi Lưu mà KHÔNG bấm "Tải" tiếp tục bảng cũ (kể cả
+            sau khi 1 bảng cũ đã "Lưu bản cuối" rồi họ chấm lại) sinh ra 1
+            bảng riêng ở đây, không gộp/đè lên bảng trước (xác nhận yêu cầu
+            Phòng Thanh toán 07/09/2026)."""
+            owner_name = bang_list[0]["created_by_name"] or bang_list[0]["created_by_username"] or "—"
+            latest = max((b["updated_at"] or "" for b in bang_list), default="")
             expanded = {"open": False}
             with ui.column().classes("w-full" + ("" if is_last else " border-b border-gray-200")):
                 with ui.row().classes(
-                    "w-full items-center gap-0 px-3 py-2 cursor-pointer hover:bg-gray-50"
+                    "w-full items-center gap-0 px-3 py-2 cursor-pointer hover:bg-blue-50/50 bg-gray-50/70"
                 ) as row:
                     ui.label(ngay).classes("w-28 font-bold border-r border-gray-200 pr-2 mr-2")
-                    with ui.row().classes("w-44 items-center gap-1 border-r border-gray-200 pr-2 mr-2"):
-                        ui.label(nguoi_hien_thi)
-                        if r.get("status") == "final":
-                            ui.badge("Chính thức").props('color="positive"')
-                        else:
-                            ui.badge("Tạm").props('color="grey-7"')
-                    ui.label(str(r["so_lan_luu"])).classes(
+                    ui.label(owner_name).classes(
+                        "w-44 text-sm font-semibold border-r border-gray-200 pr-2 mr-2"
+                    )
+                    ui.label(str(len(bang_list))).classes(
                         "w-24 text-center border-r border-gray-200 pr-2 mr-2"
                     )
-                    ui.label(r["updated_at"] or "").classes("flex-1 text-xs text-gray-400")
+                    ui.label(latest).classes("flex-1 text-xs text-gray-400")
                     ui.icon("expand_more").classes("text-gray-500")
                 detail_area = ui.column().classes("w-full pl-4")
 
-                async def toggle_detail():
+                def toggle_person_detail():
                     if expanded["open"]:
                         detail_area.clear()
                         expanded["open"] = False
                         return
-                    try:
-                        entries = await asyncio.to_thread(
-                            api.get,
-                            f"/api/doi-chieu-citad/session/{quote(ngay, safe='')}/history",
-                            {"created_by": owner_id},
-                        )
-                    except Exception as e:
-                        if _handle_api_error(e):
-                            return
-                        ui.notify(f"Lỗi: {e}", type="negative")
-                        return
                     expanded["open"] = True
-                    _render_history_entries(detail_area, ngay, entries)
+                    with detail_area:
+                        for bi, b in enumerate(bang_list, start=1):
+                            _session_row(ngay, b, bi, is_last=(bi == len(bang_list)))
 
-                row.on("click", toggle_detail)
+                row.on("click", toggle_person_detail)
 
         history_refresh["fn"] = load_days
         ui.timer(0.1, load_days, once=True)
 
     def do_reset(notify: bool = True):
+        # Bấm "Xoá" chỉ hiện khi mode='edit' (xem _apply_view_mode) — nhưng
+        # mode='edit' KHÔNG có nghĩa form đang trắng: bấm "Tải" bảng CỦA
+        # CHÍNH MÌNH từ tab Lịch sử cũng vào mode='edit' kèm
+        # view_state["session_id"] trỏ đúng bảng đó (để "Lưu tiếp" cập nhật
+        # tại chỗ, không đẻ bảng mới — xem get_session_payload()). Trước đây
+        # do_reset() chỉ xoá số liệu trên màn hình, KHÔNG đụng session_id —
+        # bấm "Xoá" rồi gõ số liệu mới rồi "Lưu" sẽ ÂM THẦM GHI ĐÈ đúng bảng
+        # vừa tải (mất trắng số liệu cũ), thay vì tạo bảng mới độc lập như
+        # người dùng tưởng khi thấy màn hình đã sạch — rủi ro mất dữ liệu
+        # thật (phát hiện khi rà soát lại 07/09/2026, chưa từng có ai báo vì
+        # trước đây 1 người chỉ có ĐÚNG 1 bảng/ngày nên "xoá rồi lưu lại" và
+        # "tạo bảng mới" là MỘT, không phân biệt được cho tới tính năng nhiều
+        # bảng độc lập/ngày hôm nay). Xoá thì PHẢI tách khỏi bảng đang tải,
+        # để lần lưu tiếp theo luôn tạo bảng mới, không đè lên bảng cũ.
+        view_state["session_id"] = None
         for c in CONGS:
             for u in CURS:
                 for f in FK:
@@ -1216,7 +1379,7 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
             _set_input(inputs["pssmdpE"][f], '')
         recalc()
         if notify:
-            ui.notify("Đã xoá toàn bộ dữ liệu", type="info")
+            ui.notify("Đã xoá toàn bộ dữ liệu — lưu tiếp theo sẽ tạo bảng MỚI, không ghi đè bảng vừa tải", type="info")
 
     async def _do_download_export():
         gD = {str(c): {u: {f: data["gD"][c][u][f] for f in FK} for u in CURS} for c in CONGS}
@@ -1592,6 +1755,52 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                         "border-2 border-red-800 shadow-sm p-4"
                     ):
                         ngay_input = _date_picker_input("Ngày")
+
+                        # Bug thật đã sửa (review 07/09/2026, phát hiện qua
+                        # chạy thật, không phải suy luận): bản đầu viết handler
+                        # này là `async def`. NiceGUI gọi handler ở
+                        # `handle_event()` — với hàm ASYNC, `handler(...)` chỉ
+                        # tạo ra 1 coroutine (chưa chạy thân hàm), rồi
+                        # `handle_event()` đẩy coroutine đó vào
+                        # `background_tasks.create(...)` để chạy SAU, không
+                        # đồng bộ ngay tại chỗ (xem nicegui/events.py). Nghĩa
+                        # là thân hàm — chỗ xoá session_id — chạy SAU KHI cả
+                        # `_load_session()` (gồm cả `_apply_view_mode()` gán
+                        # lại session_id ĐÚNG) đã chạy xong và trả quyền điều
+                        # khiển về event loop, nên nó XOÁ MẤT session_id vừa
+                        # gán đúng — nặng hơn hẳn lỗi gốc: bấm "Tải" bảng nào
+                        # cũng bị tách khỏi bảng đó, "Lưu" sẽ đẻ bảng trùng
+                        # thay vì cập nhật tại chỗ.
+                        #
+                        # Sửa bằng CỜ TƯỜNG MINH (`view_state["dang_tai"]`)
+                        # thay vì dựa vào thứ tự chạy trước/sau — KHÔNG đủ chỉ
+                        # đổi hàm này về `def` đồng bộ: dù vậy nó vẫn chạy
+                        # ĐÚNG lúc apply_session_data() gán ngay_input.value
+                        # trong 1 lượt "Tải" hợp lệ, tự xem đó là "người dùng
+                        # đổi ngày" và hiện nhầm thông báo. Cờ `dang_tai` (bật
+                        # trong lúc _load_session()/_load_history_entry() đang
+                        # gán lại ngay_input.value, xem 2 hàm đó) chặn được cả
+                        # 2 vấn đề. Giữ `def` đồng bộ (KHÔNG async) — nếu để
+                        # async, handler vẫn bị hoãn sang background task, cờ
+                        # đã tắt lại (reset trong `finally` của 2 hàm kia)
+                        # trước khi handler kịp chạy, coi như cờ vô nghĩa.
+                        def _on_ngay_changed_sync(_e=None):
+                            if view_state.get("dang_tai"):
+                                return
+                            if view_state["session_id"] is not None:
+                                view_state["session_id"] = None
+                                ui.notify(
+                                    "Đã đổi sang ngày khác — lưu tiếp theo sẽ tạo bảng MỚI, "
+                                    "không ghi đè bảng vừa tải",
+                                    type="info",
+                                )
+
+                        ngay_input.on_value_change(_on_ngay_changed_sync)
+                        # Đăng ký handler bất đồng bộ `_check_ngay_da_co_bang`
+                        # (banner "bạn đã có bảng cho ngày này") ở XA hơn phía
+                        # dưới, ngay sau khi hàm đó được định nghĩa — KHÔNG
+                        # tham chiếu thẳng ở đây vì hàm chưa tồn tại tại điểm
+                        # này (NameError lúc dựng trang, không phải lỗi ẩn).
                         lap_bang_input = ui.select(
                             [], label="Lập bảng", with_input=True, new_value_mode="add-unique"
                         ).props("dense outlined").classes("w-48")
@@ -1622,6 +1831,67 @@ async def doi_chieu_citad_page(request: _StarletteRequest):
                             "bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg"
                         )
                     ui.timer(0.1, _load_payment_staff_names, once=True)
+
+                    # Banner NHẮC (không chặn) — "bạn đã có bảng cho ngày
+                    # này" khi gõ/chọn ngày mà CHÍNH MÌNH đã có ít nhất 1
+                    # bảng (bất kể ai đang xem đúng bảng đó hay đang gõ bảng
+                    # mới). Bổ sung sau khi review (07/09/2026): model mới
+                    # "không Tải thì luôn tạo bảng mới" khiến F5 giữa chừng
+                    # hoặc mở lại hôm sau rồi gõ đúng ngày cũ + nạp + Lưu sẽ
+                    # ÂM THẦM đẻ bảng trùng — đường lưu tiếp bảng cũ nằm sâu
+                    # 3 lớp trong tab Lịch sử, dễ quên. Chỉ NHẮC, không chặn:
+                    # vẫn tạo được bảng mới độc lập nếu không bấm vào banner.
+                    ngay_banner_area = ui.column().classes("w-full gap-0")
+
+                    async def _check_ngay_da_co_bang():
+                        # Bỏ qua khi đang trong 1 lượt "Tải" (xem cờ
+                        # view_state["dang_tai"], đặt trong _load_session()/
+                        # _load_history_entry()) — vừa Tải xong 1 bảng của
+                        # đúng ngày đang xem thì hiện lại banner "bạn đã có
+                        # bảng cho ngày này, tải bảng gần nhất?" là thừa (họ
+                        # đang xem đúng 1 trong số các bảng đó rồi).
+                        if view_state.get("dang_tai"):
+                            return
+                        ngay_banner_area.clear()
+                        try:
+                            ngay_dt = datetime.datetime.strptime((ngay_input.value or "").strip(), "%d/%m/%Y")
+                        except Exception:
+                            return  # ngày chưa gõ xong (vd đang gõ dở "08/0") — bỏ qua, không gọi API
+                        ngay_str = ngay_dt.strftime("%d/%m/%Y")
+                        try:
+                            rows = await asyncio.to_thread(
+                                api.get, "/api/doi-chieu-citad/reconciliation-days",
+                                {"tu_ngay": ngay_str, "den_ngay": ngay_str},
+                            )
+                        except Exception:
+                            return  # chỉ là gợi ý phụ — lỗi mạng thì bỏ qua lặng lẽ, không phải thao tác chính
+                        # Lọc đúng CHÍNH MÌNH bằng created_by (id) — KHÔNG lọc qua
+                        # `nguoi_cham` (so tên) vì 2 người trùng họ tên sẽ lẫn vào
+                        # nhau (đúng lỗi A vừa sửa ở get_reconciliation_days()).
+                        mine = [r for r in rows if r.get("created_by") == current_user.get("id")]
+                        if not mine:
+                            return
+                        latest = max(mine, key=lambda r: r.get("updated_at") or "")
+                        with ngay_banner_area:
+                            with ui.row().classes(
+                                "w-full items-center gap-2 px-4 py-2.5 rounded-xl border border-indigo-300 bg-indigo-50 mb-2"
+                            ):
+                                ui.icon("info", color="indigo-700").classes("text-lg")
+                                ui.label(
+                                    f"Bạn đã có {len(mine)} bảng cho ngày {ngay_str} — nếu muốn lưu "
+                                    "tiếp bảng cũ (thay vì tạo bảng mới), bấm tải bảng gần nhất."
+                                ).classes("text-sm text-indigo-800 flex-1")
+
+                                async def _tai_gan_nhat(_e=None, sid=latest["session_id"]):
+                                    await _load_session(sid)
+                                    tabs.set_value(tab_doi_chieu)
+
+                                ui.button(
+                                    "Tải bảng gần nhất", icon="download", on_click=_tai_gan_nhat
+                                ).props("dense outline color=indigo-8")
+
+                    ngay_input.on_value_change(_check_ngay_da_co_bang)
+                    ui.timer(0.1, _check_ngay_da_co_bang, once=True)
 
                     # Banner trạng thái — nội dung dựng ĐỘNG theo mode trong
                     # _apply_view_mode() (rỗng/ẩn khi mode='edit' của chính

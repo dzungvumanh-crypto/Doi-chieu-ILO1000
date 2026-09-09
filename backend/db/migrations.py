@@ -1978,6 +1978,79 @@ def _ensure_indexes():
     finally:
         _raw_dc2.close()
 
+    # ── Rebuild doi_chieu_citad_sessions: bỏ UNIQUE(ngay, created_by) — 1 người có thể nhiều bảng/ngày ──
+    # Đảo NGƯỢC đúng điều khối rebuild ngay phía trên vừa cố định. Xác nhận
+    # yêu cầu Phòng Thanh toán 07/09/2026 (giải thích qua ảnh 3 tầng): "mỗi
+    # người 1 bảng/ngày" (khối trên) chưa đủ — thực tế cần "mỗi lần người đó
+    # TỰ TẠO bảng mới (không bấm Tải tiếp tục bảng cũ) phải sinh 1 bảng độc
+    # lập riêng", kể cả sau khi đã "Lưu bảng cuối" rồi chấm lại từ đầu. Với
+    # UNIQUE(ngay, created_by) thì lần lưu thứ 2 của cùng 1 người trong cùng
+    # ngày sẽ ĐÈ LÊN bảng thứ nhất qua ON CONFLICT — không tách được. Bỏ hẳn
+    # UNIQUE, chỉ còn khoá `id` — mỗi bảng độc lập theo đúng `id` riêng, việc
+    # "sửa tiếp bảng cũ hay tạo bảng mới" giờ do CÓ TRUYỀN session_id hay
+    # không quyết định (xem session_save() trong service), không còn suy tự
+    # động qua cặp (ngay, created_by) nữa.
+    _raw_dc3 = sqlite3.connect(DB_PATH)
+    _raw_dc3.isolation_level = None
+    try:
+        _cur_dc3 = _raw_dc3.cursor()
+        _cur_dc3.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='doi_chieu_citad_sessions'")
+        if _cur_dc3.fetchone():
+            _cur_dc3.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='doi_chieu_citad_sessions'"
+            )
+            _dc3_sql_row = _cur_dc3.fetchone()
+            _dc3_has_unique = bool(_dc3_sql_row) and "UNIQUE(ngay, created_by)" in (_dc3_sql_row[0] or "")
+            if _dc3_has_unique:  # dấu hiệu bảng vẫn còn ràng buộc cũ
+                _mig_log5 = logging.getLogger(__name__)
+                _mig_log5.info(
+                    "Rebuilding doi_chieu_citad_sessions (bỏ UNIQUE(ngay, created_by))..."
+                )
+                _cur_dc3.execute("PRAGMA foreign_keys = OFF")
+                _cur_dc3.execute("PRAGMA legacy_alter_table = ON")
+                _cur_dc3.execute("BEGIN EXCLUSIVE")
+                try:
+                    _cur_dc3.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_doi_chieu_citad_sessions_bak3'"
+                    )
+                    if _cur_dc3.fetchone():
+                        _cur_dc3.execute("DROP TABLE _doi_chieu_citad_sessions_bak3")
+                    _cur_dc3.execute("ALTER TABLE doi_chieu_citad_sessions RENAME TO _doi_chieu_citad_sessions_bak3")
+                    _cur_dc3.execute("""
+                        CREATE TABLE doi_chieu_citad_sessions (
+                            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ngay        TEXT    NOT NULL,
+                            data        TEXT    NOT NULL,
+                            updated_at  DATETIME,
+                            updated_by  INTEGER REFERENCES user_tttt(id) ON DELETE SET NULL,
+                            status      TEXT    NOT NULL DEFAULT 'final',
+                            created_by  INTEGER REFERENCES user_tttt(id) ON DELETE SET NULL
+                        )
+                    """)
+                    # Giữ nguyên `id` cũ (không để AUTOINCREMENT cấp lại) — id đã
+                    # là khoá ngoại của doi_chieu_citad_history.session_id, đổi id
+                    # ở đây sẽ làm lịch sử cũ trỏ sai bảng.
+                    _cur_dc3.execute("""
+                        INSERT INTO doi_chieu_citad_sessions
+                            (id, ngay, data, updated_at, updated_by, status, created_by)
+                        SELECT id, ngay, data, updated_at, updated_by, status, created_by
+                        FROM _doi_chieu_citad_sessions_bak3
+                    """)
+                    _cur_dc3.execute("DROP TABLE _doi_chieu_citad_sessions_bak3")
+                    _cur_dc3.execute("COMMIT")
+                    _mig_log5.info("doi_chieu_citad_sessions rebuild (lần 3) hoàn tất")
+                except Exception as _dc3_err:
+                    _cur_dc3.execute("ROLLBACK")
+                    logging.getLogger(__name__).error(
+                        "doi_chieu_citad_sessions rebuild (lần 3) thất bại: %s", _dc3_err
+                    )
+                    raise
+                finally:
+                    _cur_dc3.execute("PRAGMA legacy_alter_table = OFF")
+                    _cur_dc3.execute("PRAGMA foreign_keys = ON")
+    finally:
+        _raw_dc3.close()
+
     index_stmts = [
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_entry_staff_date ON document_entries(handover_id, staff_id, transaction_date)",
         "CREATE INDEX IF NOT EXISTS ix_source_users_dept      ON source_users(department_id)",

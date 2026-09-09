@@ -4,6 +4,24 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 08/09/2026 Đối chiếu CITAD (Phòng Thanh toán) - **Cho phép 1 người có nhiều bảng đối chiếu độc lập trong cùng 1 ngày**
+    + Trước đây mỗi người chỉ được **đúng 1 bảng/ngày**. Nay bấm "Tải" một bảng đã lưu để sửa/lưu
+      tiếp tại chỗ như cũ, còn **gõ ngày rồi Lưu mà KHÔNG bấm "Tải"** thì luôn sinh ra **1 bảng
+      mới hoàn toàn tách biệt** — kể cả sau khi một bảng cũ đã "Lưu bảng cuối" rồi chấm lại
+    + Tab **Lịch sử** dựng lại thành **3 tầng**: người lập bảng → từng bảng độc lập của người đó
+      → từng lần lưu trong bảng đó. Bảng chỉ có 1 lần lưu hiện gộp thẳng 1 dòng, có nút Tải/Ai đã
+      sửa ngay, không phải bấm mở rộng thêm 1 lần chỉ để thấy lại đúng thông tin đã có
+    + Có dòng ngăn cách khi danh sách Lịch sử sang tháng khác
+    + ⚠️ **Đổi ô ngày sau khi đã "Tải" một bảng** sẽ tự tách khỏi bảng đó — báo rõ "lưu tiếp theo
+      sẽ tạo bảng MỚI", để không lưu nhầm đè lên bảng vừa tải. Nếu đang xem bảng của người khác
+      (chỉ góp Napas/PSS-MDP) mà quên bấm Tải bảng của họ trước khi Lưu thì hệ thống cũng chặn
+      đúng cách tương tự, không ghi đè nhầm số liệu người khác
+    + 🔎 Gõ đúng 1 ngày đã có sẵn bảng của mình (kể cả mở lại hôm sau, hoặc F5 giữa chừng) sẽ hiện
+      banner nhắc **"Bạn đã có N bảng cho ngày này"** kèm nút tải nhanh bảng gần nhất — chỉ nhắc,
+      không chặn tạo bảng mới nếu không bấm vào
+    + ✅ **Không phải làm gì sau khi cập nhật** — không đổi công thức tính chênh lệch, không đổi
+      cách xuất Excel, không đổi quyền. Dữ liệu cũ giữ nguyên khi hệ thống tự cập nhật cấu trúc
+
 - 06/09/2026 Nghỉ phép - **Rà soát toàn bộ đợt sửa "Khác"/điều chỉnh NPBB — sửa 2 lỗi hiện chữ hướng dẫn sai loại nghỉ**
     + Giao agent rà soát riêng toàn bộ code mới của 2 đợt trước (loại "Khác" tự chọn tính hạn mức,
       chặn điều chỉnh NPBB xếp chuỗi) — xác nhận toàn bộ 5 câu SQL + các điểm chặn/khôi phục đơn gốc
