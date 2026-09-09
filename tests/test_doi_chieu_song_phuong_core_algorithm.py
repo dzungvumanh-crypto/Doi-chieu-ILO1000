@@ -297,6 +297,33 @@ class TestBuildTongHop:
         assert hang_tong["Số tiền CORE"] == 800000
 
 
+class TestLoadCoreDenCsvFileHong:
+    """2026-09-09, phát hiện qua rà soát điểm mù kỹ thuật: đường nhanh của
+    `_tim_file_core_hoac_csv` (đúng 1 file + offset 0) đưa file thẳng vào `load_core_den_csv()`
+    mà KHÔNG qua bước try/except của `_doc_trdate_1_file` — file .xlsx/.csv hỏng phải được chính
+    `load_core_den_csv()` bắt lỗi và báo rõ tên file + tiếng Việt, không để lỗi gốc của
+    calamine/pandas lọt thẳng lên `job["error"]`."""
+
+    def test_xlsx_hong_bao_loi_ro_ten_file(self, tmp_path):
+        p = tmp_path / "202_DEN.xlsx"
+        p.write_bytes(b"khong phai file excel that")
+        with pytest.raises(ValueError, match="202_DEN.xlsx"):
+            load_core.load_core_den_csv(p)
+
+    def test_csv_hong_van_bao_loi_ro_neu_khong_doc_duoc(self, tmp_path):
+        """CSV hiếm khi ném lỗi đọc (pandas rất khoan dung), nhưng nếu có (VD file nhị phân giả
+        dạng .csv) thì cũng phải qua đúng nhánh try/except này, không phải nhánh khác."""
+        p = tmp_path / "202_DEN.csv"
+        p.write_bytes(b"\x00\x01\x02\xff\xfe binary rac khong phai csv")
+        try:
+            load_core.load_core_den_csv(p)
+        except ValueError as e:
+            assert "202_DEN.csv" in str(e)
+        # Nếu pandas đọc được (coi như 1 dòng text) thì rơi vào lỗi "thiếu cột bắt buộc" —
+        # cũng là ValueError rõ ràng, không phải lỗi gốc khó hiểu. Cả 2 nhánh đều chấp nhận được,
+        # miễn không phải exception lạ (VD UnicodeDecodeError trần trụi).
+
+
 # ── pipeline: dò file theo ngày (T-3..T+3), kể cả file để rời ở thư mục cha ────
 
 class TestTimFile:

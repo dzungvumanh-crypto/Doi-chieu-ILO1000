@@ -307,8 +307,14 @@ def doi_chieu_hub_core(
         raise ValueError(f"Không tìm thấy file HUB ngày {ngay} cho NH {ma_nh} — không thể đối chiếu.")
 
     core_theo_offset: dict[int, pd.DataFrame] = {}
-    # Cache TRDATE→file (2026-09-08) dựng 1 lần, dùng lại cho cả 4 offset — tránh mở đọc lại cùng
-    # tổ hợp file CSV 4 lần (xem `_theo_ngay_cac_file_csv`).
+    # Cache TRDATE→file (2026-09-08) khoá theo TỔ HỢP file gộp được ở mỗi offset (xem
+    # `_theo_ngay_cac_file_csv`) — tiết kiệm khi nhiều offset cùng gộp ra ĐÚNG 1 tổ hợp giống nhau
+    # (ca phổ biến: mọi file nằm chung 1 thư mục phẳng). KHÔNG đảm bảo tuyệt đối "mỗi file chỉ đọc
+    # 1 lần" — nếu `ngay`/`ngay_goc` trỏ tới các thư mục ứng viên KHÁC NHAU theo từng offset, tổ
+    # hợp gộp được có thể lớn dần qua từng offset, khiến cache-key đổi và một vài file bị đọc lại
+    # (đã xác nhận qua phản biện 2026-09-09: kịch bản 2 file ở 2 thư mục ngày riêng biệt đọc lại 1
+    # file, thay vì tối ưu tuyệt đối). Không sai kết quả, chỉ chưa tối ưu hết mức lời chú thích cũ
+    # từng ngụ ý — sửa lại nếu sau này cần tối ưu triệt để hơn (khoá cache theo từng file riêng lẻ).
     cache_ngay_csv: dict[tuple[Path, ...], dict[str, list[Path]]] = {}
     for off in (0, 1, 2, 3):
         nhan = nhan_offset(off)
