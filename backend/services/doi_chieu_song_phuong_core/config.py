@@ -12,6 +12,12 @@ Khác 2 module đã có:
 """
 
 # ─── Cột CORE bắt buộc (output {ma_nh}_DEN.csv của doi_chieu_song_phuong_service) ─────
+# ⚠️ `TRDATE` CỐ Ý không nằm trong tập này — không có gì bảo đảm mọi file đã phân loại sẵn có cột
+# này (10 cột chuẩn của doi_chieu_song_phuong_service.py cũng không liệt kê nó). `pipeline.py`
+# (`_doc_trdate_1_file`, `_tim_file_core_hoac_csv`) dùng TRDATE khi CÓ để tự xác minh/gán đúng
+# ngày cho file offset≠0 và cảnh báo khi offset 0 lệch ngày — nhưng phải tự chịu trường hợp file
+# không có cột này (coi là "không xác minh được", không phải lỗi/file hỏng), không được coi TRDATE
+# là bắt buộc như 5 cột dưới đây (review PR#81, Khánh, 2026-09-09).
 CORE_REQUIRED_COLS = {"TRBRCD", "REFERENCE", "REMARK", "DRAMOUNT", "CRAMOUNT"}
 
 # ─── Trace hạch toán CORE (Bước 1.2) ───────────────────────────────────────────

@@ -383,12 +383,27 @@ class TestTimFile:
         pd.DataFrame(rows, columns=["TRDATE"] + _CORE_COLS).to_excel(
             path, index=False, engine="openpyxl")
 
-    def test_1_file_1_offset_0_dung_duong_nhanh_khong_can_doc_noi_dung(self, tmp_path):
-        """Đúng 1 file khớp + hỏi offset 0 (ngày T) → tin luôn, KHÔNG mở đọc nội dung (đường nhanh,
-        giữ hiệu năng cho trường hợp phổ biến nhất)."""
+    def test_1_file_offset_0_khong_co_cot_trdate_van_chap_nhan(self, tmp_path):
+        """2026-09-09 (review PR#81, Khánh): đúng 1 file khớp + hỏi offset 0 (ngày T) KHÔNG còn
+        tin thẳng theo vị trí offset nữa — vẫn mở đọc TRDATE để xác minh trước. File không có cột
+        này (như fixture rác dưới đây — không phải hợp đồng cột bắt buộc) thì vẫn CHẤP NHẬN cho
+        offset T (giữ tương thích ngược), chỉ khác chỗ giờ có 1 dòng log giải thích vì sao."""
         (tmp_path / "202_DEN.csv").write_bytes(b"x")
-        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0)
+        logs = []
+        loai, p = pipeline._tim_file_core_hoac_csv(tmp_path, "20260823", "202", 0, logs.append)
         assert loai == "csv" and p.name == "202_DEN.csv"
+        assert any("chấp nhận" in m and "202_DEN.csv" in m for m in logs)
+
+    def test_1_file_offset_0_trdate_le_ngay_khac_bi_chan(self, tmp_path):
+        """2026-09-09 (review PR#81, Khánh): ca lỗi cụ thể PR#81 sửa — người dùng lỡ chỉ nạp CSV
+        của ngày khác (T+1) nhưng job đang hỏi CORE T (offset 0). Trước bản vá này, đường nhanh
+        tin thẳng theo vị trí offset, sai ngày mà không 1 dòng log nào. Nay phải đọc TRDATE thật,
+        thấy khác ngày T thì KHÔNG dùng — job coi như thiếu CORE T (raise, không âm thầm sai)."""
+        self._viet_csv_trdate(tmp_path / "202_DEN.csv", "20260824")
+        logs = []
+        assert pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260823", "202", 0, logs.append) is None
+        assert any("KHÔNG khớp ngày" in m for m in logs)
 
     def test_1_file_offset_khac_0_tu_gan_dung_theo_trdate_that(self, tmp_path):
         """2026-09-08: báo lỗi thật của người dùng — module "Đối chiếu đến" không chạy được khi
@@ -510,16 +525,29 @@ class TestTimFile:
             tmp_path, "20260824", "202", 1, logs.append) is None
         assert any("TRDATE lẫn" in m for m in logs)
 
-    def test_file_hong_khong_doc_duoc_thi_bo_qua_khong_crash(self, tmp_path):
-        """File rác (không đọc được cột TRDATE) gặp ở offset khác 0 — log lỗi rồi bỏ qua, không
-        làm crash toàn bộ job (job vẫn tiếp tục với các offset/nhánh khác)."""
-        (tmp_path / "202_DEN_hong.csv").write_bytes(b"khong phai csv hop le")
+    def test_file_khong_co_cot_trdate_gap_o_offset_khac_0_thi_bo_qua_khong_crash(self, tmp_path):
+        """File đọc được như CSV nhưng không có cột TRDATE (pandas rất khoan dung — chuỗi bất kỳ
+        vẫn đọc thành 1 cột header hợp lệ) gặp ở offset khác 0 — log rõ rồi bỏ qua, không làm
+        crash toàn bộ job (job vẫn tiếp tục với các offset/nhánh khác)."""
+        (tmp_path / "202_DEN_khong_cot.csv").write_bytes(b"khong phai csv hop le")
         (tmp_path / "202_DEN_that.csv").write_text("TRDATE\n20260824\n", encoding="utf-8")
         logs = []
         loai, p = pipeline._tim_file_core_hoac_csv(
             tmp_path, "20260824", "202", 1, logs.append)
         assert loai == "csv" and p.name == "202_DEN_that.csv"
-        assert any("Không đọc được cột TRDATE" in m for m in logs)
+        assert any("không có cột TRDATE" in m for m in logs)
+
+    def test_file_xlsx_hong_khong_mo_duoc_gap_o_offset_khac_0_thi_bo_qua_khong_crash(self, tmp_path):
+        """File .xlsx thật sự hỏng (không phải định dạng Excel, calamine không mở nổi) gặp ở
+        offset khác 0 — phân biệt với ca "đọc được nhưng thiếu cột" ở trên, vẫn phải log lỗi rồi
+        bỏ qua, không crash cả job."""
+        (tmp_path / "202_DEN_hong.xlsx").write_bytes(b"khong phai file excel that")
+        (tmp_path / "202_DEN_that.csv").write_text("TRDATE\n20260824\n", encoding="utf-8")
+        logs = []
+        loai, p = pipeline._tim_file_core_hoac_csv(
+            tmp_path, "20260824", "202", 1, logs.append)
+        assert loai == "csv" and p.name == "202_DEN_that.csv"
+        assert any("Không đọc được file" in m for m in logs)
 
     def test_nhieu_hub_cung_khop_khong_tu_chon(self, tmp_path):
         """Như trên, áp dụng cho `_tim_file_hub` (dùng chung ở cả 2 bước Kênh↔Hub và Hub↔Core)."""

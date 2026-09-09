@@ -19,8 +19,9 @@ _DUOI_EXCEL = {".xlsx", ".xls"}
 
 def load_core_den_csv(path: str | Path) -> pd.DataFrame:
     """Đọc 1 file `{ma_nh}_DEN.csv`/`.xlsx` (đã phân loại sẵn, luôn CRAMOUNT ∈ ZERO_AMOUNTS) —
-    tên hàm giữ chữ ".csv" vì dấu vết lịch sử (dùng chung cho cả 2 chiều, xem
-    `doi_chieu_song_phuong_core_di/pipeline.py::_doc_core_di`), thật ra đọc được cả Excel
+    tên hàm giữ chữ ".csv" vì dấu vết lịch sử (dùng chung cho cả 2 chiều — chiều đi hiện chỉ ở
+    worktree riêng, `doi_chieu_song_phuong_core_di/pipeline.py::_doc_core_di`, CHƯA merge lên
+    develop tại thời điểm này), thật ra đọc được cả Excel
     (2026-09-09, yêu cầu Business Owner: người dùng có thể chỉ có sẵn bản Excel thay vì CSV).
 
     Excel dùng `engine="calamine"` — đúng quy ước đã kiểm chứng dữ liệu thật của module này
