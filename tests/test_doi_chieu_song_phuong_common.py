@@ -15,12 +15,19 @@ _MA_NH = "202"
 _HUB_NAME = "doichieugd_20260825__05_DEN_9999_N.zip"
 _KENH_NAME = "kênh đến SPRT 202.xlsx"
 _CORE_CSV_NAME = "202_DEN_20260827_1408.csv"
+_CORE_XLSX_NAME = "202_DEN_20260827_1408.xlsx"
 _GL02_NAME = "GL02_20260825_1000.zip"
 
 
 class TestKiemTraDuLieu:
     def test_du_ca_hai_khi_co_hub_kenh_va_core_csv(self):
         ket_qua = kiem_tra_du_lieu([_HUB_NAME, _KENH_NAME, _CORE_CSV_NAME], _NGAY, _MA_NH)
+        assert ket_qua == {"kenh_hub": "du", "hub_core": "du"}
+
+    def test_du_ca_hai_khi_core_la_xlsx_thay_vi_csv(self):
+        """2026-09-09: file core .xlsx cũng phải được banner readiness nhận diện là "đủ", không
+        báo nhầm "thiếu" chỉ vì không phải .csv."""
+        ket_qua = kiem_tra_du_lieu([_HUB_NAME, _KENH_NAME, _CORE_XLSX_NAME], _NGAY, _MA_NH)
         assert ket_qua == {"kenh_hub": "du", "hub_core": "du"}
 
     def test_du_ca_hai_khi_core_la_gl02_zip_thay_vi_csv(self):

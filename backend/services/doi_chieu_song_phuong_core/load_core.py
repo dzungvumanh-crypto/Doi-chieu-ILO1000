@@ -14,9 +14,53 @@ from .config import (
 )
 
 
+_DUOI_EXCEL = {".xlsx", ".xls"}
+
+
 def load_core_den_csv(path: str | Path) -> pd.DataFrame:
-    """Đọc 1 file `{ma_nh}_DEN.csv` (đã phân loại sẵn, luôn CRAMOUNT ∈ ZERO_AMOUNTS)."""
-    df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    """Đọc 1 file `{ma_nh}_DEN.csv`/`.xlsx` (đã phân loại sẵn, luôn CRAMOUNT ∈ ZERO_AMOUNTS) —
+    tên hàm giữ chữ ".csv" vì dấu vết lịch sử (dùng chung cho cả 2 chiều — chiều đi hiện chỉ ở
+    worktree riêng, `doi_chieu_song_phuong_core_di/pipeline.py::_doc_core_di`, CHƯA merge lên
+    develop tại thời điểm này), thật ra đọc được cả Excel
+    (2026-09-09, yêu cầu Business Owner: người dùng có thể chỉ có sẵn bản Excel thay vì CSV).
+
+    Excel dùng `engine="calamine"` — đúng quy ước đã kiểm chứng dữ liệu thật của module này
+    (`doi_chieu_song_phuong_kenh/load_kenh.py`: `openpyxl` đọc sai/mất dữ liệu âm thầm với file có
+    lỗi thẻ `<dimension>`, calamine đọc đúng + nhanh hơn). `dtype=str` giữ nguyên định dạng CỘT
+    PANDAS — KHÔNG tự phục hồi được ID dài bị chính Excel làm tròn thành số/ký hiệu khoa học TRƯỚC
+    khi python đọc tới (lỗi nằm ở lúc tạo file, không phải lúc đọc — đúng lớp lỗi đã dính thật ở
+    khoá SPT nơi khác, PR #75). Chưa kiểm chứng bằng dữ liệu thật rằng schema CORE (TRBRCD 4 số,
+    USERID/REFERENCE có tiền tố chữ) miễn nhiễm — chỉ là suy đoán hợp lý (các cột này không phải
+    chuỗi số thuần dài như SPT) chưa có ca thật xác nhận. Nếu vẫn dính (VD chi nhánh mới có số 0
+    đầu bị Excel bỏ), hậu quả là khoá sai → dòng đó hiện "chưa khớp" trong báo cáo (không phải
+    khớp sai lặng lẽ) vì `CORE_REQUIRED_COLS` vẫn đủ, chỉ giá trị bên trong sai — không có lưới
+    chặn nào phát hiện RA sớm hơn thế; cần Business Owner biết nếu thấy dòng "CORE THỪA" bất
+    thường sau khi đổi sang nộp Excel.
+
+    ⚠ 2026-09-09, phát hiện qua rà soát điểm mù kỹ thuật: đường nhanh của `_tim_file_core_hoac_csv`
+    (đúng 1 file + offset 0) đưa thẳng file vào đây mà KHÔNG qua `_doc_trdate_1_file` (hàm duy nhất
+    có try/except quanh việc đọc file) — 1 file `.xlsx` hỏng/giả (đổi đuôi từ file khác, hoặc
+    corrupt) sẽ ném thẳng lỗi gốc của `calamine`/`pandas` (VD `CalamineError: Cannot detect file
+    format`) lên tận `job["error"]`, không tên file, không tiếng Việt — khác hẳn quy ước mọi lỗi
+    khác của module này. Bọc try/except NGAY TẠI ĐÂY (điểm hẹp nhất, mọi đường đọc core đều đi
+    qua) thay vì rải lại ở từng nơi gọi.
+
+    Không đặt trần dung lượng riêng cho `.xlsx` (đã thử rồi bỏ, 2026-09-09): số đo "Excel giải nén
+    phồng RAM ~40 lần" là thật, nhưng file kênh Excel (`doi_chieu_song_phuong_kenh/load_kenh.py`,
+    cùng `engine="calamine"`) đã chạy thật trong production với file 800 nghìn dòng/ngày, có bản
+    ~23MB trên đĩa — TƯƠNG ĐƯƠNG hoặc lớn hơn hẳn mức trần hẹp từng đặt ở đây (12MB) — mà không hề
+    có sự cố. Đặt trần riêng cho CORE sẽ mâu thuẫn với thực tế module đã tự chứng minh an toàn ở
+    quy mô đó. Giữ nguyên chỉ 1 lớp chặn chung `SONG_PHUONG_MAX_UPLOAD_MB` ở tầng API, giống hệt
+    cách `.xlsx` kênh/OSB đang được đối xử — không phát minh luật riêng cho CORE."""
+    path = Path(path)
+    try:
+        if path.suffix.lower() in _DUOI_EXCEL:
+            df = pd.read_excel(path, dtype=str, engine="calamine")
+        else:
+            df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    except Exception as e:
+        raise ValueError(f"Không đọc được file core '{path.name}' ({e}) — kiểm tra lại file có "
+                          f"đúng định dạng .csv/.xlsx và không bị hỏng.") from e
     missing = CORE_REQUIRED_COLS - set(df.columns)
     if missing:
         raise ValueError(f"File core thiếu cột bắt buộc: {', '.join(sorted(missing))}")

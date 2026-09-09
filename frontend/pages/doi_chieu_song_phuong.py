@@ -252,10 +252,12 @@ def _tab_doi_chieu_den():
                 "Kênh↔Hub: đối chiếu HUB nội bộ với kênh song phương ngân hàng đối tác — 3 đơn "
                 "vị (202,SPRT), (203,SPRT), (202,SPT), NH 203 chưa có SP THƯỜNG. "
                 "Hub↔Core: đối chiếu HUB với hạch toán CORE/GL02 (cửa sổ T-3..T+3) — dùng "
-                "CSV đã phân loại sẵn (\"{ma_nh}_DEN.csv\") nếu có, không thì tự giải mã GL02. "
+                "file đã phân loại sẵn (\"{ma_nh}_DEN.csv\" hoặc .xlsx) nếu có, không thì tự giải "
+                "mã GL02. Có thể chọn nhiều file đã phân loại khác ngày (T, T+1...) cùng lúc, "
+                "trộn lẫn .csv/.xlsx cũng được — hệ thống tự đọc đúng ngày bên trong từng file. "
                 "Mỗi lần chạy chỉ 1 ngân hàng (giới hạn RAM — mỗi NH phải giải mã lại GL02 từ "
-                "đầu nếu chưa có CSV) — muốn đủ 4 NH thì bấm chạy 4 lần. Lỗi 1 bước không chặn "
-                "bước còn lại."
+                "đầu nếu chưa có CSV/Excel) — muốn đủ 4 NH thì bấm chạy 4 lần. Lỗi 1 bước không "
+                "chặn bước còn lại."
             ).classes("text-sm text-amber-900")
 
     with ui.card().classes("w-full p-5 mb-4"):
@@ -266,8 +268,9 @@ def _tab_doi_chieu_den():
             accept=".zip,.xlsx,.csv",
             upload_label="Chọn file (có thể chọn nhiều)...",
             upload_hint=(
-                "Chọn cùng lúc: 1-2 file HUB (.zip), 1-3 file kênh (.xlsx), 1 file GL02 (.zip) "
-                "hoặc CSV đã phân loại, OSB (.xlsx, nếu có) — giữ nguyên tên file gốc."
+                "Chọn cùng lúc: 1-2 file HUB (.zip), 1-3 file kênh (.xlsx), file GL02 (.zip) hoặc "
+                "file core đã phân loại (.csv hoặc .xlsx, có thể nhiều file khác ngày), OSB "
+                "(.xlsx, nếu có) — giữ nguyên tên file gốc."
             ),
         )
 

@@ -134,9 +134,12 @@ def kiem_tra_du_lieu(ten_file_list: list[str], ngay: str, ma_nh: str) -> dict[st
     co_kenh = any(
         {"kenh", ma_nh.lower()} <= _tu_khoa_ten_file(t) for t in ten_file_list
     )
-    core_csv_pattern = f"{ma_nh}_den*.csv".lower()
+    # 2026-09-09: file core đã phân loại sẵn giờ chấp nhận cả .csv lẫn .xlsx (yêu cầu Business
+    # Owner) — banner readiness phải nhận diện được cả 2, không chỉ báo "thiếu" nhầm khi người
+    # dùng chỉ có bản Excel.
+    core_patterns = [f"{ma_nh}_den*.csv".lower(), f"{ma_nh}_den*.xlsx".lower()]
     gl02_name = f"gl02_{ngay}_1000.zip".lower()
-    co_core = any(fnmatch.fnmatchcase(t, core_csv_pattern) for t in ten_thuong) or (gl02_name in ten_thuong)
+    co_core = any(fnmatch.fnmatchcase(t, p) for t in ten_thuong for p in core_patterns) or (gl02_name in ten_thuong)
 
     if not co_hub:
         thieu_hub = "thieu:file HUB (doichieugd_*.zip)"
