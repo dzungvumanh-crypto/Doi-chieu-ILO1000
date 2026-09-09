@@ -4,6 +4,25 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 09/09/2026 Báo cáo bàn giao chứng từ - **File Word xuất ra đã in và ký được ngay, không phải sửa tay trong Word nữa**
+    + ✅ **Bảng dài tràn sang trang sau nay vẫn còn dòng tiêu đề cột** (STT, Họ và tên, Ngày giao
+      dịch, Ngày nộp, Số ngày chậm, Số tờ). Trước đây sang trang là mất, người đọc phải lật ngược
+      lại trang trước mới biết cột nào là cột nào
+    + ✅ **Có số trang, đặt ở đầu trang, trang đầu bỏ trống** — đúng lối trình bày văn bản quen dùng
+    + ✅ **Cuối báo cáo có sẵn ô ký "LẬP BẢNG" và "KIỂM SOÁT"**, chừa khoảng trống để ký tay.
+      **Cố ý không in sẵn tên người ký**: người lập và người kiểm soát đổi theo kỳ, in sẵn thì tháng
+      nào cũng phải sửa lại trong Word, mà sửa xong lần sau xuất ra nó lại quay về như cũ
+    + ✅ **Chữ trên file gọn lại theo mẫu Phòng đã chốt**: cột thứ 5 bảng tổng hợp ghi **"Nộp chậm"**
+      (trước ghi "Nộp quá hạn"); tiêu đề từng phòng chỉ còn **"1. Phòng Kế toán"** (trước kèm đuôi
+      "— 7 chứng từ quá hạn")
+    + ⚠️ **Chữ trên màn hình vẫn giữ như cũ** ("Nộp quá hạn", "Phòng X — N chứng từ quá hạn").
+      Lần này chỉ sửa file Word xuất ra. Nên màn hình và file in ra dùng chữ khác nhau — cố ý, không
+      phải sót
+    + ℹ️ **Cột "Họ và tên" gộp ô theo cán bộ.** Nếu một người có nhiều chứng từ và cụm đó bị cắt
+      ngang trang, các dòng nằm ở đầu trang sau sẽ **để trống tên**. Word không có cách lặp lại nội
+      dung ô đã gộp sang trang mới; muốn hết hẳn thì phải bỏ gộp ô, in lại tên ở từng dòng — chờ
+      Phòng quyết
+
 - 09/09/2026 Đối chiếu Song phương — chiều ĐẾN (PR #81) - **Nhận file core Excel, và tự đọc ngày thật bên trong file thay vì đoán theo thứ tự**
     + ✅ **File core đã phân loại sẵn nay nộp được cả `.xlsx`**, không chỉ `.csv` như trước
       (yêu cầu Phòng nghiệp vụ 09/09). Cách dùng không đổi gì, chỉ là chọn thêm được loại file

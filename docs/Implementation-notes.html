@@ -15331,6 +15331,108 @@ This may happen if you try to create UI from a background task.</pre>
     </div>
   </div>
 
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">131</span>
+      <span class="card-title">Báo cáo bàn giao chứng từ (Word) — 4 điểm chỉ lộ ra lúc IN, không lộ ra lúc đọc code (2026-09-09)</span>
+    </div>
+    <div class="card-body">
+
+      <p><b>Mẫu đích là file người dùng tự sửa tay.</b> <code>Dữ liệu test/Bao_cao_ban_giao_chung_tu_T08_2026.docx</code>
+        do chính hệ thống xuất ra rồi được mở bằng Word sửa lại (<code>docProps/core.xml</code>:
+        <code>creator=python-docx</code> nhưng <code>lastModifiedBy=Khanh Bui Quoc</code>, <code>revision=2</code>).
+        Nó <b>không</b> phải bản xuất cũ của code — nó là bản người dùng vẽ ra thứ họ muốn. Ai đọc file
+        đó rồi kết luận "code đang chạy phiên bản cũ" là đọc sai.</p>
+
+      <table>
+        <thead><tr><th>Điểm</th><th>Trước</th><th>Sau</th></tr></thead>
+        <tbody>
+          <tr><td>Cột thứ 5 bảng tổng hợp</td><td>Nộp quá hạn</td><td><b>Nộp chậm</b></td></tr>
+          <tr><td>Tiêu đề từng phòng</td><td>1. Phòng Kế toán — 7 chứng từ quá hạn</td><td><b>1. Phòng Kế toán</b></td></tr>
+          <tr><td>Cuối báo cáo</td><td>Không có gì</td><td><b>LẬP BẢNG / KIỂM SOÁT</b>, chừa 5 dòng ký tươi, <b>không in tên</b></td></tr>
+          <tr><td>Bảng tràn sang trang sau</td><td>Mất dòng tiêu đề cột</td><td><code>w:tblHeader</code> — Word tự vẽ lại</td></tr>
+          <tr><td>Số trang</td><td>Không có</td><td><b>Đầu trang</b>, <b>bỏ trống trang 1</b></td></tr>
+        </tbody>
+      </table>
+
+      <div class="label"><span class="pill pill-blue">Quyết định</span> ô ký không in tên</div>
+      <p>Bản mẫu người dùng có sẵn 2 tên dưới nhãn (<i>Bùi Quốc Khánh</i> / <i>Nguyễn Diệu Linh</i>),
+        yêu cầu là <b>bỏ đi</b>. Không phải chuyện thẩm mỹ: người lập và người kiểm soát đổi theo kỳ và
+        theo người trực. In sẵn tên thì file xuất ra tháng nào cũng phải sửa tay — mà sửa tay một chỗ
+        trong Word thì lần sau xuất lại nó quay về như cũ, không ai nhớ.
+        Cách khác đã cân nhắc: lấy tên người bấm xuất làm "Lập bảng" + dropdown chọn "Kiểm soát"
+        như bảng chấm công (<code>backend/api/attendance.py</code>). Không làm — bảng chấm công cần
+        vì "Người kiểm soát" ở đó là <b>yêu cầu của chứng từ</b> (bắt buộc trưởng/phó phòng ACCT);
+        báo cáo này không có ràng buộc đó, thêm dropdown là thêm một ô phải điền mỗi lần xuất.</p>
+
+      <div class="label"><span class="pill pill-blue">Cạm bẫy</span> "đánh số từ trang 2" không phải một cái nút</div>
+      <p>Word không có tuỳ chọn "bắt đầu đánh số từ trang 2". Chỉ có <b>"trang đầu dùng đầu trang
+        riêng"</b> (<code>titlePg</code>): số trang đặt ở đầu trang mặc định (áp cho trang 2 trở đi),
+        còn trang 1 nhận một đầu trang <b>rỗng</b>.</p>
+      <p>Chỉ <code>first_page_header</code> mới cần gán <code>is_linked_to_previous = False</code>
+        bằng tay. Đầu trang mặc định tự sinh ra khi chạm <code>.paragraphs</code>
+        (<code>_BaseHeaderFooter._get_or_add_definition()</code>), còn đầu trang đầu tiên thì
+        <b>không chỗ nào chạm tới</b> — bỏ dòng đó là Word kéo số trang về trang 1.
+        <i>Bản đầu gán cho cả hai kèm lời giải thích rằng "không gỡ liên kết thì python-docx không
+        tạo phần đầu trang". Sai — lượt phản biện dựng file với và không có dòng
+        <code>sec.header.is_linked_to_previous</code> rồi so md5 từng part: giống hệt nhau từng
+        byte. Dòng thừa đã bỏ.</i></p>
+      <p><b>Số trang nằm ở ĐẦU trang</b> (người dùng chốt 09/09/2026, sau khi xem bản đặt ở chân trang).
+        Đặt trên đầu thì số dính sát viền trên của bảng — phải chừa <code>space_after = 6pt</code> cho
+        đoạn trong đầu trang. Không nới lề trên: chiều cao đầu trang tự đẩy phần thân xuống, nới lề
+        thì trang 1 (không có đầu trang) cũng bị tụt theo trong khi nó chẳng có gì để tránh.</p>
+      <p>Trường <code>PAGE</code> phải dựng thẳng bằng XML (python-docx không có API cho field code) và
+        tách làm <b>3 run</b> — <code>begin</code> / <code>instrText</code> / <code>end</code> — đúng
+        cách Word tự ghi. Nhồi cả ba vào một run thì có bản Word in ra chữ "PAGE" thay vì số.</p>
+
+      <div class="label"><span class="pill pill-blue">Cạm bẫy</span> <code>tblHeader</code> chỉ ăn ở dòng đầu bảng</div>
+      <p>Word bỏ qua cờ này nếu nó nằm ở dòng giữa bảng — <b>không báo lỗi</b>, chỉ là sang trang mất
+        tiêu đề như cũ. Nên đặt luôn trong <code>_make_table()</code>, không để chỗ gọi tự nhớ.</p>
+
+      <div class="label"><span class="pill pill-blue">Lượt phản biện tìm ra</span> hai test không có răng</div>
+      <p>Bốn test đầu tiên nhìn thì đủ, thực ra hở hai chỗ — cả hai đều được chứng minh bằng cách
+        sửa nguồn rồi chạy lại:</p>
+      <ul>
+        <li><b><code>test_o_ky_chi_co_nhan_khong_co_ten</code> không canh được cái tên nó nói.</b>
+          Chỉ kiểm <code>paragraphs[0]</code> và số dòng. Thêm
+          <code>cell.add_paragraph("Nguyễn Văn A")</code> vào cuối ô ký → vẫn <b>pass</b>. Nguy vì
+          bản mẫu giấy <i>có sẵn</i> hai tên: người sau nhìn mẫu rồi in tên lại là chuyện dễ xảy ra.
+          Đã thêm assert mọi đoạn sau nhãn phải rỗng.</li>
+        <li><b>Không có gì canh "3 run" mà comment nhấn mạnh.</b> Gộp
+          <code>begin/instrText/end</code> vào một run → vẫn <b>pass</b>, vì test chỉ tìm chuỗi
+          <code>" PAGE "</code> trong XML. Đã thêm <code>test_truong_page_tach_lam_ba_run</code>.</li>
+      </ul>
+      <p>Cũng từ lượt đó: khối ô ký chưa có <code>w:cantSplit</code> — bảng chi tiết kết thúc gần đáy
+        trang thì Word được phép để nhãn ở cuối trang này còn 5 dòng chừa để ký rơi sang trang sau,
+        tờ ký thành ra không có chỗ ký. Đã thêm.</p>
+
+      <div class="label"><span class="pill pill-gray">Nghi vấn đã đóng</span> "quá hạn" còn nằm cạnh "Nộp chậm" trong cùng một tờ</div>
+      <p>Tiêu đề mục <b>II. CHI TIẾT CHỨNG TỪ NỘP QUÁ HẠN THEO PHÒNG</b> vẫn dùng chữ cũ trong khi
+        cột bảng tổng hợp đã đổi sang "Nộp chậm" — nhìn qua tưởng sót. Không phải: bản mẫu người dùng
+        sửa tay giữ <b>nguyên văn</b> tiêu đề mục II, chỉ đổi tên cột. Đối chiếu trực tiếp trong
+        <code>Dữ liệu test/Bao_cao_ban_giao_chung_tu_T08_2026.docx</code>. Đổi thêm là làm quá yêu cầu.</p>
+
+      <div class="label"><span class="pill pill-orange">Biết mà không sửa</span> ô họ tên trống ở đầu trang tiếp theo</div>
+      <p>Cột "Họ và tên" gộp ô theo cán bộ. Khi cụm của một người bị cắt ngang trang, các dòng rơi sang
+        trang sau nằm trong phần đuôi của ô đã gộp nên <b>trống tên</b> — đọc trang 2 không biết mấy
+        dòng đầu là của ai. Word không có cách lặp lại nội dung ô gộp ở trang tiếp theo; muốn hết thì
+        phải bỏ gộp ô, in lại tên ở từng dòng. Không làm vì bản mẫu người dùng chốt <b>có</b> gộp ô.
+        Đã báo lại để người dùng tự quyết.</p>
+
+      <div class="label"><span class="pill pill-gray">Không đụng tới</span> chữ trên màn hình</div>
+      <p>Màn <code>frontend/pages/handover_reports.py</code> vẫn ghi "Nộp quá hạn" và
+        "<i>Phòng X — N chứng từ quá hạn</i>". Yêu cầu chỉ nói về file Word; đổi màn hình theo là tự mở
+        rộng phạm vi. Hệ quả: chữ trên màn và chữ trong file <b>khác nhau</b> — cố ý, không phải sót.</p>
+
+      <div class="note">Kiểm chứng: dựng bộ dữ liệu 43 dòng cho tràn 3 trang, cho Word thật chuyển sang
+        PDF rồi render ảnh từng trang mà soi — trang 1 không số, trang 2 và 3 có tiêu đề cột lặp lại và
+        có số trang, ô ký nằm cuối không kèm tên. Test: <code>tests/test_handover_report_docx_mau.py</code>
+        (5 test) canh cả 4 điểm; full suite <b>1648/1648</b> pass.</div>
+
+    </div>
+  </div>
+
   <footer>PAYMENT CENTER · Implementation Notes · Cập nhật: 2026-09-09</footer>
 </div>
 </body>
