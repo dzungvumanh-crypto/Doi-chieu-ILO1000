@@ -42,7 +42,15 @@ def load_core_den_csv(path: str | Path) -> pd.DataFrame:
     corrupt) sẽ ném thẳng lỗi gốc của `calamine`/`pandas` (VD `CalamineError: Cannot detect file
     format`) lên tận `job["error"]`, không tên file, không tiếng Việt — khác hẳn quy ước mọi lỗi
     khác của module này. Bọc try/except NGAY TẠI ĐÂY (điểm hẹp nhất, mọi đường đọc core đều đi
-    qua) thay vì rải lại ở từng nơi gọi."""
+    qua) thay vì rải lại ở từng nơi gọi.
+
+    Không đặt trần dung lượng riêng cho `.xlsx` (đã thử rồi bỏ, 2026-09-09): số đo "Excel giải nén
+    phồng RAM ~40 lần" là thật, nhưng file kênh Excel (`doi_chieu_song_phuong_kenh/load_kenh.py`,
+    cùng `engine="calamine"`) đã chạy thật trong production với file 800 nghìn dòng/ngày, có bản
+    ~23MB trên đĩa — TƯƠNG ĐƯƠNG hoặc lớn hơn hẳn mức trần hẹp từng đặt ở đây (12MB) — mà không hề
+    có sự cố. Đặt trần riêng cho CORE sẽ mâu thuẫn với thực tế module đã tự chứng minh an toàn ở
+    quy mô đó. Giữ nguyên chỉ 1 lớp chặn chung `SONG_PHUONG_MAX_UPLOAD_MB` ở tầng API, giống hệt
+    cách `.xlsx` kênh/OSB đang được đối xử — không phát minh luật riêng cho CORE."""
     path = Path(path)
     try:
         if path.suffix.lower() in _DUOI_EXCEL:
