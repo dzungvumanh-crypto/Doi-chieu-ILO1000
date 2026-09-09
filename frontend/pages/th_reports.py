@@ -1,6 +1,8 @@
 """Trang báo cáo dữ liệu thanh toán SWIFT — Phòng Tổng hợp."""
 import asyncio
+import json
 from datetime import date
+from urllib.parse import unquote
 
 from nicegui import ui
 import frontend.api_client as api
@@ -90,6 +92,46 @@ async def th_reports_page():
             # ── Khu vực thông báo kết quả ─────────────────────────────────────
             result_area = ui.column().classes("w-full")
 
+            # ── Cảnh báo quốc gia không có dòng trong mẫu ─────────────────────
+            def _doc_bo_qua(resp_headers: dict) -> list[dict]:
+                raw = resp_headers.get("x-skipped-countries") or resp_headers.get("X-Skipped-Countries")
+                if not raw:
+                    return []
+                try:
+                    return json.loads(unquote(raw))
+                except Exception:
+                    # Header hỏng không được phép chặn việc tải báo cáo về
+                    return []
+
+            def _ve_canh_bao(bo_qua: list[dict]):
+                if not bo_qua:
+                    return
+                tong_den = sum(x["den"] for x in bo_qua)
+                tong_di  = sum(x["di"]  for x in bo_qua)
+                with ui.card().classes("w-full mt-3 p-4 bg-amber-50 border border-amber-300"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.icon("warning", color="amber-8").classes("text-xl")
+                        ui.label(
+                            f"{len(bo_qua)} quốc gia / vùng lãnh thổ không có dòng trong "
+                            f"mẫu D00054 — đã bỏ {tong_den} điện đến và {tong_di} điện đi "
+                            f"khỏi báo cáo."
+                        ).classes("text-amber-900 font-semibold text-sm")
+                    ui.label(
+                        "Số trên bảng vì thế NHỎ HƠN file nguồn. Kiểm lại trước khi nộp."
+                    ).classes("text-amber-800 text-xs mb-2")
+                    ui.table(
+                        columns=[
+                            {"name": "quoc_gia", "label": "Quốc gia / vùng lãnh thổ",
+                             "field": "quoc_gia", "align": "left"},
+                            {"name": "den",    "label": "GD đến",            "field": "den"},
+                            {"name": "gt_den", "label": "Giá trị đến (nghìn)", "field": "gt_den"},
+                            {"name": "di",     "label": "GD đi",             "field": "di"},
+                            {"name": "gt_di",  "label": "Giá trị đi (nghìn)",  "field": "gt_di"},
+                        ],
+                        rows=bo_qua,
+                        row_key="quoc_gia",
+                    ).props("dense flat bordered").classes("w-full bg-white")
+
             # ── Handler ───────────────────────────────────────────────────────
             async def do_generate():
                 if not state["in_file"]:
@@ -113,8 +155,8 @@ async def th_reports_page():
                         "in_file":  (state["in_name"],  state["in_file"],  "application/octet-stream"),
                         "out_file": (state["out_name"], state["out_file"], "application/octet-stream"),
                     }
-                    excel_bytes = await asyncio.to_thread(
-                        api.post_upload_bytes,
+                    excel_bytes, resp_headers = await asyncio.to_thread(
+                        api.post_upload_bytes_with_headers,
                         f"/api/th-reports/generate?period={period}",
                         upload_files,
                     )
@@ -126,6 +168,7 @@ async def th_reports_page():
                             ui.label(f"Đã tạo báo cáo kỳ {period}. File đang được tải về.").classes(
                                 "text-green-700 font-medium text-sm"
                             )
+                        _ve_canh_bao(_doc_bo_qua(resp_headers))
                 except Exception as e:
                     if _handle_api_error(e):
                         return

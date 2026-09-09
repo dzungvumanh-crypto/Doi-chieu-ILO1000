@@ -95,6 +95,22 @@ def _read_data_sheet(file_bytes: bytes) -> pd.DataFrame:
     return pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, dtype=str)
 
 
+# ── Loại dòng tổng do công cụ export tự thêm ──────────────────────────────────
+# Nhận ra bằng cột CTHED để trống. Dòng này cộng lại đúng tổng của mọi dòng phía
+# trên; giữ lại là số liệu nhân đôi.
+#
+# Không phải file nào cũng có: IN_202606/IN_202608 và OUT_202608 có, OUT_202606
+# không có — cùng một công cụ export nhưng cấu trúc đổi theo kỳ, nên phải loại
+# tường minh chứ không dựa vào việc nó tình cờ rơi ra ở bước sau.
+def _drop_total_row(df: pd.DataFrame, nhan: str) -> pd.DataFrame:
+    if "CTHED" not in df.columns:
+        return df
+    trong = df["CTHED"].isna() | df["CTHED"].astype(str).str.strip().str.lower().isin(("", "nan"))
+    if trong.any():
+        logger.info("%s: loai %d dong tong (CTHED de trong)", nhan, int(trong.sum()))
+    return df[~trong]
+
+
 # ── Parse ─────────────────────────────────────────────────────────────────────
 
 def parse_incoming(file_bytes: bytes) -> dict[str, dict]:
@@ -103,7 +119,7 @@ def parse_incoming(file_bytes: bytes) -> dict[str, dict]:
     Trả về {tên đã chuẩn hóa: {"count": int, "amount": float}}.
     amount = tổng STTLM_AMT / 1000, làm tròn 2 chữ số thập phân.
     """
-    df = _read_data_sheet(file_bytes)
+    df = _drop_total_row(_read_data_sheet(file_bytes), "Lenh den")
     result: dict[str, dict] = {}
 
     for _, row in df.iterrows():
@@ -146,7 +162,7 @@ def parse_outgoing(file_bytes: bytes) -> dict[str, dict]:
     CUST_TYPE: CN → cá nhân, DN → doanh nghiệp, TCTD/TCTDO → TCTD.
     amount = TOTAL_AMT / 1000, làm tròn 2 chữ số thập phân.
     """
-    df = _read_data_sheet(file_bytes)
+    df = _drop_total_row(_read_data_sheet(file_bytes), "Lenh di")
     result: dict[str, dict] = {}
 
     _empty: dict = {
@@ -203,11 +219,16 @@ def fill_template(
     incoming: dict[str, dict],
     outgoing: dict[str, dict],
     period_yyyymm: str,
-) -> bytes:
-    """Điền dữ liệu vào template D00054, trả về bytes của file Excel đã điền.
+) -> tuple[bytes, list[dict]]:
+    """Điền dữ liệu vào template D00054.
 
-    Chỉ ghi giá trị vào cell, không thay đổi format.
-    Ô không có dữ liệu được điền 0 (không để trống).
+    Trả về (bytes file Excel, danh sách quốc gia bị bỏ). Chỉ ghi giá trị vào
+    cell, không thay đổi format. Ô không có dữ liệu được điền 0.
+
+    Mẫu D00054 chỉ có 195 dòng quốc gia; file SWIFT báo theo mã ISO nên còn có
+    vùng lãnh thổ (Bermuda, Guam, Réunion…) và vài quốc gia mẫu thiếu hẳn
+    (South Sudan). Những dòng đó không có chỗ để điền — PHẢI trả ra cho người
+    dùng thấy, im lặng bỏ là báo cáo thiếu số mà không ai biết.
     """
     wb = openpyxl.load_workbook(_TEMPLATE_PATH)
     ws = wb.active
@@ -227,13 +248,19 @@ def fill_template(
         for col in _DATA_COLS:
             ws.cell(r, col).value = 0
 
-    unmatched: set[str] = set()
+    # {tên quốc gia: {"den","gt_den","di","gt_di"}} cho các dòng không có chỗ điền
+    bo_qua: dict[str, dict] = {}
+
+    def _ghi_nhan(cthed: str, **so):
+        muc = bo_qua.setdefault(cthed, {"den": 0, "gt_den": 0.0, "di": 0, "gt_di": 0.0})
+        for k, v in so.items():
+            muc[k] = round(muc[k] + v, 2)
 
     # ── Điền Lệnh đến ────────────────────────────────────────────────────────
     for cthed, data in incoming.items():
         row = country_row.get(cthed)
         if row is None:
-            unmatched.add(cthed)
+            _ghi_nhan(cthed, den=data["count"], gt_den=data["amount"])
             continue
         ws.cell(row, _COL_IN_COUNT).value = data["count"]
         ws.cell(row, _COL_IN_AMT).value   = data["amount"]
@@ -242,7 +269,11 @@ def fill_template(
     for cthed, data in outgoing.items():
         row = country_row.get(cthed)
         if row is None:
-            unmatched.add(cthed)
+            _ghi_nhan(
+                cthed,
+                di=data["cn_count"] + data["dn_count"] + data["fi_count"],
+                gt_di=data["cn_amt"] + data["dn_amt"] + data["fi_amt"],
+            )
             continue
         ws.cell(row, _COL_CN_COUNT).value = data["cn_count"]
         ws.cell(row, _COL_CN_AMT).value   = data["cn_amt"]
@@ -251,8 +282,18 @@ def fill_template(
         ws.cell(row, _COL_FI_COUNT).value = data["fi_count"]
         ws.cell(row, _COL_FI_AMT).value   = data["fi_amt"]
 
-    if unmatched:
-        logger.warning("Không tìm thấy quốc gia trong template: %s", sorted(unmatched))
+    danh_sach_bo_qua = sorted(
+        ({"quoc_gia": k, **v} for k, v in bo_qua.items()),
+        key=lambda x: (-(x["den"] + x["di"]), x["quoc_gia"]),
+    )
+    if danh_sach_bo_qua:
+        logger.warning(
+            "Ky %s: %d quoc gia khong co dong trong mau, bo %d dien den + %d dien di: %s",
+            period_yyyymm, len(danh_sach_bo_qua),
+            sum(x["den"] for x in danh_sach_bo_qua),
+            sum(x["di"] for x in danh_sach_bo_qua),
+            ", ".join(x["quoc_gia"] for x in danh_sach_bo_qua),
+        )
 
     # ── Tính tổng hàng 217 ───────────────────────────────────────────────────
     for col in _DATA_COLS:
@@ -266,4 +307,4 @@ def fill_template(
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    return buf.read()
+    return buf.read(), danh_sach_bo_qua
