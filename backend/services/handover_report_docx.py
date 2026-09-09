@@ -11,6 +11,7 @@ from docx import Document
 from docx.enum.section import WD_ORIENT
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
@@ -50,6 +51,8 @@ def _setup_page(doc: Document) -> None:
     sec.left_margin = Cm(2.0)
     sec.right_margin = Cm(1.5)
 
+    _add_page_numbers(sec)
+
     style = doc.styles["Normal"]
     style.font.name = FONT_NAME
     style.font.size = FONT_SIZE
@@ -87,7 +90,56 @@ def _make_table(doc: Document, headers: list, widths: list):
         para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = para.add_run(text)
         run.bold = True
+    _repeat_header_row(table)
     return table
+
+
+def _add_page_numbers(sec) -> None:
+    """Đánh số trang ở ĐẦU trang, bỏ trống trang đầu.
+
+    Word không có "bắt đầu đánh số từ trang 2" — chỉ có "trang đầu dùng đầu
+    trang riêng" (`titlePg`). Nên trang 1 nhận một đầu trang RỖNG, còn số trang
+    nằm ở đầu trang mặc định dùng cho trang 2 trở đi.
+    """
+    sec.different_first_page_header_footer = True
+    # Đầu trang mặc định tự sinh ra khi chạm `.paragraphs` ở dưới; riêng đầu
+    # trang đầu tiên KHÔNG chỗ nào chạm tới nên phải gọi tay — bỏ dòng này thì
+    # trang 1 không có phần đầu trang riêng và Word kéo số trang về đó.
+    sec.first_page_header.is_linked_to_previous = False
+
+    para = sec.header.paragraphs[0]
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Không chừa thì số trang dính sát viền trên của bảng. Khoảng thở này tính
+    # vào chiều cao đầu trang nên chính nó đẩy bảng xuống, không cần nới lề.
+    para.paragraph_format.space_after = Pt(6)
+
+    # Trường PAGE phải dựng bằng XML: python-docx không có API cho field code.
+    # Ba mẩu (begin / mã lệnh / end) đặt ở BA run riêng — đúng cách Word tự ghi;
+    # nhồi cả ba vào một run có bản Word đọc ra chữ "PAGE" thay vì số trang.
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = " PAGE "
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    for el in (begin, instr, end):
+        run = para.add_run()
+        run.font.name = FONT_NAME
+        run.font.size = FONT_SIZE
+        run._r.append(el)
+
+
+def _repeat_header_row(table) -> None:
+    """Lặp lại dòng tiêu đề ở đầu mỗi trang khi bảng tràn sang trang sau.
+
+    Chỉ ăn khi dòng được đánh dấu là dòng ĐẦU của bảng — Word bỏ qua `tblHeader`
+    đặt ở dòng giữa bảng, không báo lỗi.
+    """
+    trPr = table.rows[0]._tr.get_or_add_trPr()
+    tbl_header = OxmlElement("w:tblHeader")
+    tbl_header.set(qn("w:val"), "true")
+    trPr.append(tbl_header)
 
 
 def _fill_row(table, values: list, widths: list, bold: bool = False) -> None:
@@ -107,7 +159,7 @@ def _add_summary(doc: Document, data: dict) -> None:
 
     table = _make_table(
         doc,
-        ["STT", "Phòng nghiệp vụ", "Tổng chứng từ", "Nộp đúng hạn", "Nộp quá hạn", "Tỷ lệ đúng hạn"],
+        ["STT", "Phòng nghiệp vụ", "Tổng chứng từ", "Nộp đúng hạn", "Nộp chậm", "Tỷ lệ đúng hạn"],
         _SUMMARY_WIDTHS,
     )
     for stt, row in enumerate(data.get("by_dept", []) or [], 1):
@@ -174,7 +226,7 @@ def _add_late_detail(doc: Document, data: dict) -> None:
 
     headers = ["STT", "Họ và tên", "Ngày giao dịch", "Ngày nộp", "Số ngày chậm", "Số tờ"]
     for idx, (dept_name, rows) in enumerate(by_dept.items(), 1):
-        _add_heading(doc, f"{idx}. {dept_name} — {len(rows)} chứng từ quá hạn")
+        _add_heading(doc, f"{idx}. {dept_name}")
         table = _make_table(doc, headers, _DETAIL_WIDTHS)
 
         stt = 1
@@ -199,12 +251,37 @@ def _add_late_detail(doc: Document, data: dict) -> None:
             _set_cell_text(cell, group[0].get("staff_name", ""), WD_ALIGN_PARAGRAPH.LEFT)
 
 
+def _add_signatures(doc: Document) -> None:
+    """Hai ô ký "LẬP BẢNG" / "KIỂM SOÁT" — chỉ nhãn, KHÔNG in sẵn tên.
+
+    Người ký thay đổi theo kỳ và theo người trực; in tên sẵn thì báo cáo xuất ra
+    lại phải sửa tay. Chừa 5 dòng trống để ký tươi.
+    """
+    doc.add_paragraph()
+    table = doc.add_table(rows=1, cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    # Không chặn thì Word được phép cắt: nhãn nằm cuối trang này, 5 dòng chừa để
+    # ký rơi sang trang sau — tờ ký thành ra không có chỗ ký.
+    cant_split = OxmlElement("w:cantSplit")
+    table.rows[0]._tr.get_or_add_trPr().append(cant_split)
+    for cell, label in zip(table.rows[0].cells, ("LẬP BẢNG", "KIỂM SOÁT")):
+        cell.width = Cm(10.85)
+        para = cell.paragraphs[0]
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        para.add_run(label).bold = True
+        for _ in range(5):
+            doc_para = cell.add_paragraph()
+            doc_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
 def build_report_docx(data: dict, year: int, month: int) -> bytes:
     doc = Document()
     _setup_page(doc)
     _add_title(doc, year, month)
     _add_summary(doc, data)
     _add_late_detail(doc, data)
+    _add_signatures(doc)
 
     buf = io.BytesIO()
     doc.save(buf)
