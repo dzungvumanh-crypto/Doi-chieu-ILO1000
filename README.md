@@ -558,6 +558,14 @@ Truy cập:
   dùng nhầm cho cả 4 ngày, tự nhân dữ liệu lên ngày không có thật). Giao dịch hôm nay mà CORE hạch
   toán sang hôm sau sẽ xếp thành "HUB THỪA" nếu thiếu — muốn chấm đủ thì nạp thêm **GL02 zip của
   ngày hôm sau** (`docs/Implementation-notes.html` card 117)
+- **3 file CSV chi tiết bọc `="..."` quanh cột khoá toàn chữ số** (từ 09/09/2026) —
+  `MSGREF`/`TXID` ở hai file `..._hub_chi_tiet.csv`, `MtId/MsgId` ở `..._kenh_chi_tiet.csv`.
+  Khoá SP THƯỜNG là chuỗi **16 chữ số thuần**, vượt trần **15 chữ số có nghĩa** của Excel: mở CSV
+  bằng double-click thì Excel tự coi cột đó là kiểu Số — rụng số 0 đứng đầu và làm tròn chữ số
+  cuối về 0. SP REALTIME không dính vì khoá có chữ cái nên Excel tự nhận là văn bản. Mở bằng
+  double-click nay ra đúng nguyên văn, nhưng **Power Query hoặc công cụ khác đọc CSV thô sẽ thấy
+  `="..."` bao quanh giá trị** — không phải lỗi. Cột `TRACE`/`CHI_NHANH` cùng dạng dữ liệu
+  **chưa** bọc (`docs/Implementation-notes.html` card 128)
 - Phân quyền riêng theo nhóm: `menu.doi_chieu_song_phuong` (xem trang/kiểm tra dữ liệu),
   `doi_chieu_song_phuong.process` (chạy Phân loại dữ liệu),
   `doi_chieu_song_phuong_kenh_core.process` (chạy Đối chiếu đến)
