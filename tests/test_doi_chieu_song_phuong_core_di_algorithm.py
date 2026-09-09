@@ -903,3 +903,71 @@ class TestExportLenhFxTrungRemark:
         hub_df = pd.DataFrame(columns=["CHI_NHANH", "SO_TIEN", "KETQUADOICHIEU"])
         files = export.export_excel_di({"core_df": core_df, "hub_df": hub_df}, tmp_path, "test")
         assert "test_lenh_fx_trung_remark.csv" not in [p.name for p in files]
+
+
+# ── export.export_excel_di — sheet "GhiChu" (2026-09-09, card 123) ────────────
+
+class TestExportGhiChu:
+    def _ket_qua(self):
+        core_df = _core_df([_core_row()])
+        core_df["KETQUADOICHIEU"] = "hub T core T"
+        hub_df = _hub_df([_hub_row()])
+        hub_df["KETQUADOICHIEU"] = "hub T core T"
+        return core_df, hub_df
+
+    def test_co_ghi_chu_thi_ghi_dung_noi_dung_vao_sheet(self, tmp_path):
+        core_df, hub_df = self._ket_qua()
+        ket_qua = {
+            "core_df": core_df, "hub_df": hub_df,
+            "ghi_chu": ["[HUB T-1] không tìm thấy file — BẮT BUỘC nhưng KHÔNG chặn: ..."],
+        }
+        paths = export.export_excel_di(ket_qua, tmp_path, "test")
+        ghi_chu = pd.read_excel(paths[0], sheet_name="GhiChu")
+        assert list(ghi_chu["Ghi chú"]) == ket_qua["ghi_chu"]
+
+    def test_khong_thieu_file_thi_ghi_dong_mac_dinh(self, tmp_path):
+        core_df, hub_df = self._ket_qua()
+        ket_qua = {"core_df": core_df, "hub_df": hub_df, "ghi_chu": []}
+        paths = export.export_excel_di(ket_qua, tmp_path, "test")
+        ghi_chu = pd.read_excel(paths[0], sheet_name="GhiChu")
+        assert len(ghi_chu) == 1
+        assert "Không thiếu file" in ghi_chu["Ghi chú"].iloc[0]
+
+    def test_thieu_key_ghi_chu_van_chay_duoc(self, tmp_path):
+        """`ket_qua` dựng tay trong test cũ (trước 2026-09-09) không có key "ghi_chu" — sheet vẫn
+        phải ghi được, không raise KeyError."""
+        core_df, hub_df = self._ket_qua()
+        paths = export.export_excel_di({"core_df": core_df, "hub_df": hub_df}, tmp_path, "test")
+        ghi_chu = pd.read_excel(paths[0], sheet_name="GhiChu")
+        assert len(ghi_chu) == 1
+
+
+# ── pipeline.doi_chieu_hub_core_di — persist "ghi_chu" khi thiếu file T±k ─────
+
+class TestPipelineGhiChuThieuFile:
+    def test_thieu_hub_t_tru_1_duoc_ghi_vao_ghi_chu(self, tmp_path):
+        """Ngày T bắt buộc phải có HUB/CORE; không nạp thêm HUB T-1 → pipeline vẫn chạy được
+        (T-1 chỉ "bắt buộc nhưng không chặn"), nhưng phải để lại dấu vết trong `ghi_chu` — đúng
+        yêu cầu Giai đoạn 2 (card 123): người soát đọc file kết quả một mình cũng biết vì sao
+        thiếu nhãn "hub T-1 core T"."""
+        ngay = "20260901"
+        import zipfile
+
+        hub_df = pd.DataFrame([{
+            "NGAY_GIAO_DICH": "01/09/2026", "CHI_NHANH": "1000", "REFHUB": "R1",
+            "MSGREF": "M1", "MSGSEQ": "M1", "TXID": "TX1", "KENH_THANH_TOAN": "SP REALTIME",
+            "TRANG_THAI_LENH": "SCNL", "SO_TIEN": "100000", "TRACE": "000000001",
+            "SE_TRACE": "", "SESSION": "20260901", "LOAI_LENH_OSB": "0",
+            "NH_GUI": "01202001", "NOI_DUNG": "TEST",
+        }])
+        hub_zip = tmp_path / f"doichieugd_{ngay}__05_DI_9999_N.zip"
+        with zipfile.ZipFile(hub_zip, "w") as zf:
+            zf.writestr("data.csv", hub_df.to_csv(index=False).encode("utf-8-sig"))
+
+        core_df = pd.DataFrame([{**_core_row(), "TRDATE": ngay}])
+        (tmp_path / "202_DI.csv").write_text(
+            core_df.to_csv(index=False), encoding="utf-8-sig")
+
+        ket_qua = pipeline.doi_chieu_hub_core_di(tmp_path, ngay, "202")
+        assert any(m.startswith("[HUB T-1] không tìm thấy file") for m in ket_qua["ghi_chu"])
+        assert any("BẮT BUỘC nhưng KHÔNG chặn" in m for m in ket_qua["ghi_chu"])

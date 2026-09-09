@@ -285,9 +285,11 @@ def doi_chieu_hub_core_di(
 ) -> dict:
     """Đối chiếu HUB↔CORE chiều ĐI, 1 ngân hàng, ngày `ngay` (YYYYMMDD).
 
-    Trả `{"ma_nh", "ngay", "core_df", "hub_df"}` — 2 DataFrame đã gắn cột `KETQUADOICHIEU`
-    (`hub_df` là bản đã lọc SCNL; bản HUB gốc không xuất ra, chỉ truyền vào `classify_core_di`
-    cho Bước 2.17/2.18).
+    Trả `{"ma_nh", "ngay", "core_df", "hub_df", "ghi_chu"}` — 2 DataFrame đã gắn cột
+    `KETQUADOICHIEU` (`hub_df` là bản đã lọc SCNL; bản HUB gốc không xuất ra, chỉ truyền vào
+    `classify_core_di` cho Bước 2.17/2.18). `ghi_chu`: danh sách dòng "không tìm thấy file
+    HUB/CORE" (offset nào bị bỏ qua, vì sao) — persist để `export.export_excel_di()` ghi thành
+    sheet "GhiChu" trong file kết quả, KHÔNG chỉ nằm trong log tạm của lần chạy.
 
     `hub_t_override`: HUB GỐC ngày T đã đọc sẵn ở bước Kênh↔Hub (chiều đi không lọc gì trước khi
     khớp nên `hub_theo_nh` chính là bản gốc) — dùng thẳng thay vì đọc + giải nén lại.
@@ -295,6 +297,10 @@ def doi_chieu_hub_core_di(
     Raise `ValueError` nếu thiếu file bắt buộc (HUB T, CORE T)."""
     log = log_callback or (lambda msg: None)
     goc_dir = Path(goc_dir)
+    # Persist lại các dòng "không tìm thấy file" (chỉ in log tạm trước đây, 2026-09-09) — xuất
+    # thành sheet "GhiChu" trong file kết quả (`export.export_excel_di()`) để người soát đọc file
+    # một mình cũng biết vì sao thiếu nhãn T±k, không cần dò lại log của lần chạy.
+    ghi_chu: list[str] = []
 
     # ── HUB: T, T-1, T-2, T-3 ──
     hub_theo_offset: dict[int, pd.DataFrame] = {}
@@ -317,7 +323,9 @@ def doi_chieu_hub_core_di(
                         "nạp thêm HUB zip ngày T-1.")
             else:
                 nhac = " (bỏ qua)"
-            log(f"[HUB {nhan}] không tìm thấy file" + nhac)
+            msg = f"[HUB {nhan}] không tìm thấy file" + nhac
+            log(msg)
+            ghi_chu.append(msg)
             continue
         log(f"[HUB {nhan}] đang đọc {p.name}...")
         with do_thoi_gian(log, f"đọc+parse HUB {nhan}"):
@@ -355,7 +363,9 @@ def doi_chieu_hub_core_di(
                         "sẵn chỉ đại diện đúng ngày T).")
             else:
                 nhac = " (bỏ qua — nhánh huỷ chéo ngày của offset này không chạy)"
-            log(f"[CORE {nhan}] không tìm thấy file CSV/GL02" + nhac)
+            msg = f"[CORE {nhan}] không tìm thấy file CSV/GL02" + nhac
+            log(msg)
+            ghi_chu.append(msg)
             continue
         loai, p = found
         with do_thoi_gian(log, f"đọc/giải mã CORE {nhan} ({loai})"):
@@ -397,4 +407,4 @@ def doi_chieu_hub_core_di(
     log(f"Hoàn thành NH {ma_nh} ngày {ngay} (chiều đi): core {len(core_df):,} dòng, hub "
         f"{len(hub_df):,} dòng, khớp '{NHAN_HUB_T_CORE_T}' = {n_core_khop:,} dòng.")
 
-    return {"ma_nh": ma_nh, "ngay": ngay, "core_df": core_df, "hub_df": hub_df}
+    return {"ma_nh": ma_nh, "ngay": ngay, "core_df": core_df, "hub_df": hub_df, "ghi_chu": ghi_chu}

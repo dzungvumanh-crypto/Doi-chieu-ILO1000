@@ -23,6 +23,11 @@ from .match import KEY_COL, tim_nhom_lenh_fx_trung_remark
 
 _TONG_HOP_COLS = ["Nhãn (KETQUADOICHIEU)", "Số dòng CORE", "Số tiền CORE", "Số dòng HUB", "Số tiền HUB"]
 
+_GHI_CHU_KHONG_THIEU_FILE = (
+    "Không thiếu file HUB/CORE nào trong cửa sổ ngày cần đọc cho lần chạy này (HUB T..T-3, "
+    "CORE T-3..T+3) — mọi nhãn T±k trong bảng TongHop đều có đủ dữ liệu để tính."
+)
+
 
 def build_tong_hop_di(core_df: pd.DataFrame, hub_df: pd.DataFrame) -> pd.DataFrame:
     core_amt = doc_so_tien(core_df["CRAMOUNT"], "core_di", "CRAMOUNT")
@@ -59,9 +64,10 @@ def build_tong_hop_di(core_df: pd.DataFrame, hub_df: pd.DataFrame) -> pd.DataFra
 
 def export_excel_di(ket_qua: dict, out_dir: str | Path, base_name: str) -> list[Path]:
     """`ket_qua` = dict trả về từ `pipeline.doi_chieu_hub_core_di()`. Ghi vào `out_dir`:
-    `{base_name}.xlsx` (sheet `TongHop`) + `{base_name}_core_chi_tiet.csv` +
+    `{base_name}.xlsx` (sheet `TongHop` + `GhiChu`) + `{base_name}_core_chi_tiet.csv` +
     `{base_name}_hub_chi_tiet.csv` + (nếu có) `{base_name}_lenh_fx_trung_remark.csv`. Trả danh
-    sách đường dẫn theo đúng thứ tự ghi (file cuối chỉ xuất hiện khi có dòng để báo)."""
+    sách đường dẫn theo đúng thứ tự ghi (file cuối chỉ xuất hiện khi có dòng để báo) — sheet
+    `GhiChu` KHÔNG tính vào danh sách trả về vì nằm chung file `{base_name}.xlsx`."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     core_df, hub_df = ket_qua["core_df"], ket_qua["hub_df"]
@@ -70,6 +76,11 @@ def export_excel_di(ket_qua: dict, out_dir: str | Path, base_name: str) -> list[
     tonghop_path = out_dir / f"{base_name}.xlsx"
     with pd.ExcelWriter(tonghop_path, engine="xlsxwriter") as writer:
         tong_hop.to_excel(writer, sheet_name="TongHop", index=False)
+        # Sheet "GhiChu" (2026-09-09) — persist ghi chú thiếu file HUB/CORE của chính lần chạy
+        # này, để người soát mở file kết quả một mình cũng biết vì sao thiếu nhãn T±k nào đó,
+        # không phải tra lại log job (card 123 Implementation-notes.html).
+        ghi_chu = ket_qua.get("ghi_chu") or [_GHI_CHU_KHONG_THIEU_FILE]
+        pd.DataFrame({"Ghi chú": ghi_chu}).to_excel(writer, sheet_name="GhiChu", index=False)
 
     # encoding="utf-8-sig" — đúng quy ước CSV của cả module Đối chiếu Song phương.
     core_csv_path = out_dir / f"{base_name}_core_chi_tiet.csv"

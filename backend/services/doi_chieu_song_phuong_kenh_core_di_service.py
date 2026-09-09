@@ -112,12 +112,24 @@ def chay_job(job_id: str) -> None:
 
 _NHAN_TRANG_THAI = {"da_doi_chieu": "Đã đối chiếu", "chua_doi_chieu": "CHƯA ĐỐI CHIẾU"}
 
+# Giai đoạn 2 (2026-09-09, card 123 Implementation-notes.html) — người soát báo "bảng tổng hợp
+# Kênh↔Hub và file chi tiết hub_chi_tiet.csv không khớp số dòng" tưởng là lỗi số liệu; thật ra 2
+# file CỐ Ý khác phạm vi (Bảng 1 chỉ tính HUB "SCNL", file chi tiết giữ nguyên mọi trạng thái) —
+# điều này trước đây chỉ giải thích được qua hội thoại, không có trong chính file kết quả. Ghi
+# thẳng vào sheet "GhiChu" để người đọc file một mình cũng biết, không hiểu nhầm là bỏ sót.
+_GHI_CHU_PHAM_VI_KENH_HUB = (
+    "Bang1_KenhHub chỉ tính HUB có TRANG_THAI_LENH=\"SCNL\" (đúng docx) — 2 file chi tiết CSV "
+    "(hub_chi_tiet/kenh_chi_tiet, tải riêng ở màn hình kết quả) giữ NGUYÊN mọi trạng thái HUB "
+    "(SCNL/ERPO/CALD/TPAY...) để tra cứu sâu. Số dòng 2 bên khác nhau là CỐ Ý theo đúng phạm vi "
+    "từng file, KHÔNG phải sai lệch số liệu."
+)
+
 
 def _export_bao_cao_tong_hop(
     ket_qua_kenh: dict | None, ket_qua_core: dict | None, trang_thai: dict, out_path: Path,
 ) -> Path | None:
-    """Gộp sheet TrangThai + Bảng 1 (Kênh↔Hub) + TongHop (Hub↔Core) vào 1 workbook — mirror
-    `doi_chieu_song_phuong_kenh_core_service.py::_export_bao_cao_tong_hop`. `kenh_export.
+    """Gộp sheet TrangThai + Bảng 1 (Kênh↔Hub) + TongHop (Hub↔Core) + GhiChu vào 1 workbook —
+    mirror `doi_chieu_song_phuong_kenh_core_service.py::_export_bao_cao_tong_hop`. `kenh_export.
     build_bang1_rows()` DÙNG CHUNG được cho cả 2 chiều — nó chỉ đọc `summary`/`chi_tiet` theo dict
     shape chung, không hardcode nhãn "đến" (xem `process.summarize_unit_di()` trả đúng shape)."""
     if ket_qua_kenh is None and ket_qua_core is None:
@@ -140,6 +152,15 @@ def _export_bao_cao_tong_hop(
             core_di_export.build_tong_hop_di(
                 ket_qua_core["core_df"], ket_qua_core["hub_df"],
             ).to_excel(writer, sheet_name="TongHop_HubCore", index=False)
+
+        ghi_chu: list[str] = []
+        if ket_qua_kenh is not None:
+            ghi_chu.append(_GHI_CHU_PHAM_VI_KENH_HUB)
+        if ket_qua_core is not None:
+            ghi_chu.extend(ket_qua_core.get("ghi_chu") or [])
+        if not ghi_chu:
+            ghi_chu = ["Không có ghi chú."]
+        pd.DataFrame({"Ghi chú": ghi_chu}).to_excel(writer, sheet_name="GhiChu", index=False)
     return out_path
 
 

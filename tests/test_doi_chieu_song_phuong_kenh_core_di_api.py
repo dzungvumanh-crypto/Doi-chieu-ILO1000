@@ -138,6 +138,30 @@ class TestStartUploadEndpointDi:
         assert prog["ket_qua"]["kenh_hub_di"] is not None
         assert prog["ket_qua"]["hub_core_di"] is not None
 
+    def test_bao_cao_tong_hop_co_sheet_ghichu(self, admin_client, monkeypatch, tmp_path):
+        """Giai đoạn 2 (2026-09-09, card 123): file báo cáo tổng hợp tải qua API phải có sheet
+        "GhiChu" giải thích phạm vi Bảng 1 Kênh↔Hub (chỉ SCNL) — không cần thiếu file HUB/CORE
+        nào mới có sheet này, luôn ghi ít nhất dòng giải thích phạm vi tĩnh."""
+        monkeypatch.setattr(svc, "TEMP_DIR", tmp_path / "_out")
+        monkeypatch.setattr(ipcas_svc, "TEMP_DIR", tmp_path / "_out_ipcas")
+
+        r = admin_client.post(
+            "/api/doi_chieu_song_phuong_kenh_core_di/start_upload",
+            files=[*_hub_kenh_upload_files_di(), _gl02_upload_file_di()],
+            data={"ngay": "20260825", "ma_nh": "202"},
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        prog = _wait_done(admin_client, job_id)
+        assert prog["status"] == "done", prog
+        bao_cao_name = next(f for f in prog["files"] if f.startswith("bao_cao_tong_hop_di_"))
+
+        dl = admin_client.get(
+            f"/api/doi_chieu_song_phuong_kenh_core_di/download/{job_id}/{bao_cao_name}")
+        assert dl.status_code == 200, dl.text
+        ghi_chu = pd.read_excel(io.BytesIO(dl.content), sheet_name="GhiChu")
+        assert (ghi_chu["Ghi chú"].str.contains("Bang1_KenhHub chỉ tính HUB")).any(), ghi_chu
+
     def test_2_file_gl02_zip_khac_ngay_qua_upload_deu_dung_duoc(self, admin_client, monkeypatch, tmp_path):
         """Câu hỏi người dùng 2026-09-08: upload nhiều file ZIP cùng lúc có chạy được không —
         2 file GL02 khác ngày (T, T+1), mỗi file tự mang đúng ngày trong tên, không mơ hồ."""
