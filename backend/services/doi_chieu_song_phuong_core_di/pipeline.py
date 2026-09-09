@@ -174,7 +174,10 @@ def _tim_file_core_hoac_csv_di(
         if len(cac_file) == 1:
             return ("csv", cac_file[0])
         if len(cac_file) > 1:
-            log(f"[CORE] [LỖI] {len(cac_file)} file cùng đại diện ngày {ngay} theo TRDATE thật "
+            # Không thêm tiền tố "[CORE]" ở đây — nơi gọi (doi_chieu_hub_core_di) đã bọc sẵn
+            # "[CORE {offset}] " quanh callback log trước khi truyền vào hàm này (mirror đúng
+            # _tim_file_core_hoac_csv() chiều đến, tránh log lặp "[CORE T+1] [CORE] [LỖI]...").
+            log(f"[LỖI] {len(cac_file)} file cùng đại diện ngày {ngay} theo TRDATE thật "
                 f"({', '.join(f.name for f in cac_file)}) — KHÔNG tự chọn, cần dọn bớt file trùng.")
 
     p = tim_file(goc_dir, ngay, f"GL02_{ngay}_1000.zip")
@@ -329,8 +332,13 @@ def doi_chieu_hub_core_di(
 
     # ── CORE: T-3..T+3 (rộng gấp đôi chiều đến — nhánh huỷ chéo ngày cần cả 2 phía) ──
     core_theo_offset: dict[int, pd.DataFrame] = {}
-    # Cache TRDATE→file (2026-09-08) dựng 1 lần, dùng lại cho cả 7 offset — tránh mở đọc lại cùng
-    # tổ hợp file CSV 7 lần (xem `_theo_ngay_cac_file_csv_di`).
+    # Cache TRDATE→file (2026-09-08) khoá theo TỔ HỢP file gộp được ở mỗi offset (xem
+    # `_theo_ngay_cac_file_csv_di`) — tiết kiệm khi nhiều offset cùng gộp ra ĐÚNG 1 tổ hợp giống
+    # nhau (ca phổ biến: mọi file nằm chung 1 thư mục phẳng). KHÔNG đảm bảo tuyệt đối "mỗi file
+    # chỉ đọc 1 lần" — nếu `ngay`/`ngay_goc` trỏ tới các thư mục ứng viên KHÁC NHAU theo từng
+    # offset, tổ hợp gộp được có thể lớn dần qua từng offset, khiến cache-key đổi và một vài file
+    # bị đọc lại (đã xác nhận qua phản biện 2026-09-09, mirror đúng phát hiện bên chiều đến).
+    # Không sai kết quả, chỉ chưa tối ưu hết mức — sửa lại nếu sau này cần tối ưu triệt để hơn.
     cache_ngay_csv: dict[tuple[Path, ...], dict[str, list[Path]]] = {}
     for off in OFFSET_CORE_CAN_DOC:
         nhan = nhan_offset(off)

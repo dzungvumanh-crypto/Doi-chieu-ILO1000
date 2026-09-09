@@ -34,12 +34,24 @@ def load_core_den_csv(path: str | Path) -> pd.DataFrame:
     đầu bị Excel bỏ), hậu quả là khoá sai → dòng đó hiện "chưa khớp" trong báo cáo (không phải
     khớp sai lặng lẽ) vì `CORE_REQUIRED_COLS` vẫn đủ, chỉ giá trị bên trong sai — không có lưới
     chặn nào phát hiện RA sớm hơn thế; cần Business Owner biết nếu thấy dòng "CORE THỪA" bất
-    thường sau khi đổi sang nộp Excel."""
+    thường sau khi đổi sang nộp Excel.
+
+    ⚠ 2026-09-09, phát hiện qua rà soát điểm mù kỹ thuật: đường nhanh của
+    `_tim_file_core_hoac_csv_di` (đúng 1 file + offset 0) đưa thẳng file vào đây mà KHÔNG qua
+    `_doc_trdate_1_file` (hàm duy nhất có try/except quanh việc đọc file) — 1 file `.xlsx` hỏng/
+    giả (đổi đuôi từ file khác, hoặc corrupt) sẽ ném thẳng lỗi gốc của `calamine`/`pandas` (VD
+    `CalamineError: Cannot detect file format`) lên tận `job["error"]`, không tên file, không
+    tiếng Việt — khác hẳn quy ước mọi lỗi khác của module này. Bọc try/except NGAY TẠI ĐÂY (điểm
+    hẹp nhất, mọi đường đọc core đều đi qua) thay vì rải lại ở từng nơi gọi."""
     path = Path(path)
-    if path.suffix.lower() in _DUOI_EXCEL:
-        df = pd.read_excel(path, dtype=str, engine="calamine")
-    else:
-        df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    try:
+        if path.suffix.lower() in _DUOI_EXCEL:
+            df = pd.read_excel(path, dtype=str, engine="calamine")
+        else:
+            df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    except Exception as e:
+        raise ValueError(f"Không đọc được file core '{path.name}' ({e}) — kiểm tra lại file có "
+                          f"đúng định dạng .csv/.xlsx và không bị hỏng.") from e
     missing = CORE_REQUIRED_COLS - set(df.columns)
     if missing:
         raise ValueError(f"File core thiếu cột bắt buộc: {', '.join(sorted(missing))}")

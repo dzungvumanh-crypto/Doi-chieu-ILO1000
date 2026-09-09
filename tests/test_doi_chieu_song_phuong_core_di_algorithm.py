@@ -630,6 +630,18 @@ class TestBuildTongHopDi:
         assert match.KEY_COL not in pd.read_csv(paths[1], dtype=str).columns
 
 
+class TestLoadCoreDenCsvFileHongDi:
+    """Mirror `TestLoadCoreDenCsvFileHong` bên chiều đến (2026-09-09) — đường nhanh của
+    `_tim_file_core_hoac_csv_di` cũng bỏ qua try/except của `_doc_trdate_1_file`, cần
+    `load_core_den_csv()` tự bắt lỗi rõ ràng."""
+
+    def test_xlsx_hong_bao_loi_ro_ten_file(self, tmp_path):
+        p = tmp_path / "201_DI.xlsx"
+        p.write_bytes(b"khong phai file excel that")
+        with pytest.raises(ValueError, match="201_DI.xlsx"):
+            load_core.load_core_den_csv(p)
+
+
 # ── pipeline: dò file theo ngày ──────────────────────────────────────────────
 
 class TestTimFileDi:
