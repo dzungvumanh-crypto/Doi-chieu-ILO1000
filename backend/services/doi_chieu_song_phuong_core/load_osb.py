@@ -17,10 +17,20 @@ _REQUIRED_COLS = {"CN thực hiện", "Mã giao dịch", "Ngày hạch toán"}
 
 
 def load_osb_file(source: str | Path | BinaryIO) -> pd.DataFrame:
+    """Raise `ValueError` (KHÔNG tự đoán/tự sửa cấu trúc file) nếu file không đúng khuôn — quyết
+    định của Business Owner (2026-09-06/07): file OSB sai định dạng phải CHẶN ĐỨNG quá trình đối
+    chiếu và yêu cầu người cung cấp OSB xuất lại đúng khuôn, chương trình không được tự khắc phục
+    (ví dụ tự dò lại dòng header) để tránh đọc nhầm mà không ai biết."""
     df = pd.read_excel(source, sheet_name="Sheet 1", dtype=str, header=2, engine="calamine")
     missing = _REQUIRED_COLS - set(df.columns)
     if missing:
-        raise ValueError(f"File OSB thiếu cột bắt buộc: {', '.join(sorted(missing))}")
+        raise ValueError(
+            f"File OSB sai định dạng, KHÔNG đối chiếu tiếp được — thiếu cột bắt buộc: "
+            f"{', '.join(sorted(missing))}. Nguyên nhân thường gặp: file thiếu 2 dòng tiêu đề đầu "
+            f"('DỮ LIỆU CHI TIẾT HẠCH TOÁN' + 1 dòng trống) nên dữ liệu bị lệch lên, khiến chương "
+            f"trình đọc nhầm dòng tiêu đề thật. CẦN YÊU CẦU người cung cấp OSB xuất lại file đúng "
+            f"khuôn chuẩn (tiêu đề ở dòng 1, dòng 2 để trống, tên cột ở dòng 3) rồi chạy lại — "
+            f"KHÔNG tự đoán/tự sửa cấu trúc file này.")
     return df
 
 

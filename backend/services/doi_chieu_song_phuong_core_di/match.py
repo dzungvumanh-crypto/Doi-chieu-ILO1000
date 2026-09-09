@@ -19,11 +19,12 @@ là "đã verify bằng dữ liệu thật" khi mô tả PR):
 Cả 5 nhóm trên đều nằm ở waterfall **CORE-side** (`classify_core_di`). Waterfall HUB-side
 (`classify_hub_di`) không có nhãn nào thuộc diện chưa verify.
 
-⚠️ CẬP NHẬT 2026-09-04 (verify 4 ngày dữ liệu thật 28-31/8, NH 311, đối chiếu chéo với file
-"chấm" tay của người soát): HUB `TRANG_THAI_LENH="TPAY"` được người soát coi là khớp bình thường
-với CORE, KHÔNG bị loại như ERPO/CALD. `config.py::TRANG_THAI_HUB_DOI_CHIEU` đã đổi thành
-`("SCNL", "TPAY")` — mọi chỗ dưới đây ghi "đã lọc SCNL" nay là "đã lọc SCNL+TPAY". Docx không xác
-nhận trực tiếp điều này; cần Business Owner xác nhận chính thức.
+⚠️ LỊCH SỬ 2026-09-04 → ĐÃ ĐẢO LẠI 2026-09-06/07: từng thêm "TPAY" vào phạm vi SCNL dựa trên
+verify chéo 4 ngày dữ liệu thật (28-31/8, NH 311) — người soát coi TPAY là khớp bình thường với
+CORE. Khi đó tự nhận "docx không xác nhận trực tiếp, cần Business Owner xác nhận chính thức" — đã
+hỏi, **Business Owner khẳng định TPAY KHÔNG nằm trong phạm vi SCNL**. `config.py::
+TRANG_THAI_HUB_DOI_CHIEU` đã trở lại đúng nguyên văn docx: chỉ `("SCNL",)`. Quyết định nghiệp vụ
+đứng trên tương quan dữ liệu quan sát trước đó — không tự ý thêm lại nếu chưa có quyết định mới.
 
 ⚠️ Vị trí WTPA/TPER: Bước 2.17/2.18 = 2 bước ÁP CHÓT của CORE-side, ngay trước "CORE THỪA"
 (Bước 2.19) — KHÔNG phải HUB-side. Bản đầu tiên đặt nhầm sang HUB-side, đã tra nguyên văn docx
@@ -331,6 +332,9 @@ def classify_hub_di(
     con_lai.loc[mask_fx] = False
 
     # ── Bước 1.4-1.6 — khớp CORE ngày T, T+1, T+2, T+3 ──
+    # Chạy TRƯỚC Bước 1.7 (khớp OSB) một cách cố ý — đúng thứ tự số bước trong docx, và đã được
+    # Business Owner khẳng định lại bằng lời (chốt 2026-09-06/07): khi 1 dòng HUB vừa khớp được
+    # CORE (thường là T+2/T+3, ca hiếm) vừa khớp được OSB, ưu tiên CORE — KHÔNG đảo thứ tự.
     cac_buoc = []
     for off in OFFSET_CORE_KHI_XU_LY_HUB:
         core_df = core_theo_offset.get(off)

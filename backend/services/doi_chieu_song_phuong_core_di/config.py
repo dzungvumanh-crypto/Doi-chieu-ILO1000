@@ -19,15 +19,15 @@ Nhồi cả 2 luật vào 1 gói sẽ thành rừng `if chieu == ...`; gói "đ�
 CORE_REQUIRED_COLS_DI = {"TRBRCD", "USERID", "REFERENCE", "REMARK", "DRAMOUNT", "CRAMOUNT"}
 
 # ─── Phạm vi HUB đưa vào Hub↔Core (Bước 1.1) ──────────────────────────────────
-# Docx chỉ nói "SCNL" (cột 1/2 Bảng 1). Nhưng verify chéo 4 ngày dữ liệu thật (28-31/8/2026,
-# NH 311) so với file "chấm" tay của người soát cho thấy các dòng HUB có TRANG_THAI_LENH="TPAY"
-# ĐƯỢC người soát coi là khớp bình thường với CORE (không bị loại) — không phải suy diễn từ
-# tương quan ngẫu nhiên: số dòng TPAY mỗi ngày (11/3/10/15) khớp đúng số dòng "người chấm nói
-# khớp, code nói CORE THỪA" mỗi ngày (10/2/11/10), và 3 dòng lệch đã trace tay đều có
-# TRANG_THAI_LENH="TPAY". ⚠️ Docx không xác nhận trực tiếp — cần Business Owner xác nhận chính
-# thức, nhưng bằng chứng dữ liệu thật đủ mạnh để đưa vào code (2026-09-04). ERPO/CALD vẫn bị loại
-# — không có bằng chứng dữ liệu thật nào cho 2 trạng thái đó.
-TRANG_THAI_HUB_DOI_CHIEU = ("SCNL", "TPAY")
+# Đúng nguyên văn docx: chỉ "SCNL". ERPO/CALD/TPAY đều bị loại, không vào waterfall.
+#
+# Lịch sử: bản trước (2026-09-04) từng thêm "TPAY" dựa trên verify chéo 4 ngày dữ liệu thật
+# (28-31/8/2026, NH 311) — số dòng TPAY mỗi ngày khớp đúng số dòng người soát coi là khớp mà code
+# báo "CORE THỪA". Tự nhận khi đó: "Docx không xác nhận trực tiếp — cần Business Owner xác nhận
+# chính thức". Đã hỏi — **Business Owner KHẲNG ĐỊNH TPAY KHÔNG nằm trong phạm vi SCNL** (chốt
+# 2026-09-06/07, xem `docs/Implementation-notes.html` card 120/121) — quyết định nghiệp vụ, đứng
+# trên bằng chứng tương quan dữ liệu quan sát được trước đó. Đã bỏ "TPAY" theo đúng quyết định này.
+TRANG_THAI_HUB_DOI_CHIEU = ("SCNL",)
 
 # ─── 2 trạng thái tra ngược trên HUB GỐC CHƯA LỌC (Bước 2.17/2.18) ────────────
 # Bản đã lọc SCNL không còn 2 trạng thái này — bắt buộc giữ thêm bản HUB gốc để tra.
