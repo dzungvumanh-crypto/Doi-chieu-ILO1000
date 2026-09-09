@@ -689,6 +689,60 @@ class TestTimFileDi:
         loai, p = pipeline._tim_file_core_hoac_csv_di(tmp_path, "20260902", "201", 1)
         assert loai == "zip" and p.name == "GL02_20260902_1000.zip"
 
+    def test_csv_2_file_gom_chung_1_thu_muc_dat_ten_theo_ngay_T(self, tmp_path):
+        """Phát hiện qua rà soát 2026-09-08 (đã vá cho chiều đến qua phản biện 4 vòng, nay mirror
+        cho chiều đi): người dùng thường gom MỌI CSV của cả phiên (nhiều ngày khác nhau) vào 1
+        thư mục con đặt tên theo ngày T (VD `1.9/`) — không dò thêm theo `ngay_goc` thì offset≠0
+        rơi về `goc_dir` (không đệ quy vào `1.9/`), mất file dù đã nằm sẵn trong thư mục T."""
+        sub = tmp_path / "1.9"
+        sub.mkdir()
+        self._viet_csv_trdate(sub / "201_DI_20260906_0900.csv", "20260901")
+        self._viet_csv_trdate(sub / "201_DI_20260907_0900.csv", "20260902")
+
+        loai, p = pipeline._tim_file_core_hoac_csv_di(
+            tmp_path, "20260901", "201", 0, ngay_goc="20260901")
+        assert loai == "csv" and p.name == "201_DI_20260906_0900.csv"
+
+        loai, p = pipeline._tim_file_core_hoac_csv_di(
+            tmp_path, "20260902", "201", 1, ngay_goc="20260901")
+        assert loai == "csv" and p.name == "201_DI_20260907_0900.csv"
+
+    def test_csv_offset_am_cung_gom_chung_thu_muc_dat_ten_theo_ngay_T(self, tmp_path):
+        """Chiều đi khác chiều đến ở chỗ cửa sổ CORE có CẢ offset ÂM (T-1, T-2, T-3 — nhánh huỷ
+        chéo ngày, xem OFFSET_CORE_CAN_DOC trong core_di/config.py). Phản biện port `ngay_goc`
+        (2026-09-08) xác nhận việc gộp `{ngay, ngay_goc}` đối xứng theo dấu offset, không chỉ tình
+        cờ đúng cho offset dương như bản đến — test này khoá lại bằng offset -1 tường minh."""
+        sub = tmp_path / "1.9"
+        sub.mkdir()
+        self._viet_csv_trdate(sub / "201_DI_hom_qua.csv", "20260831")
+        self._viet_csv_trdate(sub / "201_DI_hom_nay.csv", "20260901")
+
+        loai, p = pipeline._tim_file_core_hoac_csv_di(
+            tmp_path, "20260831", "201", -1, ngay_goc="20260901")
+        assert loai == "csv" and p.name == "201_DI_hom_qua.csv"
+
+    def test_zip_gom_chung_1_thu_muc_dat_ten_theo_ngay_T(self, tmp_path):
+        """Cùng lỗi tổ chức thư mục như CSV (test trên) nhưng cho nhánh GL02 ZIP fallback."""
+        sub = tmp_path / "1.9"
+        sub.mkdir()
+        (sub / "GL02_20260901_1000.zip").write_bytes(b"x")
+        (sub / "GL02_20260902_1000.zip").write_bytes(b"x")
+
+        loai, p = pipeline._tim_file_core_hoac_csv_di(
+            tmp_path, "20260902", "201", 1, ngay_goc="20260901")
+        assert loai == "zip" and p.name == "GL02_20260902_1000.zip"
+
+    def test_hub_di_gom_chung_1_thu_muc_dat_ten_theo_ngay_T(self, tmp_path):
+        """Cùng lỗi tổ chức thư mục, cho `_tim_file_hub_di` — hậu quả nếu KHÔNG vá: HUB T-1 mất
+        khiến CORE đáng lẽ khớp "hub T-1 core T" bị gắn nhầm "CORE THỪA" (sai số liệu âm thầm)."""
+        sub = tmp_path / "1.9"
+        sub.mkdir()
+        (sub / "doichieugd_20260901__04_DI_9999_N.zip").write_bytes(b"x")
+        (sub / "doichieugd_20260831__04_DI_9999_N.zip").write_bytes(b"x")
+
+        p = pipeline._tim_file_hub_di(tmp_path, "20260831", "201", ngay_goc="20260901")
+        assert p is not None and p.name == "doichieugd_20260831__04_DI_9999_N.zip"
+
     def test_nhieu_csv_cung_trdate_khong_tu_chon(self, tmp_path):
         """2 file CSV khác tên nhưng TRDATE thật BÊN TRONG lại trùng 1 ngày — vẫn phải chặn như
         luật cũ (không tự chọn), chỉ khác chỗ xét trên TRDATE thật thay vì xét trên việc "có nhiều
