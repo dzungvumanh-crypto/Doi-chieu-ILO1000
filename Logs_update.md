@@ -4,6 +4,375 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
 
 ---
 
+- 09/09/2026 Đối soát CITAD - **Bỏ cột "Dịch vụ", thêm cột "Số RefHub"; lệnh đã khớp nay cũng hiện RefHub**
+    + **Cột "Dịch vụ" đã bỏ khỏi báo cáo** — cả file Excel xuất ra lẫn bảng "Kết quả" trên màn hình.
+      Nội dung cột đó đọc thẳng được từ cột **Loại GD** ngay bên cạnh: IH là chuyển giá trị cao, IL
+      là chuyển giá trị thấp. Số liệu bên trong **không bị xoá**, chỉ thôi hiện ra
+    + **Thêm cột "Số RefHub"** — mã tham chiếu vốn đã nằm sẵn trong file IPCAS nhưng từ trước tới nay
+      chưa bao giờ được đưa ra báo cáo. Cột này nằm **cuối nhóm AGRIBANK (IPCAS)**, không nằm chỗ cũ
+      của "Dịch vụ", vì đó là số liệu của Agribank chứ không phải của CITAD
+    + **Trước đây chỉ dòng chưa khớp mới có RefHub, lệnh đã khớp thì trống trơn.** Nay mọi lệnh có
+      RefHub đều hiện đủ
+    + **Lệnh Đi mà IPCAS báo "đã sang kênh" nhưng chưa ghi ngày kênh trả**: vẫn rơi vào nhóm
+      **Chỉ CITAD** như quy tắc 28/08/2026, nhưng nay **kèm theo số RefHub** để tra cứu bên Agribank.
+      Trước đây dòng này bị bỏ ngay từ lúc đọc file nên mất luôn số RefHub, người chấm không có gì
+      trong tay để tra
+    + ⚠️ **Con số "tổng dòng IPCAS" trong tab Lịch sử nay lớn hơn trước với cùng một file** — vì
+      trước đây nó đếm thiếu đúng nhóm dòng nói trên. Đây là sửa đúng, không phải dữ liệu thay đổi.
+      Hệ quả: **không so sánh trực tiếp con số này với các lượt chấm trước ngày 09/09/2026**
+    + 🔴 **Còn một chỗ chưa xong**: dòng thuộc nhóm **Lệch trạng thái** vẫn để trống cột Số RefHub,
+      dù bên IPCAS có sẵn giá trị đó — trong khi đây đúng là nhóm cần tra cứu nhất. Sẽ vá riêng
+    + 🔴 **Vẫn giữ điểm mù cũ**: lệnh IPCAS báo đã đi kênh mà CITAD **không hề có** thì dòng vẫn
+      không hiện ra báo cáo. Đang chờ Phòng Thanh toán chốt, vì cho hiện sẽ làm số dòng lệch tăng
+    + ✅ **Không phải làm gì sau khi cập nhật, không đổi dữ liệu, không cấp thêm quyền**
+
+- 08/09/2026 Chuẩn hoá văn bản - **Rà soát lại trên hai văn bản thật — sửa 8 chỗ, khối chữ ký và Nơi nhận**
+    + **Khối "Nơi nhận" gõ bằng nút chấm tròn của Word thì không được sửa gì cả.** Dấu chấm tròn đó
+      do Word **tự vẽ**, nó không nằm trong chữ nên phần mềm đọc dòng "Như trên;" mà không thấy dấu
+      gạch đầu dòng nào — và luật nhận khối Nơi nhận lại đi tìm đúng dấu gạch ấy. Cả khối bị bỏ qua:
+      không về cỡ 11, không căn trái, không giãn dòng đơn. Nay phần mềm đổi chấm tròn thành gạch
+      đầu dòng **trước** khi đọc, nên khối được nhận như văn bản gõ tay
+    + ⚠️ **Nếu bỏ tick ô "Chuyển danh sách chấm tròn tự động…"** trong tab Cấu hình thì lỗi trên
+      quay lại. Nên để nguyên ô đó
+    + **Tên người ký bị bỏ sót khi ký thay.** Khối chữ ký kiểu "TL. TỔNG GIÁM ĐỐC" rồi
+      "GIÁM ĐỐC TRUNG TÂM THANH TOÁN": phần mềm tưởng dòng thứ hai là **tên người**, nên tên thật ở
+      dưới khoảng chừa chữ ký không còn ai nhận — giữ nguyên cỡ chữ, không in đậm, không canh giữa.
+      Nay hai dòng chức vụ được hiểu đúng là chức vụ, tên người lấy ở dòng dưới
+    + **"TRƯỞNG NHÓM" nay được nhận là chức vụ.** Trước đây danh sách chỉ có Trưởng phòng, Trưởng
+      ban, Trưởng đơn vị, Trưởng bộ phận — thiếu "Trưởng nhóm" nên cả khối chữ ký của một Báo cáo
+      không được áp thể thức. Nay mọi chức danh có chữ "Trưởng" đều được nhận
+    + **Tiêu ngữ "Độc lập - Tự do - Hạnh Phúc"** (chữ P hoa) nay được sửa về "Hạnh phúc". Cách bỏ
+      dấu ("Hoà" hay "Hòa") vẫn **không** bị đụng tới — đó là thói quen của từng đơn vị
+    + **Dòng gõ phím Tab để thụt đầu dòng nay bị thụt gấp đôi.** Phần mềm đã tự đặt thụt 1 cm mà
+      dấu Tab vẫn nằm đó. Nay Tab ở **đầu dòng** được bỏ; Tab **giữa dòng** (dùng canh cột, kiểu
+      "- Swift Code &nbsp;&nbsp;: VBAAVNVX330") vẫn giữ nguyên
+    + **"TL.TỔNG GIÁM ĐỐC" gõ dính** nay được thêm dấu cách thành "TL. TỔNG GIÁM ĐỐC". Áp cho cả
+      TM. / KT. / TL. / TUQ. / Q.
+    + **Dòng "V/v ..." của công văn dài quá phải xuống dòng thì nửa dưới bị trình bày như câu văn
+      thường** — nửa trên cỡ 12 canh giữa, nửa dưới cỡ 14 căn đều hai bên. Nay cả hai dòng cùng
+      được hiểu là trích yếu
+    + **Thêm ô "Lề trái đoạn" vào tab Cấu hình quy chuẩn.** Thông số này vốn vẫn được áp lên văn bản
+      (nó kéo lời văn về sát lề) nhưng **không có ô nào trên màn hình** — người dùng không nhìn thấy
+      và không tắt được. Ô "Thụt dòng đầu" nay cũng xoá trống được: để trống = không đụng tới
+    + ✅ **Không phải làm gì sau khi cập nhật, không đổi dữ liệu, không cấp thêm quyền**
+
+- 08/09/2026 Chuẩn hoá văn bản - **Số tự động không còn bị teo, số trang không còn bị đánh đè**
+    + **Số thứ tự "4." "5." "I." "II." in ra bé bằng nửa chữ.** Nguyên nhân: những số đó do Word
+      **tự sinh** khi hiển thị, cỡ chữ của chúng nằm ở một chỗ khác hẳn cỡ chữ của câu văn nên
+      phần mềm sửa câu văn mà không chạm tới số. Nay số ăn theo đúng cỡ chữ của đoạn
+    + **Số trang bị đánh đè thành hai con số.** Trước đây phần mềm chỉ nhìn ở **đầu trang** xem đã
+      có số chưa; văn bản nào đánh số ở **chân trang** (hoặc chỉ ở trang đầu) thì bị đánh thêm một
+      lần nữa. Nay soi đủ **sáu chỗ** đầu/chân trang trước khi quyết định
+    + **Dòng "Kính trình:" của Tờ trình** trước đây không được nhận ra (phần mềm chỉ biết "Kính
+      gửi"), nên bị áp thể thức của câu văn thường. Nay nhận như "Kính gửi" — Mẫu 16 Phụ lục V
+      (Phiếu trình chuyển) dùng đúng chữ này
+    + **Khối "Kính trình" dựng bằng bảng nay vẫn được áp thể thức.** Nhiều người đặt "Kính trình:"
+      và tên người nhận vào hai ô của một bảng cho dễ canh. Trước đây ô thứ hai bị coi là ô bảng
+      số liệu nên giữ nguyên cỡ chữ gốc — nửa dòng cỡ 14, nửa dòng cỡ 11. Nay mọi ô **cùng bảng đó**
+      đều theo thể thức của khối
+    + ⚠️ **Bảng số liệu thật vẫn không bị đụng tới** — kể cả khi nằm ngay sát bên dưới khối Kính
+      trình, vì phần mềm phân biệt theo **từng cái bảng** chứ không theo ô đứng cạnh nhau
+    + ✅ **Không phải làm gì sau khi cập nhật**
+
+- 07/09/2026 Chuẩn hoá văn bản - **Tên đơn vị ban hành dài 2 dòng không còn bị bỏ đậm nửa trên**
+    + Khối đầu văn bản kiểu **"BAN TRIỂN KHAI GP QLRR HOẠT ĐỘNG"** rồi **"TỔ TRIỂN KHAI NGHIỆP VỤ"**
+      — cả hai dòng cùng thuộc tên đơn vị ban hành nên phải in đậm cả hai. Trước đây phần mềm chỉ
+      để đậm dòng cuối, dòng trên bị bỏ đậm
+    + Nay phần mềm **đọc chính chữ đậm người soạn đã đặt** để biết dòng nào thuộc tên đơn vị ban
+      hành, dòng nào là đơn vị cấp trên — thay vì đoán theo con chữ. Người soạn bôi đậm đúng chỗ
+      thì phần mềm giữ đúng chỗ đó
+    + Không đụng tới khối mà **cả khối cùng đậm** hoặc **cả khối cùng không đậm** — khi đó người
+      soạn không phân biệt hai vai, phần mềm quay về cách cũ
+    + ✅ **Không phải làm gì sau khi cập nhật**
+
+- 07/09/2026 Chuẩn hoá văn bản - **Mục con của gạch đầu dòng nay trình bày khác mục cha**
+    + **Việc đã sai:** dòng gạch đầu dòng nào người soạn **tự thụt vào cho sâu hơn** để thể hiện
+      mục con thì phần mềm lại kéo thẳng về lề cũ — mục con nằm ngang hàng với chính mục cha của
+      nó, đọc ra thành các mục ngang cấp. Nay giữ nguyên mức thụt người soạn đã đặt (đoạn lời văn
+      thường bị thụt vô cớ thì vẫn dọn về lề như cũ)
+    + **Việc mới làm:** phần mềm **tự nhận ra mục con** cả khi người soạn không thụt lề gì cả.
+      Dòng gạch đầu dòng kết thúc bằng dấu **hai chấm ":"** thì các dòng gạch đầu dòng ngay dưới là
+      mục con của nó — được đổi dấu thành **"+"** và thụt vào thêm 1 cm
+    + Danh sách con **kết thúc** ở dòng có dấu **chấm** cuối câu (theo đúng quy ước "cuối mỗi dòng
+      dấu chấm phẩy, dòng cuối cùng dấu chấm"), hoặc ở dòng đầu tiên không phải gạch đầu dòng
+    + ⚠️ **Đây là thói quen trình bày, không phải quy định.** QĐ 979 chỉ đánh số tới cấp *điểm*
+      (a, b, c), dưới đó không nói gì. Nếu văn bản của phòng có quy ước khác thì vào tab **Cấu hình
+      quy chuẩn** đổi ký tự mục con, đổi mức thụt, hoặc bỏ tick ô *"Tự nhận mục con"*
+    + ⚠️ **Chỗ phần mềm có thể nhận nhầm:** một mục **ngang cấp** đứng ngay sau danh sách con mà
+      không có dòng nào chen giữa và danh sách con không dùng dấu chấm phẩy — nó sẽ bị tụt xuống
+      làm mục con. Mọi dòng bị đổi đều **bôi màu trong nhật ký**, xem lại rồi tải mới chắc
+    + **Danh sách Nơi nhận và Kính gửi không bị đụng tới** — hai khối đó cũng dùng "-" nhưng là
+      danh sách phẳng
+    + ✅ **Không phải cấp quyền gì thêm, không đổi dữ liệu**
+
+- 08/09/2026 Đối chiếu CITAD (Phòng Thanh toán) - **Cho phép 1 người có nhiều bảng đối chiếu độc lập trong cùng 1 ngày**
+    + Trước đây mỗi người chỉ được **đúng 1 bảng/ngày**. Nay bấm "Tải" một bảng đã lưu để sửa/lưu
+      tiếp tại chỗ như cũ, còn **gõ ngày rồi Lưu mà KHÔNG bấm "Tải"** thì luôn sinh ra **1 bảng
+      mới hoàn toàn tách biệt** — kể cả sau khi một bảng cũ đã "Lưu bảng cuối" rồi chấm lại
+    + Tab **Lịch sử** dựng lại thành **3 tầng**: người lập bảng → từng bảng độc lập của người đó
+      → từng lần lưu trong bảng đó. Bảng chỉ có 1 lần lưu hiện gộp thẳng 1 dòng, có nút Tải/Ai đã
+      sửa ngay, không phải bấm mở rộng thêm 1 lần chỉ để thấy lại đúng thông tin đã có
+    + Có dòng ngăn cách khi danh sách Lịch sử sang tháng khác
+    + ⚠️ **Đổi ô ngày sau khi đã "Tải" một bảng** sẽ tự tách khỏi bảng đó — báo rõ "lưu tiếp theo
+      sẽ tạo bảng MỚI", để không lưu nhầm đè lên bảng vừa tải. Nếu đang xem bảng của người khác
+      (chỉ góp Napas/PSS-MDP) mà quên bấm Tải bảng của họ trước khi Lưu thì hệ thống cũng chặn
+      đúng cách tương tự, không ghi đè nhầm số liệu người khác
+    + 🔎 Gõ đúng 1 ngày đã có sẵn bảng của mình (kể cả mở lại hôm sau, hoặc F5 giữa chừng) sẽ hiện
+      banner nhắc **"Bạn đã có N bảng cho ngày này"** kèm nút tải nhanh bảng gần nhất — chỉ nhắc,
+      không chặn tạo bảng mới nếu không bấm vào
+    + ✅ **Không phải làm gì sau khi cập nhật** — không đổi công thức tính chênh lệch, không đổi
+      cách xuất Excel, không đổi quyền. Dữ liệu cũ giữ nguyên khi hệ thống tự cập nhật cấu trúc
+
+- 06/09/2026 Nghỉ phép - **Rà soát toàn bộ đợt sửa "Khác"/điều chỉnh NPBB — sửa 2 lỗi hiện chữ hướng dẫn sai loại nghỉ**
+    + Giao agent rà soát riêng toàn bộ code mới của 2 đợt trước (loại "Khác" tự chọn tính hạn mức,
+      chặn điều chỉnh NPBB xếp chuỗi) — xác nhận toàn bộ 5 câu SQL + các điểm chặn/khôi phục đơn gốc
+      đều đúng, không sót chỗ nào cần sửa
+    + ✅ **Phát hiện + sửa**: dòng chữ hướng dẫn (vd "Tối thiểu 5 ngày làm việc") ở dialog "Tạo đơn"
+      và "Sửa & Nộp lại/Điều chỉnh NPBB" bị kẹt hiện theo loại nghỉ đã chọn ở LẦN MỞ DIALOG TRƯỚC —
+      do gán `.value` bằng code không tự kích hoạt sự kiện đổi loại nghỉ (chỉ kích hoạt khi người
+      dùng tự tay bấm dropdown). Gọi tường minh lại hàm cập nhật hướng dẫn mỗi lần mở dialog — cùng
+      cách đã áp dụng đúng cho nút gạt "Trừ vào hạn mức phép năm" ở đợt trước
+    + Verify: chạy lại 135 test liên quan nghỉ phép/hạn mức/chấm công/bàn giao — pass đủ; bấm thử
+      qua Playwright cả 2 dialog sau khi sửa — hiện đúng hướng dẫn theo loại nghỉ mỗi lần mở
+
+- 06/09/2026 Nghỉ phép - **Điều chỉnh NPBB: chặn xếp chuỗi nhiều cấp, đơn gốc tự khôi phục khi rút đơn điều chỉnh**
+    + Phát hiện qua rà soát thực tế (tạo đơn điều chỉnh cấp 2 thật rồi kiểm tra báo cáo): điều chỉnh
+      1 đơn *vốn đã là đơn điều chỉnh* (chuỗi gốc → điều chỉnh 1 → điều chỉnh 2) khiến nhân sự đó
+      **biến mất hoàn toàn khỏi báo cáo NPBB** ở Báo cáo tổng hợp — báo cáo chỉ dò đúng 1 cấp cha-con
+      để tìm đơn điều chỉnh còn hiệu lực, không theo được chuỗi 2 cấp trở lên
+    + ✅ **Chặn hẳn điều chỉnh chồng lên điều chỉnh** — mọi đơn điều chỉnh giờ luôn trỏ thẳng về đúng
+      1 đơn NPBB GỐC duy nhất, không xếp chuỗi. Nút "Điều chỉnh ngày NPBB" ẩn trên chính đơn điều
+      chỉnh; ô tìm-chọn đơn ở dialog "Tạo đơn" cũng lọc bỏ, chỉ liệt kê đúng đơn gốc
+    + ✅ **Đơn gốc tự khôi phục "Hoàn thành"** khi đơn điều chỉnh (đã duyệt) bị rút/hủy — trước đây
+      đơn gốc kẹt "Đã hủy" vĩnh viễn, không thể điều chỉnh lại được nữa dù đơn điều chỉnh đã bị rút.
+      Áp dụng cho cả 2 đường rút đơn: "Hủy đơn" trực tiếp lẫn "Rút đơn" cần Phòng Tổng hợp xác nhận
+    + Từ nay: muốn điều chỉnh lại 1 đơn NPBB đã có đơn điều chỉnh, phải rút/hủy đơn điều chỉnh hiện
+      tại trước — đơn gốc tự về "Hoàn thành", làm điều chỉnh mới lại từ đơn gốc đó. Số lần điều chỉnh
+      không giới hạn, miễn tuần tự từng lần một
+    + Verify thật qua API (tạo đơn điều chỉnh cấp 2, rút đơn qua cả 2 đường, dọn sạch sau khi xong):
+      chặn đúng lúc điều chỉnh chồng lên điều chỉnh; đơn gốc khôi phục đúng sau khi rút; điều chỉnh
+      lại thành công sau khi khôi phục. 135 test liên quan pass đủ
+
+- 06/09/2026 Nghỉ phép - **Loại nghỉ "Khác": tự chọn có tính vào hạn mức phép năm hay không**
+    + Trước đây `leave_type="other"` (Khác) LUÔN trừ vào hạn mức phép năm giống hệt "Nghỉ phép năm"
+      — không đúng cho mọi lý do "Khác" (hộp lý do tự do, có thể là loại nghỉ theo luật lao động
+      không tính vào phép năm). Thêm 1 nút gạt "Trừ vào hạn mức phép năm" (kèm dòng giải thích rõ 2
+      chiều) — chỉ hiện khi chọn loại "Khác", ở cả 3 nơi tạo đơn: Tạo đơn, Sửa & Nộp lại, Khai báo hộ
+    + **Bật (mặc định, giữ nguyên hành vi cũ)**: tính đúng như đơn Nghỉ phép năm — trừ hạn mức còn
+      lại, cộng vào số ngày đã nghỉ, có thể phải ứng phép năm sau nếu vượt hạn mức
+    + **Tắt**: chỉ ghi nhận ngày nghỉ để theo dõi, không tính toán gì vào hạn mức phép năm — giống
+      hệt các loại đã miễn hạn mức sẵn có (thai sản/bảo hiểm/không lương/họp-công tác)
+    + Verify thật qua API (tạo/xoá/nộp lại đơn thật, dọn sạch sau khi xong): "Khác" tắt trừ hạn mức
+      tạo được dù vượt xa hạn mức (30 ngày trên hạn mức 12), không đổi `used_leave_days`/báo cáo năm;
+      "Khác" bật trừ hạn mức tính đúng y hệt phép năm (used_days/remaining/báo cáo năm); nộp lại đơn
+      đổi từ bật sang tắt cập nhật đúng trong DB; xoá đơn khai báo hộ loại "Khác tắt" không hoàn
+      nhầm hạn mức (vì bản thân nó chưa từng bị trừ)
+
+- 06/09/2026 Nghỉ phép - **Sửa 5 lỗi từ review thật của Người 1 trên PR #77**
+    + ✅ **"Họp/Công tác" chấm công tự động thành 0 công thay vì đủ công** — 2 trigger đồng bộ
+      `attendances` (tạo từ PR #22, trước khi loại nghỉ `hop_cong_tac` ra đời) rơi đúng loại này vào
+      `ELSE 'P'` (0 công) thay vì dùng ký hiệu `CT` = "Công tác" (1 công) đã có sẵn trong
+      `attendance_symbols` nhưng chưa trigger nào dùng. Thêm migration cho cả 2 trigger. Xem
+      [Implementation Notes #122](docs/Implementation-notes.html)
+    + ✅ **Ký hiệu `H` đụng độ giữa báo cáo chấm công mới và hệ chấm công thật** — đổi
+      `hop_cong_tac` sang dùng chung `CT` với hệ chấm công thật thay vì tự đặt `H` (đã có nghĩa khác
+      là "Đi học"). Xem #122
+    + ✅ **Báo cáo NPBB mất hẳn đường tải nếu bản xem trước PDF lỗi** (Word chưa cài/treo trên máy
+      chủ) — trước đây dừng luôn ở bước báo lỗi; giờ tự động tải thẳng file .docx gốc (không phụ
+      thuộc Word) làm phương án dự phòng, khớp đúng cách phiếu nghỉ phép đã xử lý PDF hỏng. Xem #122
+    + ✅ **Cột "Còn lại" trong báo cáo tổng hợp năm ra số âm sau 31/03** — phép chuyển kỳ hết hạn bị
+      trừ về 0 nhưng số ngày đã nghỉ (gồm cả phần từng dùng phép chuyển kỳ) không trừ theo, có thể ra
+      âm. Kẹp về 0, khớp đúng cách 2 màn hình khác đang làm. Xem #122
+    + ✅ **Mốc hết hạn 31/03 tính theo ngày bấm nộp đơn thay vì ngày nghỉ thật** — fix đợt trước
+      (#121) bỏ hard-code nhưng lại mặc định dùng "hôm nay" (ngày nộp đơn); quy định thật nói về
+      ngày NGHỈ phải rơi trước 31/03, không phải ngày nộp. Đổi sang truyền đúng ngày bắt đầu nghỉ.
+      Xem #122
+    + *Toàn bộ 5 lỗi verify bằng dữ liệu thật (không đoán từ đọc code) trước/sau cho từng lỗi, dọn
+      sạch dữ liệu test sau khi xong — xem #122*
+
+- 06/09/2026 Bàn giao chứng từ - **Cột ngày nghỉ lễ tô vàng như hai ngày cuối tuần**
+    + Trước đây bảng nhập chứng từ chỉ tô vàng **thứ Bảy và Chủ nhật**. Ngày nghỉ lễ giữa tuần
+      trông y hệt ngày đi làm, không có gì nhắc người nhập rằng hôm đó lẽ ra không có chứng từ
+    + Nay ngày lễ tô vàng **giống hệt cuối tuần** — cả ô số ngày trên đầu bảng lẫn ô trống bên dưới
+    + Danh sách ngày lễ lấy từ **cùng một chỗ** với màn Nghỉ phép và Sổ trực (ngày lễ khai ở
+      *Nghỉ phép → Ngày lễ* và *Phân lịch trực → Ngày đặc biệt*) — khai một lần, cả ba màn hình
+      hiểu giống nhau. Không phải khai riêng cho màn chứng từ
+    + Ô **đã có số** vẫn giữ màu theo trạng thái (xanh = đã chốt, cam = chờ xác nhận, tím = đang
+      mượn). Chứng từ phát sinh đúng ngày lễ là chuyện có thật, trạng thái quan trọng hơn màu ngày nghỉ
+    + ⚠️ **Thứ Bảy đi làm bù vẫn tô vàng** — chưa đổi ở màn này. Bảng chấm công thì đã bỏ vàng cho
+      ngày làm bù, vì ở đó cột Tổng có cộng công của hôm ấy nên để vàng là mâu thuẫn nhìn thấy được
+
+- 05/09/2026 Nghỉ phép - **Sửa hết 5 cảnh báo còn treo của 2 đợt trước + thêm loạt báo cáo/phiếu in + rà soát tìm thêm 2 lỗi quyền/khoá**
+    + ✅ **Đã sửa "Báo cáo NPBB liệt kê nhầm gần như toàn bộ nhân sự"** (cảnh báo ở mục dưới) — nguyên
+      nhân là 1 lỗi SQL rộng hơn nhiều so với tưởng ban đầu: mọi danh sách/báo cáo đơn nghỉ phép đều
+      **âm thầm bỏ sót đơn thật không nhập lý do** (không riêng gì báo cáo NPBB). Xem chi tiết ở
+      [Implementation Notes #119](docs/Implementation-notes.html)
+    + ✅ **Đã sửa "Số Đã nghỉ hiển thị lớn hơn thực tế"** (cảnh báo ở mục dưới) — tab Hạn mức phép/số
+      "Phép còn lại"/xuất Excel hạn mức trước đây đếm trùng đơn gốc **và** đơn điều chỉnh NPBB cùng
+      lúc trong thời gian đơn điều chỉnh còn chờ duyệt. Xem #119
+    + ✅ **Đã sửa "Đơn nghỉ vắt qua Tết dương lịch có ứng phép bị đếm thiếu ngày"** (cảnh báo ở đợt
+      "Ứng phép năm sau" bên dưới) — trừ nhầm số ngày đã ứng ở cả 2 năm thay vì đúng 1 năm gốc. Xem #119
+    + ✅ **Đã sửa "Ngày phép chuyển kỳ chưa hết hạn 31/03 như quy định"** (cảnh báo ở đợt "Ứng phép
+      năm sau" bên dưới) — mốc so sánh hạn 31/03 bị hard-code cứng thành 01/01 nên phép chuyển kỳ
+      **không bao giờ hết hạn thật sự**; đơn nghỉ tạo tháng 6, tháng 10 vẫn cộng thêm ngày chuyển
+      năm. Xem #121
+    + ✅ **Đã sửa "Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép"** (cảnh báo ở đợt
+      "Ứng phép năm sau" bên dưới) — backend vốn đã hỗ trợ sẵn, chỉ riêng màn "Sửa & Nộp lại" chưa
+      bắt tín hiệu để hỏi, nên vượt hạn mức là báo lỗi rồi dừng luôn. Xem #121
+    + **Rà soát thêm phát hiện 2 lỗi quyền/khoá không liên quan tới hạn mức**: nút "Hủy đơn" bị ẩn
+      nhầm cho đơn đang chờ duyệt ở tài khoản chưa được cấp quyền riêng; nút Phê duyệt/Từ chối của
+      Phó Giám đốc vẫn hiện dù giấy uỷ quyền đã hết hạn. Toàn bộ 7 lỗi (5 ở trên + 2 lỗi này) đã
+      sửa, verify bằng dữ liệu thật trước/sau cho từng lỗi — xem #119, #120, #121
+    + **Thêm 2 loại nghỉ mới**: *Nghỉ không lương* và *Họp/Công tác* — đi qua đúng quy trình duyệt
+      (KSV → Tổng hợp → Giám đốc) như đơn thường, nhưng **không trừ vào hạn mức phép năm** (vẫn hiện
+      trong chấm công/báo cáo để theo dõi). Họp/Công tác cho chọn lẻ từng ngày (giống phép năm) thay
+      vì chọn khoảng liên tục
+    + **Điều chỉnh nghỉ phép bắt buộc giờ có thêm lối tạo trực tiếp** từ nút "Tạo đơn" (trước đây chỉ
+      tạo được từ nút "Điều chỉnh ngày NPBB" trong chi tiết 1 đơn cụ thể) — chọn loại "Điều chỉnh
+      nghỉ phép bắt buộc", tìm và chọn đơn gốc cần đổi ngày, sau đó vào đúng màn nhập ngày mới +
+      chọn KSV/Ban lãnh đạo phê duyệt như luồng cũ. Chi tiết đơn (cả gốc lẫn điều chỉnh) có link bấm
+      mở tab mới sang đơn liên quan
+    + **Báo cáo chấm công tháng** (theo đúng mẫu TCNS): chọn 1 tháng hoặc "Chọn cả năm" (dừng đúng ở
+      tháng hiện tại nếu đang xem năm nay, không sinh sheet tương lai); ký hiệu P/BB/H theo đúng loại
+      nghỉ; dữ liệu quét lại thật mỗi lần xuất, không cache
+    + **Báo cáo nghỉ phép năm viết lại theo đúng mẫu giấy thật**: nhóm theo phòng ban (dòng tổng
+      trước, chi tiết từng người sau), cột "Đã nghỉ" tính đến đúng thời điểm bấm xuất file
+    + **Tải phiếu nghỉ phép**: cho chọn PDF (có chữ ký, mặc định) hoặc Word (không có chữ ký — ghi rõ
+      trên nút để không nhầm là bản tương đương); PDF mở xem trước toàn màn hình trước khi tải, có
+      nút "Tải xuống"/"Đóng" riêng thay vì tải thẳng
+    + **Bảng danh sách đơn nghỉ phép**: sắp lại thứ tự cột (Họ và tên/Phòng lên ngay sau Ngày tạo),
+      kéo dãn được từng cột bằng chuột, khung viền đậm rõ hơn; thêm bộ lọc theo "Ngày tạo" (chọn 1
+      ngày) và ô "Tìm theo tên" giờ gõ ra danh sách nhân sự thật để bấm chọn (tự cập nhật theo danh
+      sách nhân sự hiện tại, không phải gõ mù)
+    + **Popup nhắc đơn quá hạn chưa duyệt**: đơn của chính mình đã tới/qua ngày nghỉ mà vẫn còn
+      "chờ duyệt" sẽ tự nhắc khi mở trang, ghi rõ đang kẹt ở cấp nào
+    + *Lưu ý vận hành*: nhóm quyền "QA-all" (tài khoản test nội bộ) thiếu sẵn quyền "Hủy đơn nghỉ
+      phép"/"Rút đơn nhiều cấp" — đã cấp bổ sung; nếu nhóm quyền khác của đơn vị cũng thiếu 2 quyền
+      này thì cấp thêm tương tự qua màn Quản lý nhóm quyền
+
+- 05/09/2026 Đối chiếu CITAD - **Nhiều người cùng chấm một ngày, khoá nguồn Napas/PSS-MDP, tách bảng chênh lệch VNĐ / Ngoại tệ**
+    + **Hết cảnh "một ngày chỉ một người chấm được".** Trước đây một ngày chỉ có đúng một bảng
+      dùng chung cả phòng: người thứ hai vào chấm cùng ngày thì bị chặn, hoặc phải sửa đè lên
+      bảng người thứ nhất đã lập. Nay **mỗi người tự lập bảng riêng của mình** cho cùng một ngày,
+      không ai đụng vào bảng ai
+    + Tab **Lịch sử** vì thế có thể hiện **nhiều dòng cho cùng một ngày** — mỗi dòng là bảng của
+      một người, kèm nhãn **Chính thức** (đã Lưu bảng cuối) hay **Tạm**
+    + **Vào bảng tạm của người khác vẫn chỉ bổ sung được Napas/PSS-MDP** như trước, không sửa
+      được ô nào khác và không chốt bản cuối hộ được
+    + **Hai ô Napas / PSS - MDP không gõ tay được nữa** — chỉ nạp bằng nút *"Nạp CITAD"*, giống
+      hệt 5 cổng CITAD và PaymentHub. Nếu quét ở trang PaymentHub, phần mềm sẽ **bỏ qua** hai mục
+      này và báo *"Lệnh quyết toán lô bắt buộc phải quét dữ liệu từ cổng Citad"* — **đây không
+      phải lỗi phần mềm**, chỉ là quét nhầm trang. **Không cần cài lại Extension**, Extension
+      không thay đổi gì
+    + **Ba bảng chênh lệch thay vì một:** bảng *Gộp* cả 3 loại tiền như cũ, thêm bảng **VNĐ**
+      riêng và bảng **Ngoại tệ** (USD + EUR chung một bảng). Nhìn là biết ngay lệch nằm ở nhóm
+      tiền nào, không phải đọc dòng ghi chú nhỏ cuối trang. **File Excel xuất ra không đổi**
+    + ⚠️ **Sổ trực cuối ngày đọc "đã khớp" theo bất kỳ bảng nào của ngày đó.** Một ngày giờ có
+      nhiều bảng, nên nếu người A chốt bảng khớp mà người B chốt bảng còn lệch thì Sổ trực
+      **vẫn báo đã khớp**, không cảnh báo gì. Cảnh báo này xưa nay chỉ là nhắc phụ trợ và không
+      chặn ai bấm xác nhận — nhưng cần biết để đừng tin nó thay cho việc tự kiểm
+    + Sửa lỗi phát hiện lúc soát: bấm **Xoá** một bảng tạm từng xoá theo luôn toàn bộ lịch sử của
+      bảng đó (mất dấu vết ai đã chấm gì lúc nào); và người đang bổ sung Napas vào bảng người
+      khác, sau khi bấm Lưu thì màn hình lặng lẽ chuyển sang chế độ "làm bảng mới" trong khi số
+      liệu của người kia vẫn còn trên màn hình — bấm Lưu lần nữa sẽ đẻ ra một bảng thừa
+
+- 05/09/2026 Nghỉ phép - **Ứng phép năm sau khi hết hạn mức, trưởng/phó phòng duyệt thay nhau, báo cáo chấm công tháng**
+    + **Hết ngày phép vẫn xin nghỉ được — bằng cách ứng trước của năm sau.** Trước đây xin quá số
+      ngày còn lại là bị chặn thẳng, không còn đường nào khác. Nay phần mềm hỏi lại *"Đơn đã vượt
+      hạn mức năm nay, có ứng trước N ngày của năm sau không?"*. Đồng ý thì đơn được tạo, và số
+      ngày ứng đó **bị trừ thật vào quỹ phép năm sau** — không phải lời nhắc suông. Ứng vượt cả
+      quỹ năm sau thì vẫn bị chặn
+    + **Người duyệt thấy rõ đơn nào có ứng phép.** Cả ba bước duyệt (KSV, Tổng hợp, Ban lãnh đạo)
+      và cả nút duyệt hàng loạt đều hiện cảnh báo nêu tên người xin nghỉ và năm bị ứng trước khi
+      duyệt thật
+    + **Trưởng / phó phòng cùng phòng nay duyệt thay nhau được ở bước KSV.** Trước đây chỉ đúng
+      người được chọn lúc nộp đơn mới bấm được — người đó đi công tác hay nghỉ phép thì đơn nằm
+      đó vô thời hạn, chỉ quản trị viên gỡ được. Nay bất kỳ trưởng / phó phòng nào **cùng phòng
+      với người xin nghỉ** đều duyệt được (vẫn không ai tự duyệt đơn của mình)
+    + **Tab "Báo cáo năm" đổi tên thành "Báo cáo tổng hợp"**, thêm mục *Báo cáo hàng tháng* chọn
+      riêng năm / tháng
+    + **Báo cáo chấm công tháng (file Excel)** dựng theo mẫu giấy "Tổng hợp chấm công TTTT" —
+      nhóm theo phòng, **X** = đi làm, **P** = nghỉ phép, ô để trống tô màu = T7/CN/ngày lễ.
+      ⚠️ **Chỉ điền được hai cột đó.** Các buổi họp / tập huấn / công tác và cột xếp loại thi đua
+      **không có trong phần mềm** nên để trống, phòng Tổng hợp điền tay sau khi tải về — đã ghi
+      chú ngay cuối bảng trong file
+    + **Rê chuột trên bảng đơn nghỉ phép nay sáng cả dòng lẫn cột** như Excel, đỡ dóng nhầm hàng
+    + **Nút "Tải phiếu" hết bị rớt về bản chưa ký.** Lần in đầu tiên sau khi máy chủ khởi động,
+      Word cần tới hơn một phút để sẵn sàng; phần mềm chỉ chờ 60 giây rồi bỏ cuộc và đưa bản
+      `.docx` chưa có chữ ký. Nay chờ đủ 160 giây
+    + ⚠️ **QUAN TRỌNG — số ngày phép năm của một số người sẽ thay đổi sau lần cập nhật này.**
+      Công thức thâm niên trước đây cộng thêm 1 ngày **mỗi 4 năm** vào ngành; đúng luật phải là
+      **mỗi 5 năm**. Đối chiếu báo cáo thật năm 2026: mốc 5 năm khớp **67/72** người, mốc 4 năm cũ
+      chỉ khớp **12/72**. Ai vào ngành đủ 4, 8, 12… năm sẽ **giảm 1 ngày** so với con số phần mềm
+      hiển thị trước đây. Người nào đã nghỉ hết số cũ thì lần xin nghỉ tới sẽ báo hết phép —
+      **báo lại cho phòng Tổng hợp chỉnh tay ở tab Hạn mức phép**, đừng tự đoán
+    + ⚠️→✅ **~~Ngày phép chuyển từ năm trước hiện chưa hết hạn 31/03 như quy định~~ — đã sửa, xem
+      entry mới nhất ở trên cùng.** Trước đây đơn nghỉ vào tháng 6, tháng 10 vẫn được cộng thêm
+      số ngày chuyển năm
+    + ⚠️→✅ **~~Nộp lại đơn bị từ chối mà vượt hạn mức thì chưa hỏi ứng phép~~ — đã sửa, xem entry
+      mới nhất ở trên cùng.** Trước đây vẫn báo lỗi và dừng (tạo đơn mới và khai báo hộ thì đã có)
+    + ⚠️→✅ **~~Đơn nghỉ vắt qua Tết dương lịch mà có ứng phép sẽ bị đếm thiếu ngày~~ — đã sửa,
+      xem entry mới nhất ở trên cùng.** Trước đây chỉ ảnh hưởng đơn bắt đầu năm này kết thúc năm
+      sau và đồng thời vượt hạn mức
+- 05/09/2026 Nghỉ phép - **Nghỉ phép bắt buộc: đăng ký, điều chỉnh ngày, và mẫu đơn riêng theo chức danh**
+    + **Điều chỉnh ngày nghỉ phép bắt buộc sau khi đơn đã duyệt xong.** Đơn đã "Hoàn thành" nay có
+      nút *"Điều chỉnh ngày NPBB"*. Bấm vào sẽ tạo **một đơn mới**, đi lại đủ ba bước duyệt như đơn
+      thường. **Đơn cũ không bị xoá và không bị sửa** — nó vẫn nằm nguyên đó cho tới khi đơn mới
+      duyệt xong mới chuyển thành *"Đã hủy - Đã điều chỉnh"*. Mở đơn nào cũng thấy đường dẫn sang
+      đơn kia, nên lúc nào cũng đối chiếu được ngày đã đăng ký với ngày xin đổi
+    + **Mẫu đơn xin nghỉ phép năm nay in đúng theo chức danh.** Trước đây nhân viên, trưởng/phó
+      phòng, Giám đốc, Phó Giám đốc **in ra cùng một tờ giấy** — phần mềm có sẵn danh sách 4 mẫu
+      riêng nhưng 4 file mẫu đó **chưa từng được đặt vào máy**, nên nó lặng lẽ quay về dùng mẫu
+      chung. Không báo lỗi, không ai biết. Nay đã có đủ 4 mẫu thật
+    + **Đơn của Giám đốc trước đây "kính gửi Giám đốc Trung tâm Thanh toán"** — tức là gửi cho
+      chính mình. Đối chiếu mẫu giấy thật, nay sửa thành **Tổng Giám đốc Agribank**
+    + **Thêm 2 mẫu đơn cá nhân** (đăng ký / điều chỉnh nghỉ phép bắt buộc, "Mẫu 1 TCNS") và
+      **báo cáo tổng hợp Mẫu 18 (nội bộ) / Mẫu 19 (gửi TCNS)** cho phòng Tổng hợp
+    + ⚠️→✅ **~~CHƯA DÙNG ĐƯỢC "Báo cáo NPBB" (Mẫu 18/19)~~ — đã sửa, xem entry mới nhất ở trên.**
+      Báo cáo này từng **liệt kê nhầm gần như toàn bộ nhân sự** kèm khoảng ngày không có thật.
+      Nguyên nhân thật rộng hơn tưởng ban đầu: không phải riêng báo cáo NPBB bỏ sót lọc dòng tổng
+      hợp, mà là lỗi SQL khiến MỌI danh sách/báo cáo đơn nghỉ phép âm thầm bỏ sót đơn thật không
+      nhập lý do — xem chi tiết ở entry mới nhất
+    + ⚠️→✅ **~~Số "Đã nghỉ" hiển thị có thể lớn hơn thực tế~~ — đã sửa, xem entry mới nhất ở trên.**
+      Ghi chú lúc đó "*tab Hạn mức phép vẫn đúng*" **hoá ra chưa chính xác** — chính tab đó cũng bị
+      đếm trùng đơn gốc/đơn điều chỉnh trong lúc đơn điều chỉnh còn chờ duyệt, chỉ là bug khác với
+      bug ban đầu nghi ngờ. Đã sửa cả 2
+    + ✅ **Màn hình danh sách đơn nghỉ phép nhanh hơn** — trước đây mỗi đơn hiện ra tốn 4 lượt hỏi
+      cơ sở dữ liệu riêng, danh sách 1.000 đơn là hơn 4.000 lượt. Nay gộp lại còn 6 lượt cho cả
+      danh sách, bất kể bao nhiêu đơn (đo được: 118 ms → 33 ms cho 991 đơn)
+    + ✅ **Không phải làm gì sau khi cập nhật** — không đổi quyền, không đổi thao tác cũ
+
+- 05/09/2026 Chấm ILO1000 - **Sửa lỗi giao dịch bình thường bị gán nhầm "Đã hủy"**
+    + Người chấm phản ánh ngay trên file kết quả ngày **26/08**: nhiều món **sheet Hub ghi "Hoàn
+      thành"** nhưng hệ thống chấm lại ghi **"Đã hủy"** — 24 dòng, đều thuộc các đợt chi trả
+      **trợ cấp xã hội (BTXH)**
+    + Nguyên nhân: các đợt chi trả này **dùng chung một số hiệu đợt** cho nhiều chi nhánh cùng
+      tham gia — giống nhiều nhà chung một số nhà. Hệ thống tưởng đó là một giao dịch duy nhất,
+      nên khi **một** chi nhánh có lệnh hủy thật thì nó gán **"Đã hủy" cho cả các chi nhánh còn
+      lại**, dù những chi nhánh đó không liên quan gì
+    + Cách chữa: khi xét hủy, hệ thống nay ghép **số hiệu đợt + mã chi nhánh** làm một cặp, không
+      nhìn số hiệu đợt một mình nữa. Lệnh hủy của chi nhánh nào chỉ ảnh hưởng đúng chi nhánh đó
+    + ⚠️ **Kết quả đã chấm trước đây có thể sai — nên chấm lại.** Món nào hệ thống ghi "Đã hủy"
+      mà sheet Hub ghi "Hoàn thành" thì chạy lại file ngày đó để lấy kết quả đúng. **Lệnh hủy
+      thật vẫn được nhận ra đầy đủ như cũ**, không mất món nào
+    + ✅ **Không phải làm gì sau khi cập nhật** — không đổi giao diện, không đổi quyền, không đổi
+      thao tác
+
+- 04/09/2026 Danh sách CN TTQT - **Thêm nút xem lịch sử sửa đổi của từng chi nhánh**
+    + Cuối mỗi dòng trong bảng có thêm nút hình **đồng hồ quay ngược** 🕘. Bấm vào mở bảng:
+      **ngày giờ — người sửa — sửa mục nào — giá trị cũ → giá trị mới**
+    + Ghi cho **cả hai đường**: sửa tay trên giao diện và nhập file Excel. Mỗi trường thay đổi là
+      **một dòng riêng**, không gộp — nhìn ra ngay ai đổi số điện thoại, ai đổi mã SWIFT
+    + Nhập lại **đúng file Excel cũ** thì không sinh dòng nào, vì không có gì đổi thật. Bấm Lưu mà
+      không sửa gì cũng vậy. Lịch sử chỉ chứa thay đổi thật, không có dòng rác
+    + Chi nhánh **bị xoá vẫn giữ lịch sử**; nếu sau đó nhập lại cùng mã CN thì lịch sử cũ hiện
+      tiếp trong bản ghi mới — không mất dấu vết
+    + ⚠️ **Lịch sử tính từ hôm nay trở đi.** Các lần sửa trước đây không dựng lại được: sổ nhật ký
+      cũ chỉ ghi "đã sửa trường nào", không ghi sửa thành gì. Lúc chưa có dữ liệu, bảng hiện dòng
+      *"Chưa có thay đổi nào được ghi lại"*
+    + ⚠️ **Phải bật quyền thì nút mới hiện.** Vào **Phân quyền theo nhóm → Danh sách CN TTQT**,
+      tick ô *"Xem lịch sử sửa đổi"* cho các nhóm cần dùng
+
 - 04/09/2026 Đối chiếu Song phương - **Sửa lỗi khoá SPT bị Excel làm sai khi mở trực tiếp file CSV chi tiết**
     + Việc thật: người dùng báo cột **MtId/MsgId** (file `..._kenh_chi_tiet.csv`) và **TXID** (file
       `..._hub_chi_tiet.csv`) của SP THƯỜNG bị sai sau khi xuất kết quả — SP REALTIME thì không sao

@@ -217,6 +217,11 @@ def _dong_thua_nguon(r, chieu, so_gd_key, status, n_dup, n_citad, cong, nguon):
         'so_tien': r.get('so_tien', 0), 'ngay': r.get('ngay', ''), 'status': status,
         'key_agri': so_gd_key, 'nh_nhan': r.get('nh_nhan', ''),
         'trang_thai': r.get('trang_thai', ''),
+        # `refhub` chỉ có thật khi `nguon='IPCAS'` (Hub không parse field
+        # này) — `.get()` tự trả '' cho trường hợp Hub, không cần nhánh
+        # riêng (cùng lý do đồng nhất đã áp dụng ở nhánh Hub khớp trong
+        # run_doiSoat_ram()).
+        'refhub': r.get('refhub', ''),
     }
     ghi_chu = f'1 trong {n_dup} lần {nguon} ghi nhận lệnh này'
     if n_citad > 0:
@@ -244,6 +249,13 @@ def run_doiSoat_ram(citad_rows, ipcas_rows, hub_rows):
     # đầu tiên thắng" thuần tuý, vì thứ tự dòng trong file không ổn định.
     ipcas_di_map = {}
     ipcas_den_map = {}
+    # Dòng IPCAS SCNL nhưng thiếu ngày kênh trả (`nkt_thieu`, xem
+    # parsers.py) — KHÔNG cho vào `ipcas_di_map` (không được tự động khớp,
+    # đúng ý gốc 27/08/2026) nhưng vẫn giữ riêng ở đây để lấy `refhub` khi
+    # ghép vào dòng "Chỉ CITAD" tương ứng (xác nhận Phòng Thanh toán
+    # 09/09/2026: case này lệnh RẤT CÓ THỂ vẫn tồn tại ở Agribank, không
+    # giống "Chỉ CITAD" thường — người chấm cần refhub để tự tra cứu).
+    ipcas_di_nkt_thieu_map = {}
     # Đếm theo khoá MỊN (_ipcas_identity_key, xem docstring) — "dòng này bị
     # lặp lại y hệt bao nhiêu lần", KHÔNG PHẢI đếm theo khoá khớp lệnh thô
     # (msgref / txid+loai+so_tien) ở map bên dưới. Hai việc khác nhau: map
@@ -252,11 +264,25 @@ def run_doiSoat_ram(citad_rows, ipcas_rows, hub_rows):
     # phải dùng khoá mịn để không hiểu nhầm 2 lệnh thật khác nhau là trùng.
     ipcas_identity_count = {}
     for r in ipcas_rows:
-        ik = _ipcas_identity_key(r)
-        ipcas_identity_count[ik] = ipcas_identity_count.get(ik, 0) + 1
+        # Loại `nkt_thieu` khỏi đếm khoá mịn (09/09/2026, phát hiện qua rà
+        # soát): dòng này KHÔNG tham gia khớp lệnh (bị loại khỏi
+        # ipcas_di_map ngay dưới đây), giữ nguyên hành vi CŨ trước khi có cờ
+        # `nkt_thieu` — lúc đó dòng này còn bị `continue` ngay ở parsers.py
+        # nên chưa từng vào tới đây. Nếu không loại, dòng nkt_thieu có thể
+        # trùng khoá mịn với 1 dòng KHỚP khác (msgref khác — khoá mịn cố ý
+        # không có msgref) và làm dòng khớp đó bị tính dư 1 lần "trùng":
+        # vừa sai ghi_chú "IPCAS ghi nhận N lần", vừa sinh thêm 1 dòng "Chỉ
+        # IPCAS" ma ở khoá không liên quan — trong khi dòng nkt_thieu đã tự
+        # có đại diện đúng riêng (dòng "Chỉ CITAD" kèm refhub, xem bên dưới).
+        if not r.get('nkt_thieu'):
+            ik = _ipcas_identity_key(r)
+            ipcas_identity_count[ik] = ipcas_identity_count.get(ik, 0) + 1
         if r['chieu'] == 'di':
             k = r['msgref']
             if not k:
+                continue
+            if r.get('nkt_thieu'):
+                ipcas_di_nkt_thieu_map.setdefault(k, r)
                 continue
             if k not in ipcas_di_map:
                 ipcas_di_map[k] = r
@@ -428,6 +454,13 @@ def run_doiSoat_ram(citad_rows, ipcas_rows, hub_rows):
                 row = {
                     **r, 'status': 'both', 'key_agri': m.get('so_gd', sogd),
                     'nh_nhan': m.get('nh_nhan', ''), 'trang_thai': '',
+                    # Hub hiện KHÔNG parse `refhub` (field chỉ có ở
+                    # _parse_ipcas_text) nên luôn ra '' ở nhánh này — giữ
+                    # dòng này cho ĐỒNG NHẤT với 2 nhánh IPCAS phía dưới
+                    # (cứ dòng nào có refhub thì hiện, không hardcode loại
+                    # trừ riêng ngoại tệ), tự động hiện đúng nếu sau này Hub
+                    # có thêm field này.
+                    'refhub': m.get('refhub', ''),
                 }
                 n_dup_m = hub_identity_count.get(_hub_identity_key(m), 1)
                 if chieu == 'di':
@@ -469,6 +502,13 @@ def run_doiSoat_ram(citad_rows, ipcas_rows, hub_rows):
                     row = {
                         **r, 'status': 'both', 'key_agri': m.get('msgref', sogd),
                         'nh_nhan': m.get('nh_nhan', ''), 'trang_thai': tt,
+                        # `refhub` chỉ có ở dòng gốc IPCAS (`m`), không có ở
+                        # `r` (CITAD) — chép qua đây để cột "Số RefHub" ở
+                        # exporters.py hiện ĐÚNG cho mọi lệnh có refhub, kể cả
+                        # đã khớp (yêu cầu Phòng Thanh toán 09/09/2026, trước
+                        # đó dòng khớp luôn trống vì merge không chép field
+                        # này — chỉ dòng "Chỉ Agribank" chưa khớp mới có).
+                        'refhub': m.get('refhub', ''),
                     }
                     ghi_chu = _ghi_chu_khop_du_nguon(
                         r.get('cong'), ipcas_identity_count.get(_ipcas_identity_key(m), 1), 1,
@@ -505,7 +545,17 @@ def run_doiSoat_ram(citad_rows, ipcas_rows, hub_rows):
                         row['ghi_chu'] = ' | '.join(ghi_chu_parts)
                     lech.append(row)
             else:
-                lech.append({**r, 'status': 'only_citad', 'key_agri': '', 'nh_nhan': '', 'trang_thai': ''})
+                row = {**r, 'status': 'only_citad', 'key_agri': '', 'nh_nhan': '', 'trang_thai': ''}
+                # Case đặc biệt (xác nhận Phòng Thanh toán 09/09/2026): lệnh
+                # này rơi vào "Chỉ CITAD" KHÔNG PHẢI vì IPCAS thật sự không
+                # có — mà vì IPCAS báo SCNL nhưng thiếu ngày kênh trả nên bị
+                # loại khỏi diện tự động khớp (xem `nkt_thieu` ở parsers.py).
+                # Lệnh RẤT CÓ THỂ vẫn tồn tại ở Agribank — gắn refhub để
+                # người chấm tự tra cứu, không để trống như "Chỉ CITAD" thường.
+                nkt_thieu_row = ipcas_di_nkt_thieu_map.get(sogd)
+                if nkt_thieu_row:
+                    row['refhub'] = nkt_thieu_row.get('refhub', '')
+                lech.append(row)
 
         else:
             # VND Đến: giữ nguyên như cũ, không check trạng thái — khoá tra
@@ -521,6 +571,9 @@ def run_doiSoat_ram(citad_rows, ipcas_rows, hub_rows):
                 row = {
                     **r, 'status': 'both', 'key_agri': m.get('txid', sogd),
                     'nh_nhan': m.get('nh_nhan', ''), 'trang_thai': m.get('trang_thai', ''),
+                    # Chép `refhub` từ dòng IPCAS đã khớp — xem ghi chú ở
+                    # nhánh VND Đi phía trên, cùng lý do.
+                    'refhub': m.get('refhub', ''),
                 }
                 citad_cong_den[k_den] = r.get('cong')
                 ghi_chu = _ghi_chu_khop_du_nguon(
@@ -558,6 +611,13 @@ def run_doiSoat_ram(citad_rows, ipcas_rows, hub_rows):
                 'chieu': 'di', 'loai_tien': 'VND', 'so_tien': r.get('so_tien', 0),
                 'ngay': r.get('ngay', ''), 'status': 'only_ipcas',
                 'key_agri': k, 'nh_nhan': r.get('nh_nhan', ''), 'trang_thai': r.get('trang_thai', ''),
+                # `refhub` — dict này liệt kê tường minh từng field thay vì
+                # `**r` nên thiếu field mới thêm sau (bug thật, phát hiện qua
+                # ảnh chụp thật 09/09/2026: dòng "Chỉ IPCAS" — đúng nơi
+                # refhub có sẵn 100% — lại trống trơn). `r` ở đây CHÍNH LÀ
+                # dòng gốc IPCAS nên field này luôn có sẵn, không cần đi qua
+                # đâu khác như 3 nhánh 'both' ở trên.
+                'refhub': r.get('refhub', ''),
             })
         # n_citad: VND Đi luôn đúng 1 khi matched (CITAD trùng đã lọc riêng
         # thành dup_citad ở trên) — trừ thêm 1 khi KHÔNG matched vì dòng
@@ -596,6 +656,7 @@ def run_doiSoat_ram(citad_rows, ipcas_rows, hub_rows):
                 'chieu': 'den', 'loai_tien': 'VND', 'so_tien': r.get('so_tien', 0),
                 'ngay': r.get('ngay', ''), 'status': 'only_ipcas',
                 'key_agri': k[0], 'nh_nhan': r.get('nh_nhan', ''), 'trang_thai': r.get('trang_thai', ''),
+                'refhub': r.get('refhub', ''),  # xem ghi chú nhánh Đi phía trên
             })
         # n_citad = số dòng CITAD Đến THẬT trùng khoá này (có thể > 1 — xem
         # ghi chú citad_den_vnd_count ở đầu hàm), KHÔNG giả định luôn là 1.

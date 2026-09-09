@@ -520,6 +520,10 @@ def _parse_ipcas_text(text, filename, ngay_cham):
         so_tien = _parse_so_tien(gv('SO_TIEN'))
         kenh = gv('KENH_THANH_TOAN').lower()
 
+        # `nkt_thieu` chỉ có ý nghĩa ở chiều Đi (SCNL + thiếu ngày kênh trả,
+        # xem bên dưới) — mặc định False, chiều Đến không đụng tới.
+        nkt_thieu = False
+
         # Filter theo chiều
         if chieu == 'di':
             # Giu: SCNL (thanh cong) + WFPG/SBFL/RFED/SDEB/SBSC/RTSC (dang xu
@@ -537,11 +541,22 @@ def _parse_ipcas_text(text, filename, ngay_cham):
             # thành công, nhưng NGAY_KENH_TRA vẫn trống nghĩa là kênh CHƯA
             # THỰC SỰ xác nhận ngày trả — giữ nguyên coi là khớp (VALID_DI ở
             # reconcile.py) sẽ khớp "khống" với CITAD dù chưa có xác nhận
-            # thật. Bỏ khỏi kết quả IPCAS (không chỉ khỏi diện SCNL=khớp) để
-            # lệnh CITAD tương ứng (nếu có) rơi đúng vào "Chỉ CITAD" — cần
-            # người dùng tự xác minh, không tự động khớp.
-            if has_nkt and tt == 'SCNL' and not nkt:
-                continue
+            # thật. KHÔNG cho tự động khớp — để lệnh CITAD tương ứng (nếu
+            # có) rơi đúng vào "Chỉ CITAD", cần người dùng tự xác minh.
+            #
+            # 09/09/2026: TRƯỚC ĐÂY `continue` bỏ hẳn dòng này khỏi kết quả
+            # IPCAS — nhưng lệnh này rất có thể VẪN tồn tại thật ở Agribank
+            # (chỉ là IPCAS chưa xác nhận xong ngày kênh trả), nên xoá sạch
+            # làm mất luôn `refhub` — thứ người chấm cần để tự tra cứu bên
+            # Agribank khi thấy dòng "Chỉ CITAD" này (xác nhận Phòng Thanh
+            # toán 09/09/2026: case đặc biệt, không giống "Chỉ CITAD" thường
+            # — thường thì CITAD thật sự không có gì bên IPCAS để tra). Đánh
+            # dấu `nkt_thieu=True` rồi CHO ĐI TIẾP (không continue) — vẫn
+            # trải qua đúng bộ lọc ngày bên dưới như mọi dòng khác. reconcile.py
+            # đọc cờ này để KHÔNG cho vào diện tự động khớp (giữ nguyên ý
+            # ban đầu) nhưng vẫn lấy được `refhub` khi ghép vào dòng "Chỉ
+            # CITAD" tương ứng.
+            nkt_thieu = has_nkt and tt == 'SCNL' and not nkt
             if ngay_cham:
                 if has_nkt:
                     if nkt and nkt != ngay_cham:
@@ -581,6 +596,11 @@ def _parse_ipcas_text(text, filename, ngay_cham):
             'kenh': gv('KENH_THANH_TOAN'),
             'nh_nhan': nh_nhan,
             'ngay': ngay_gd,
+            # SCNL nhưng chưa có ngày kênh trả (xem ghi chú ở nhánh chiều Đi
+            # phía trên) — reconcile.py đọc cờ này để KHÔNG cho vào diện tự
+            # động khớp, nhưng vẫn giữ được `refhub` khi ghép vào dòng "Chỉ
+            # CITAD" tương ứng.
+            'nkt_thieu': nkt_thieu,
             # `chi_nhanh` — CHỈ để reconcile.py so khớp "có phải cùng 1 bản
             # ghi IPCAS bị lặp lại y hệt hay không" (khoá mịn), KHÔNG dùng để
             # khớp lệnh với CITAD (khoá khớp lệnh vẫn là txid/msgref+loai+

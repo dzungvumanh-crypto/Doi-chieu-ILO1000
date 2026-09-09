@@ -31,7 +31,8 @@ CREATE TABLE duty_special_days (
     label TEXT, is_confirmed INTEGER DEFAULT 0, created_at DATETIME);
 CREATE TABLE leave_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INT, start_date TEXT, end_date TEXT,
-    leave_type TEXT DEFAULT 'annual', status TEXT, spread_dates TEXT, reason TEXT);
+    leave_type TEXT DEFAULT 'annual', status TEXT, spread_dates TEXT, reason TEXT,
+    borrow_next_year_days REAL DEFAULT 0, adjusts_leave_id INT, other_deduct_quota INT DEFAULT 1);
 CREATE TABLE leave_quotas (staff_id INT, year INT, quota_days REAL);
 CREATE TABLE user_tttt (id INTEGER PRIMARY KEY, join_industry_date TEXT);
 """

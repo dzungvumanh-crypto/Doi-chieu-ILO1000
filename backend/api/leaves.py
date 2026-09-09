@@ -10,7 +10,7 @@ import unicodedata
 from datetime import date, timedelta
 from typing import FrozenSet, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 from backend.core.concurrency import run_heavy
@@ -31,11 +31,13 @@ from backend.services import leave_pdf
 router = APIRouter()
 
 LEAVE_TYPE_LABELS = {
-    "bat_buoc":  "Nghỉ phép bắt buộc",
-    "annual":    "Nghỉ phép năm",
-    "thai_san":  "Nghỉ thai sản",
-    "bao_hiem":  "Nghỉ bảo hiểm",
-    "other":     "Khác",
+    "bat_buoc":    "Nghỉ phép bắt buộc",
+    "annual":      "Nghỉ phép năm",
+    "thai_san":    "Nghỉ thai sản",
+    "bao_hiem":    "Nghỉ bảo hiểm",
+    "khong_luong": "Nghỉ không lương",
+    "hop_cong_tac": "Họp/Công tác",
+    "other":       "Khác",
     # Legacy types (giữ để tương thích với data cũ)
     "sick":      "Nghỉ ốm",
     "personal":  "Nghỉ việc riêng",
@@ -43,8 +45,26 @@ LEAVE_TYPE_LABELS = {
 }
 
 _VALID_LEAVE_TYPES = frozenset(LEAVE_TYPE_LABELS.keys())
-# Các loại nghỉ không tính vào/trừ hạn mức phép năm
-_NO_QUOTA_TYPES = frozenset({"thai_san", "bao_hiem"})
+# Các loại nghỉ không tính vào/trừ hạn mức phép năm — nghỉ không lương cũng
+# không dùng tới hạn mức phép năm (nghỉ hẳn không lương, không phải trừ phép).
+_NO_QUOTA_TYPES = frozenset({"thai_san", "bao_hiem", "khong_luong", "hop_cong_tac"})
+
+# leave_type="other" (Khác) không cố định miễn/trừ quota như các loại trên —
+# người tạo đơn tự chọn qua cột other_deduct_quota (mặc định 1 = có trừ,
+# giống "annual", khớp hành vi cũ trước khi có lựa chọn này). Chọn "Không" thì
+# ghi nhận y hệt các loại trong _NO_QUOTA_TYPES — không tính toán gì thêm.
+# Dùng ở nơi đã có sẵn 2 giá trị Python (leave_type, other_deduct_quota); các
+# câu SQL tự thêm điều kiện tương đương "AND NOT (leave_type='other' AND
+# other_deduct_quota=0)" cạnh mọi chỗ có "leave_type NOT IN (...)" ở trên.
+def _is_no_quota_row(leave_type: str, other_deduct_quota) -> bool:
+    if leave_type in _NO_QUOTA_TYPES:
+        return True
+    if leave_type == "other":
+        return not bool(other_deduct_quota if other_deduct_quota is not None else True)
+    return False
+
+
+_OTHER_NO_QUOTA_SQL = "AND NOT (leave_type='other' AND other_deduct_quota=0)"
 
 ACTION_LABELS = {
     "create":         ("Nộp đơn",            "blue"),
@@ -55,6 +75,9 @@ ACTION_LABELS = {
     "gd_approve":     ("GĐ phê duyệt",       "green"),
     "gd_reject":      ("GĐ từ chối",         "red"),
     "resubmit":       ("Nộp lại",            "orange"),
+    "npbb_adjust":    ("Điều chỉnh ngày NPBB", "orange"),
+    "npbb_adjusted_cancel": ("Đơn gốc bị thay bởi đơn điều chỉnh", "grey"),
+    "npbb_adjustment_recalled": ("Đơn gốc được khôi phục do đơn điều chỉnh bị rút/hủy", "grey"),
     "cancel":         ("Hủy đơn",            "grey"),
     "direct_create":  ("Khai báo hộ",        "purple"),
     "recall_request": ("Yêu cầu rút đơn",    "orange"),
@@ -77,6 +100,13 @@ _HIGH_ROLES = frozenset(("giam_doc", "pho_giam_doc", "admin", "truong_phong"))
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
+_NO_ACTIVE_ADJ_SQL = (
+    "AND NOT EXISTS (SELECT 1 FROM leave_records adj "
+    "WHERE adj.adjusts_leave_id = leave_records.id "
+    "AND adj.status NOT IN ('rejected','cancelled'))"
+)
+
+
 def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
                     exclude_id: int | None = None,
                     include_pending: bool = False) -> float:
@@ -85,6 +115,18 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
     Đếm tất cả loại TRỪ thai_san/bao_hiem.
     include_pending=True: cộng thêm đơn đang chờ duyệt (dùng khi kiểm tra quota lúc nộp lại).
     exclude_id: bỏ qua đơn đang xem (dùng khi in phiếu).
+
+    Có tính "ứng phép năm sau" (borrow_next_year_days, xem
+    _check_quota_or_borrow): phần đã ứng bị trừ khỏi năm gốc của đơn, cộng
+    sang năm sau — nên đơn tạo năm N-1 có ứng vẫn cộng đúng vào năm N dù ngày
+    nghỉ thực tế không nằm trong năm N.
+
+    Đơn NPBB gốc (bat_buoc) đang có đơn điều chỉnh CÒN HIỆU LỰC (chưa bị từ
+    chối/hủy, kể cả khi đơn điều chỉnh còn đang chờ duyệt) bị loại khỏi tổng —
+    nếu không, cả đơn gốc (vẫn 'approved' cho tới khi đơn điều chỉnh duyệt xong
+    hẳn, xem _cancel_adjusted_original) LẪN đơn điều chỉnh (include_pending=True
+    cộng luôn cả pending) cùng cộng vào, ra hạn mức "đã dùng" gấp đôi ảo trong
+    lúc đơn điều chỉnh còn đang xử lý.
     """
     if include_pending:
         statuses = ("'approved','pending_ksv','pending_tong_hop','pending_gd'")
@@ -99,26 +141,56 @@ def _calc_used_days(staff_id: int, year: int, db: sqlite3.Connection,
     # rơi vào năm đang tính, xem thêm vòng lặp clip theo d.year bên dưới.
     params += [f"{year}-12-31", f"{year}-01-01"]
     rows = db.execute(
-        f"""SELECT spread_dates, start_date, end_date FROM leave_records
+        f"""SELECT spread_dates, start_date, end_date, borrow_next_year_days FROM leave_records
             WHERE staff_id=? {excl} AND status IN ({statuses})
-              AND leave_type NOT IN ('thai_san','bao_hiem')
-              AND start_date <= ? AND end_date >= ?""",
+              AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              {_OTHER_NO_QUOTA_SQL}
+              AND start_date <= ? AND end_date >= ?
+              {_NO_ACTIVE_ADJ_SQL}""",
         params,
     ).fetchall()
     total = 0.0
     _lich: LichLamViec | None = None  # lazy load khi cần
     for row in rows:
+        borrow = row["borrow_next_year_days"] or 0.0
+        # borrow_next_year_days là số ngày VƯỢT hạn mức năm GỐC (năm chứa
+        # start_date, xem _check_quota_or_borrow) bị chuyển sang tính vào năm
+        # sau — không phải "số ngày rơi vào năm sau" theo lịch. Đơn vắt qua
+        # ranh giới năm (vd 29/12→02/01) đồng thời khớp CẢ 2 câu SELECT ở đây
+        # (năm gốc lẫn năm sau, vì cùng chồng lấn khoảng ngày) — nếu trừ borrow
+        # ở MỌI năm đơn này chồng lấn tới (thay vì chỉ năm gốc) thì phần ngày
+        # đã "ứng" bị trừ 2 lần, tổng dùng cả 2 năm cộng lại hụt mất đúng bằng
+        # borrow (bug thật, xem audit — 5 ngày thực tế chỉ còn ra tổng 3).
+        row_start_year = date.fromisoformat(row["start_date"]).year
+        own_borrow = borrow if row_start_year == year else 0.0
         if row["spread_dates"]:
-            total += len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
+            yr_count = len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
         else:
             if _lich is None:
                 _lich = _load_lich(db, date(year, 1, 1), date(year, 12, 31))
             d = date.fromisoformat(row["start_date"])
             e = date.fromisoformat(row["end_date"])
+            yr_count = 0
             while d <= e:
                 if d.year == year and la_ngay_lam_viec(d, _lich):
-                    total += 1
+                    yr_count += 1
                 d += timedelta(days=1)
+        total += yr_count - own_borrow
+    # Phần ứng TỪ năm trước SANG năm đang tính — đơn gốc nằm hẳn ở year-1
+    # nhưng phần vượt hạn mức đã được tính vào year, cộng riêng ở đây vì câu
+    # SELECT trên chỉ lấy đơn có ngày nghỉ chồng lên year.
+    borrowed_params: list = [staff_id]
+    if exclude_id is not None:
+        borrowed_params.append(exclude_id)
+    borrowed_params.append(str(year - 1))
+    for row in db.execute(
+        f"""SELECT borrow_next_year_days FROM leave_records
+            WHERE staff_id=? {excl} AND status IN ({statuses})
+              AND strftime('%Y', start_date) = ?
+              {_NO_ACTIVE_ADJ_SQL}""",
+        borrowed_params,
+    ).fetchall():
+        total += row["borrow_next_year_days"] or 0.0
     return total
 
 
@@ -134,26 +206,44 @@ def _calc_used_days_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
                 if include_pending else "'approved'")
     placeholders = ",".join("?" * len(staff_ids))
     rows = db.execute(
-        f"""SELECT staff_id, spread_dates, start_date, end_date FROM leave_records
+        f"""SELECT staff_id, spread_dates, start_date, end_date, borrow_next_year_days FROM leave_records
             WHERE staff_id IN ({placeholders}) AND status IN ({statuses})
-              AND leave_type NOT IN ('thai_san','bao_hiem')
-              AND start_date <= ? AND end_date >= ?""",
+              AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              {_OTHER_NO_QUOTA_SQL}
+              AND start_date <= ? AND end_date >= ?
+              {_NO_ACTIVE_ADJ_SQL}""",
         list(staff_ids) + [f"{year}-12-31", f"{year}-01-01"],
     ).fetchall()
     result = {sid: 0.0 for sid in staff_ids}
     _lich: LichLamViec | None = None
     for row in rows:
+        borrow = row["borrow_next_year_days"] or 0.0
+        # Chỉ trừ borrow ở đúng năm GỐC (năm chứa start_date) — xem chú thích
+        # đầy đủ trong _calc_used_days, cùng 1 bug/1 cách sửa.
+        row_start_year = date.fromisoformat(row["start_date"]).year
+        own_borrow = borrow if row_start_year == year else 0.0
         if row["spread_dates"]:
-            result[row["staff_id"]] += len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
+            yr_count = len([d for d in json.loads(row["spread_dates"]) if d.startswith(str(year))])
         else:
             if _lich is None:
                 _lich = _load_lich(db, date(year, 1, 1), date(year, 12, 31))
             d = date.fromisoformat(row["start_date"])
             e = date.fromisoformat(row["end_date"])
+            yr_count = 0
             while d <= e:
                 if d.year == year and la_ngay_lam_viec(d, _lich):
-                    result[row["staff_id"]] += 1
+                    yr_count += 1
                 d += timedelta(days=1)
+        result[row["staff_id"]] += yr_count - own_borrow
+    # Phần ứng TỪ năm trước SANG năm đang tính — xem chú thích trong _calc_used_days.
+    for row in db.execute(
+        f"""SELECT staff_id, borrow_next_year_days FROM leave_records
+            WHERE staff_id IN ({placeholders}) AND status IN ({statuses})
+              AND strftime('%Y', start_date) = ?
+              {_NO_ACTIVE_ADJ_SQL}""",
+        list(staff_ids) + [str(year - 1)],
+    ).fetchall():
+        result[row["staff_id"]] += row["borrow_next_year_days"] or 0.0
     return result
 
 
@@ -186,26 +276,37 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
     used_by_staff: dict = {}
     _lich: LichLamViec | None = None
     for r in db.execute(
-        f"""SELECT staff_id, start_date, end_date, spread_dates FROM leave_records
+        f"""SELECT staff_id, start_date, end_date, spread_dates, borrow_next_year_days FROM leave_records
            WHERE staff_id IN ({placeholders}) AND status='approved'
-             AND leave_type NOT IN ('thai_san','bao_hiem')
+             AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+             {_OTHER_NO_QUOTA_SQL}
              AND start_date <= ? AND end_date >= ?""",
         list(staff_ids) + [f"{prev_year}-12-31", f"{prev_year}-01-01"],
     ).fetchall():
         sid = r["staff_id"]
+        # Phần đã "ứng" sang year (= prev_year + 1) không tính là đã dùng của
+        # prev_year — nếu không carry-over sẽ bị tính hụt (coi như dùng hết cả
+        # phần đã chuyển sang năm sau), xem _check_quota_or_borrow. Chỉ trừ ở
+        # đúng năm gốc của đơn — xem chú thích đầy đủ trong compute_carry_over
+        # (backend/database.py) và _calc_used_days, cùng 1 bug/1 cách sửa.
+        borrow = r["borrow_next_year_days"] or 0.0
+        row_start_year = date.fromisoformat(r["start_date"]).year
+        own_borrow = borrow if row_start_year == prev_year else 0.0
         if r["spread_dates"]:
             used_by_staff[sid] = used_by_staff.get(sid, 0.0) + len(
                 [d for d in json.loads(r["spread_dates"]) if d.startswith(str(prev_year))]
-            )
+            ) - own_borrow
         else:
             if _lich is None:
                 _lich = _load_lich(db, date(prev_year, 1, 1), date(prev_year, 12, 31))
             d = date.fromisoformat(r["start_date"])
             e = date.fromisoformat(r["end_date"])
+            yr_count = 0
             while d <= e:
                 if d.year == prev_year and la_ngay_lam_viec(d, _lich):
-                    used_by_staff[sid] = used_by_staff.get(sid, 0.0) + 1
+                    yr_count += 1
                 d += timedelta(days=1)
+            used_by_staff[sid] = used_by_staff.get(sid, 0.0) + yr_count - own_borrow
     result = {}
     for sid in staff_ids:
         prev_quota = quota_by_staff.get(sid)
@@ -213,6 +314,70 @@ def _carry_over_bulk(staff_ids: list, year: int, db: sqlite3.Connection,
             prev_quota = float(compute_annual_leave(join_by_staff.get(sid), prev_year))
         result[sid] = max(0.0, prev_quota - used_by_staff.get(sid, 0.0))
     return result
+
+
+def _check_quota_or_borrow(staff_id: int, join_industry_date: Optional[str], leave_type: str,
+                           leave_days: float, ref_year: int, confirm_borrow: bool,
+                           db: sqlite3.Connection, eff_start: Optional[date] = None,
+                           other_deduct_quota: bool = True) -> float:
+    """Kiểm tra hạn mức phép năm — thay cho khối kiểm tra copy-paste ở
+    create_leave/resubmit_leave/create_direct_leave.
+
+    Trả về số ngày cần "ứng" trước vào hạn mức năm sau (0.0 nếu không vượt
+    hạn mức năm nay). bat_buoc/thai_san/bao_hiem không áp dụng — trả về 0.0
+    ngay, không đọc gì thêm (khớp _NO_QUOTA_TYPES + "!= bat_buoc" cũ).
+    leave_type="other" kèm other_deduct_quota=False cũng miễn hệt vậy — người
+    tạo đơn tự chọn "Khác" không tính vào hạn mức phép năm (xem _is_no_quota_row).
+
+    confirm_borrow=False mà vượt hạn mức: 409 kèm code "quota_exceeded_borrow"
+    để FE hiện popup hỏi "ứng phép năm sau" — KHÔNG phải lỗi cứng 400, người
+    dùng có thể xác nhận rồi gọi lại với confirm_borrow=True.
+    confirm_borrow=True mà năm sau CŨNG không đủ chỗ ứng: 400 cứng, không cho
+    tạo đơn dù đã đồng ý ứng (không ứng được "khống").
+    """
+    if leave_type == "bat_buoc" or _is_no_quota_row(leave_type, other_deduct_quota):
+        return 0.0
+
+    # ref_date=eff_start (ngày BẮT ĐẦU NGHỈ, không phải ngày bấm nộp đơn) — quy
+    # định "chuyển kỳ hết hạn sau 31/03" nói về ngày NGHỈ THẬT phải rơi trước
+    # mốc đó, không phải ngày nộp đơn (_build_form_ctx in phiếu cũng đã dùng
+    # ref_date=start từ trước — dùng "hôm nay" ở đây sẽ ra 2 con số khác nhau
+    # cho cùng 1 đơn vắt qua mốc 31/03, vd nộp 25/03 xin nghỉ 15/06). Trước đó
+    # nữa hard-code ref_date=date(ref_year, 1, 1) (luôn là 01/01) nên check
+    # "> 31/03" không bao giờ đúng — carry-over hết hạn không bao giờ được áp
+    # dụng, đơn nghỉ tạo tháng 6, tháng 10 vẫn cộng thêm ngày chuyển năm.
+    carry_eff = compute_carry_over(staff_id, ref_year, db, effective=True, ref_date=eff_start)
+    _q_row = db.execute(
+        "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
+        (staff_id, ref_year),
+    ).fetchone()
+    quota = (float(_q_row["quota_days"]) if _q_row
+             else float(compute_annual_leave(join_industry_date, ref_year)))
+    used_total = _calc_used_days(staff_id, ref_year, db, include_pending=True)
+    remaining = quota + carry_eff - used_total
+    if leave_days <= remaining:
+        return 0.0
+
+    overflow = leave_days - max(0.0, remaining)
+    if not confirm_borrow:
+        raise HTTPException(409, detail={
+            "code": "quota_exceeded_borrow",
+            "year": ref_year, "next_year": ref_year + 1,
+            "remaining": remaining, "borrow_days": overflow,
+        })
+
+    next_year = ref_year + 1
+    _q_next = db.execute(
+        "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
+        (staff_id, next_year),
+    ).fetchone()
+    next_quota = (float(_q_next["quota_days"]) if _q_next
+                  else float(compute_annual_leave(join_industry_date, next_year)))
+    next_used = _calc_used_days(staff_id, next_year, db, include_pending=True)
+    next_remaining = next_quota - next_used
+    if overflow > next_remaining:
+        raise HTTPException(400, f"Đã vượt quá hạn mức ngày nghỉ phép của năm {ref_year} và {next_year}")
+    return overflow
 
 
 def _load_lich(db: sqlite3.Connection, start: date, end: date) -> LichLamViec:
@@ -247,7 +412,7 @@ def _period_days(
 ) -> int:
     """Số ngày của khoảng nghỉ liên tục (khi không dùng spread_dates).
 
-    thai_san/bao_hiem: tính theo ngày lịch liên tục (kể cả T7, CN, lễ).
+    thai_san/bao_hiem/khong_luong/hop/cong_tac: tính theo ngày lịch liên tục (kể cả T7, CN, lễ).
     Các loại khác: chỉ tính ngày làm việc (calculate_leave_days).
     """
     if leave_type in _NO_QUOTA_TYPES:
@@ -295,6 +460,7 @@ def _apply_status_transition(
     db: sqlite3.Connection,
     days: Optional[int] = None,
     is_new: bool = False,
+    actor_id: Optional[int] = None,
 ):
     """Cập nhật status và điều chỉnh used_leave_days (idempotent).
 
@@ -302,17 +468,27 @@ def _apply_status_transition(
     truyền vào phải là status THẬT sự đang có trong DB (để khoá lạc quan khớp),
     còn is_new mới là cờ báo "coi như mới approved" để cộng used_leave_days dù
     old_status == new_status.
+
+    actor_id: người thực hiện thao tác gây ra chuyển trạng thái này — chỉ cần
+    khi transition approved→cancelled có thể là đơn điều chỉnh NPBB (để ghi
+    đúng actor cho log khôi phục đơn gốc, xem _restore_adjusted_original).
+    Mặc định lấy staff_id (chủ đơn) nếu người gọi không truyền — đủ dùng cho
+    các luồng tự huỷ, chỉ cancel_leave (admin/GĐ huỷ hộ) cần truyền rõ.
     """
     if days is None:
-        rec = db.execute("SELECT spread_dates, leave_type FROM leave_records WHERE id=?", (leave_id,)).fetchone()
+        rec = db.execute("SELECT spread_dates, leave_type, other_deduct_quota, adjusts_leave_id FROM leave_records WHERE id=?", (leave_id,)).fetchone()
         if rec and rec["spread_dates"]:
             days = len(json.loads(rec["spread_dates"]))
         else:
             days = calculate_leave_days(start, end, lich)
         leave_type = rec["leave_type"] if rec else None
+        other_deduct_quota = rec["other_deduct_quota"] if rec else True
+        adjusts_leave_id = rec["adjusts_leave_id"] if rec else None
     else:
-        rec2 = db.execute("SELECT leave_type FROM leave_records WHERE id=?", (leave_id,)).fetchone()
+        rec2 = db.execute("SELECT leave_type, other_deduct_quota, adjusts_leave_id FROM leave_records WHERE id=?", (leave_id,)).fetchone()
         leave_type = rec2["leave_type"] if rec2 else None
+        other_deduct_quota = rec2["other_deduct_quota"] if rec2 else True
+        adjusts_leave_id = rec2["adjusts_leave_id"] if rec2 else None
 
     # Khoá lạc quan: chỉ chuyển trạng thái nếu status hiện tại trong DB đúng
     # bằng old_status — chặn 2 request duyệt trùng cùng lúc (double-click, 2
@@ -324,8 +500,15 @@ def _apply_status_transition(
     if cur.rowcount == 0:
         raise HTTPException(409, "Đơn đã được xử lý bởi một yêu cầu khác, vui lòng tải lại trang")
 
+    # Đơn điều chỉnh NPBB đã duyệt bị huỷ thẳng (vd admin/GĐ dùng cancel_leave
+    # thay vì luồng Rút đơn) — đơn gốc từng bị _cancel_adjusted_original
+    # chuyển "Đã hủy" lúc đơn điều chỉnh này duyệt xong phải được khôi phục
+    # lại, nếu không sẽ kẹt vĩnh viễn không điều chỉnh lại được nữa.
+    if old_status == LeaveStatus.APPROVED and new_status == LeaveStatus.CANCELLED and adjusts_leave_id:
+        _restore_adjusted_original(adjusts_leave_id, actor_id or staff_id, db)
+
     # Chỉ điều chỉnh used_leave_days khi leave_type xác định và không miễn quota
-    if leave_type is not None and leave_type not in _NO_QUOTA_TYPES:
+    if leave_type is not None and not _is_no_quota_row(leave_type, other_deduct_quota):
         if (is_new or old_status != LeaveStatus.APPROVED) and new_status == LeaveStatus.APPROVED:
             db.execute(
                 "UPDATE user_tttt SET used_leave_days = COALESCE(used_leave_days, 0) + ? WHERE id = ?",
@@ -348,6 +531,47 @@ def _log_action(
     )
 
 
+def _cancel_adjusted_original(orig_leave_id: int, actor_id: int, db: sqlite3.Connection) -> None:
+    """Chuyển đơn NPBB gốc sang "Đã hủy" khi đơn điều chỉnh của nó vừa được
+    duyệt xong (approved) — gọi từ _create_leave_core (GĐ tự tạo đơn điều
+    chỉnh, tự duyệt luôn) và gd_review (đơn điều chỉnh duyệt xong bước cuối).
+
+    Không hoàn lại hạn mức của đơn gốc: bat_buoc vốn không tính vào bước CHẶN
+    hạn mức (_NO_QUOTA_TYPES/"!= bat_buoc" ở _create_leave_core), nên đơn gốc
+    approved chưa từng bị trừ hạn mức riêng để phải hoàn — used_leave_days chỉ
+    dùng để hiển thị, đơn điều chỉnh mới sẽ cộng đúng phần của nó khi duyệt."""
+    orig = db.execute("SELECT status FROM leave_records WHERE id=?", (orig_leave_id,)).fetchone()
+    if not orig or orig["status"] != LeaveStatus.APPROVED:
+        return
+    db.execute(
+        "UPDATE leave_records SET status=?, updated_at=? WHERE id=?",
+        (LeaveStatus.CANCELLED, str(_vn_now()), orig_leave_id),
+    )
+    _log_action(db, orig_leave_id, actor_id, "npbb_adjusted_cancel", None,
+                LeaveStatus.APPROVED, LeaveStatus.CANCELLED)
+
+
+def _restore_adjusted_original(orig_leave_id: int, actor_id: int, db: sqlite3.Connection) -> None:
+    """Đối xứng với _cancel_adjusted_original — khôi phục đơn NPBB gốc về lại
+    "Hoàn thành" khi đơn điều chỉnh (đã duyệt) của nó bị rút/hủy sau đó
+    (approve_recall, hoặc hủy thẳng qua cancel_leave/_apply_status_transition).
+
+    Không có bước này, đơn gốc kẹt "Đã hủy" vĩnh viễn — npbb_adjust_leave chỉ
+    nhận điều chỉnh đơn đang "Hoàn thành" nên sẽ không bao giờ điều chỉnh lại
+    được nữa dù đơn điều chỉnh đã bị rút. Chỉ khôi phục khi đơn gốc ĐANG đúng
+    "Đã hủy" (khoá điều kiện, tránh khôi phục nhầm nếu đơn gốc đã bị xử lý
+    khác đi vì lý do gì đó không phải do đơn điều chỉnh này)."""
+    orig = db.execute("SELECT status FROM leave_records WHERE id=?", (orig_leave_id,)).fetchone()
+    if not orig or orig["status"] != LeaveStatus.CANCELLED:
+        return
+    db.execute(
+        "UPDATE leave_records SET status=?, updated_at=? WHERE id=?",
+        (LeaveStatus.APPROVED, str(_vn_now()), orig_leave_id),
+    )
+    _log_action(db, orig_leave_id, actor_id, "npbb_adjustment_recalled", None,
+                LeaveStatus.CANCELLED, LeaveStatus.APPROVED)
+
+
 def _validate_ksv(ksv_id: Optional[int], current: dict, db: sqlite3.Connection) -> dict:
     if not ksv_id:
         raise HTTPException(400, "Vui lòng chọn người phê duyệt bước KSV")
@@ -368,41 +592,74 @@ def _validate_ksv(ksv_id: Optional[int], current: dict, db: sqlite3.Connection) 
     return dict(ksv)
 
 
-def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
-    today = _vn_now().date().isoformat()
-    r = db.execute(
-        """SELECT lr.*,
-                  s.full_name AS staff_name, s.department_id AS s_dept_id, s.role AS staff_role,
-                  kv.full_name AS ksv_name,
-                  th.full_name AS th_name,
-                  gd.full_name AS gd_approver_name, gd.role AS gd_role,
-                  d.name AS dept_name,
-                  db_user.full_name AS declarer_name,
-                  -- PGĐ chỉ duyệt được khi còn ủy quyền hiệu lực HÔM NAY. Tính sẵn ở
-                  -- đây (không phải chỉ trong gd_review) để màn hình nói được lý do
-                  -- vì sao người duyệt không có nút, thay vì im lặng.
-                  CASE WHEN gd.role = 'pho_giam_doc' THEN
-                       (SELECT COUNT(*) FROM delegation_records dr
-                         WHERE dr.pho_giam_doc_id = gd.id AND dr.is_active = 1
-                           AND dr.start_date <= ? AND dr.end_date >= ?)
-                       ELSE 1 END AS gd_can_review
-           FROM leave_records lr
-           LEFT JOIN user_tttt s       ON lr.staff_id             = s.id
-           LEFT JOIN user_tttt kv      ON lr.ksv_approver_id      = kv.id
-           LEFT JOIN user_tttt th      ON lr.tong_hop_approver_id = th.id
-           LEFT JOIN user_tttt gd      ON lr.gd_approver_id       = gd.id
-           LEFT JOIN departments d     ON s.department_id          = d.id
-           LEFT JOIN user_tttt db_user ON lr.direct_by             = db_user.id
-           WHERE lr.id = ?""",
-        (today, today, leave_id),
-    ).fetchone()
-    if not r:
-        return {}
+def _is_alt_ksv(current: dict, staff_id: int, db: sqlite3.Connection) -> bool:
+    """Trưởng/Phó phòng CÙNG PHÒNG với người nộp đơn — được duyệt THAY bước
+    KSV dù không phải người được chỉ định ban đầu.
 
+    Trước đây chỉ đúng người được chỉ định (ksv_approver_id) hoặc Admin mới
+    duyệt được — nếu người đó đang nghỉ phép/vắng mặt, đơn đứng yên ở
+    pending_ksv vô thời hạn, chỉ Admin "duyệt nhanh" gỡ được. Điều kiện dưới
+    đây khớp đúng tập ứng viên hợp lệ lúc CHỌN KSV khi tạo đơn (_validate_ksv):
+    cùng phòng ban, không tự duyệt đơn của chính mình.
+    """
+    if current["role"] not in ("truong_phong", "pho_phong"):
+        return False
+    if current["id"] == staff_id:
+        return False
+    row = db.execute("SELECT department_id FROM user_tttt WHERE id = ?", (staff_id,)).fetchone()
+    return bool(row and row["department_id"] and row["department_id"] == current.get("department_id"))
+
+
+# Câu SELECT đủ mọi cột/JOIN mà 1 dòng "LeaveOut" cần — dùng chung cho cả
+# _leave_to_out (1 đơn) lẫn list_leaves (nhiều đơn, xem _LEAVE_JOIN_SQL bên
+# dưới bọc thêm "WHERE lr.id IN (...)" thay vì "WHERE lr.id = ?").
+_LEAVE_JOIN_SQL = """SELECT lr.*,
+              s.full_name AS staff_name, s.department_id AS s_dept_id, s.role AS staff_role,
+              kv.full_name AS ksv_name,
+              th.full_name AS th_name,
+              gd.full_name AS gd_approver_name, gd.role AS gd_role,
+              d.name AS dept_name,
+              db_user.full_name AS declarer_name,
+              -- PGĐ chỉ duyệt được khi còn ủy quyền hiệu lực HÔM NAY. Tính sẵn ở
+              -- đây (không phải chỉ trong gd_review) để màn hình nói được lý do
+              -- vì sao người duyệt không có nút, thay vì im lặng.
+              CASE WHEN gd.role = 'pho_giam_doc' THEN
+                   (SELECT COUNT(*) FROM delegation_records dr
+                     WHERE dr.pho_giam_doc_id = gd.id AND dr.is_active = 1
+                       AND dr.start_date <= ? AND dr.end_date >= ?)
+                   ELSE 1 END AS gd_can_review
+       FROM leave_records lr
+       LEFT JOIN user_tttt s       ON lr.staff_id             = s.id
+       LEFT JOIN user_tttt kv      ON lr.ksv_approver_id      = kv.id
+       LEFT JOIN user_tttt th      ON lr.tong_hop_approver_id = th.id
+       LEFT JOIN user_tttt gd      ON lr.gd_approver_id       = gd.id
+       LEFT JOIN departments d     ON s.department_id          = d.id
+       LEFT JOIN user_tttt db_user ON lr.direct_by             = db_user.id"""
+
+
+def _npbb_brief_row(o) -> dict:
+    """Tóm tắt 1 đơn NPBB liên quan (đơn gốc hoặc đơn điều chỉnh) — hình dạng
+    dùng chung cho cả adjusts_leave lẫn npbb_adjustment trong LeaveOut."""
+    return {
+        "id": o["id"], "status": o["status"],
+        "start_date": o["start_date"], "end_date": o["end_date"],
+        "spread_dates": json.loads(o["spread_dates"]) if o["spread_dates"] else None,
+    }
+
+
+def _leave_row_to_dict(r, lich: LichLamViec, is_resubmitted: bool,
+                       adjusts_leave: Optional[dict], npbb_adjustment: Optional[dict]) -> dict:
+    """Dựng dict LeaveOut từ 1 dòng đã SELECT bằng _LEAVE_JOIN_SQL, cộng phần
+    phải tra riêng theo lô (lịch làm việc, is_resubmitted, NPBB 2 chiều) —
+    tách khỏi _leave_to_out để list_leaves tra 1 lần cho cả danh sách thay vì
+    lặp lại N lần (mỗi lần thêm vài câu SQL riêng, xem list_leaves)."""
     start = date.fromisoformat(r["start_date"])
     end   = date.fromisoformat(r["end_date"])
-    _lich = _load_lich(db, start, end)
-    _days = len(json.loads(r["spread_dates"])) if r["spread_dates"] else _period_days(start, end, _lich, r["leave_type"])
+    _days = len(json.loads(r["spread_dates"])) if r["spread_dates"] else _period_days(start, end, lich, r["leave_type"])
+
+    _status_label = _LEAVE_STATUS_VN.get(r["status"], r["status"])
+    if r["status"] == LeaveStatus.CANCELLED and npbb_adjustment and npbb_adjustment["status"] == LeaveStatus.APPROVED:
+        _status_label = "Đã hủy - Đã điều chỉnh"
 
     return {
         "id":                     r["id"],
@@ -416,6 +673,10 @@ def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
         "leave_type":             r["leave_type"],
         "reason":                 r["reason"],
         "status":                 r["status"],
+        "status_label":           _status_label,
+        "adjusts_leave_id":       r["adjusts_leave_id"],
+        "adjusts_leave":          adjusts_leave,
+        "npbb_adjustment":        npbb_adjustment,
         "ksv_approver_id":        r["ksv_approver_id"],
         "ksv_approver_name":      r["ksv_name"],
         "ksv_approved_at":        r["ksv_approved_at"],
@@ -434,6 +695,8 @@ def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
         "declarer_name":          r["declarer_name"] or "",
         "spread_dates":           json.loads(r["spread_dates"]) if r["spread_dates"] else None,
         "recall_reason":          r["recall_reason"],
+        "borrow_next_year_days":  r["borrow_next_year_days"] or 0.0,
+        "other_deduct_quota":     bool(r["other_deduct_quota"]) if r["other_deduct_quota"] is not None else True,
         "created_at":             r["created_at"],
         "rejected_step":          (
             "GĐ"  if r["status"] == "rejected" and r["gd_approved_at"]
@@ -441,11 +704,46 @@ def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
             else "KSV" if r["status"] == "rejected"
             else None
         ),
-        "is_resubmitted": bool(db.execute(
-            "SELECT 1 FROM leave_action_logs WHERE leave_id=? AND action='resubmit' LIMIT 1",
-            (leave_id,)
-        ).fetchone()),
+        "is_resubmitted": is_resubmitted,
     }
+
+
+def _leave_to_out(leave_id: int, db: sqlite3.Connection) -> dict:
+    today = _vn_now().date().isoformat()
+    r = db.execute(f"{_LEAVE_JOIN_SQL}\n           WHERE lr.id = ?", (today, today, leave_id)).fetchone()
+    if not r:
+        return {}
+
+    start = date.fromisoformat(r["start_date"])
+    end   = date.fromisoformat(r["end_date"])
+    lich = _load_lich(db, start, end)
+
+    # NPBB — đơn gốc mà đơn NÀY điều chỉnh (nếu có), và đơn điều chỉnh trỏ VỀ
+    # đơn này (nếu đơn này là bat_buoc và có ai đó điều chỉnh nó).
+    def _npbb_ref(other_id):
+        o = db.execute(
+            "SELECT id, status, start_date, end_date, spread_dates FROM leave_records WHERE id=?",
+            (other_id,),
+        ).fetchone()
+        return _npbb_brief_row(o) if o else None
+
+    adjusts_leave = _npbb_ref(r["adjusts_leave_id"]) if r["adjusts_leave_id"] else None
+    npbb_adjustment = None
+    if r["leave_type"] == "bat_buoc":
+        _adj_row = db.execute(
+            "SELECT id FROM leave_records WHERE adjusts_leave_id=? "
+            "AND status NOT IN ('rejected') ORDER BY created_at DESC LIMIT 1",
+            (leave_id,),
+        ).fetchone()
+        if _adj_row:
+            npbb_adjustment = _npbb_ref(_adj_row["id"])
+
+    is_resubmitted = bool(db.execute(
+        "SELECT 1 FROM leave_action_logs WHERE leave_id=? AND action='resubmit' LIMIT 1",
+        (leave_id,)
+    ).fetchone())
+
+    return _leave_row_to_dict(r, lich, is_resubmitted, adjusts_leave, npbb_adjustment)
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────────────
@@ -494,14 +792,12 @@ def get_gd_list(
     return [{"id": r["id"], "full_name": r["full_name"], "role_label": _ROLE_LABEL.get(r["role"], r["role"])} for r in rows]
 
 
-@router.post("/")
-def create_leave(
-    body: LeaveCreate,
-    db: sqlite3.Connection = Depends(get_db),
-    current: dict = Depends(require_feature("leaves.create")),
-):
-    if current.get("role") == "admin":
-        raise HTTPException(403, "Admin không tham gia quy trình nghỉ phép")
+def _create_leave_core(body: LeaveCreate, current: dict, db: sqlite3.Connection,
+                        adjusts_leave_id: Optional[int] = None, action: str = "create") -> int:
+    """Lõi tạo 1 đơn nghỉ phép — dùng chung cho create_leave (đơn mới bình
+    thường) và npbb_adjust_leave (đơn điều chỉnh NPBB, adjusts_leave_id trỏ về
+    đơn gốc). Không commit — người gọi tự commit sau khi làm xong việc riêng
+    (vd npbb_adjust_leave còn phải kiểm tra đơn gốc trước khi gọi hàm này)."""
     if body.leave_type not in _VALID_LEAVE_TYPES:
         raise HTTPException(400, f"Loại nghỉ phép không hợp lệ: {body.leave_type}")
 
@@ -531,37 +827,30 @@ def create_leave(
         if eff_start < _vn_now().date():
             raise HTTPException(400, "Nghỉ phép năm phải từ hôm nay trở đi")
 
-    # Kiểm tra hạn mức (không áp dụng cho bat_buoc, thai_san, bao_hiem)
-    if body.leave_type not in _NO_QUOTA_TYPES and body.leave_type != "bat_buoc":
-        ref_year  = eff_start.year
-        carry_eff = compute_carry_over(current["id"], ref_year, db,
-                                       effective=True, ref_date=eff_start)
-        # Ưu tiên hạn mức nhập tay (leave_quotas), khớp đúng get_quotas/download_leave_form
-        # — trước đây dùng thẳng current["annual_leave_days"] (công thức thô, sai năm),
-        # bỏ qua override của admin.
-        _q_row = db.execute(
-            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
-            (current["id"], ref_year),
-        ).fetchone()
-        quota = (
-            float(_q_row["quota_days"]) if _q_row
-            else float(compute_annual_leave(current.get("join_industry_date"), ref_year))
-        )
-        used_total = _calc_used_days(current["id"], ref_year, db, include_pending=True)
-        remaining  = quota + carry_eff - used_total
-        if leave_days > remaining:
-            raise HTTPException(400, f"Vượt quá số ngày phép còn lại ({remaining:.0f} ngày)")
+    # Kiểm tra hạn mức — trả về số ngày cần ứng trước năm sau nếu vượt hạn mức
+    # năm nay và người tạo đơn đã đồng ý (confirm_borrow_next_year), 0.0 nếu
+    # không vượt hoặc loại nghỉ không áp dụng (bat_buoc/thai_san/bao_hiem).
+    borrow_days = _check_quota_or_borrow(
+        current["id"], current.get("join_industry_date"), body.leave_type,
+        leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+        eff_start=eff_start, other_deduct_quota=body.other_deduct_quota,
+    )
 
     if body.leave_type == "bat_buoc" and leave_days < 5:
         raise HTTPException(400, "Nghỉ phép bắt buộc phải từ 5 ngày làm việc trở lên")
 
     # Kiểm tra trùng ngày theo spread_dates thực tế (không dùng envelope khi có spread)
+    # Đơn điều chỉnh NPBB (adjusts_leave_id) được phép trùng với chính đơn gốc
+    # — đơn gốc sẽ tự chuyển "Đã hủy" khi đơn điều chỉnh này duyệt xong, xem
+    # _cancel_adjusted_original.
+    _excl_sql = " AND id != ?" if adjusts_leave_id else ""
+    _excl_params = [adjusts_leave_id] if adjusts_leave_id else []
     if body.spread_dates:
         _existing = db.execute(
-            """SELECT start_date, end_date, spread_dates FROM leave_records
-               WHERE staff_id=? AND status NOT IN ('rejected','cancelled')
-                 AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')""",
-            (current["id"],)
+            f"""SELECT start_date, end_date, spread_dates FROM leave_records
+               WHERE staff_id=? {_excl_sql} AND status NOT IN ('rejected','cancelled')
+                 AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))""",
+            [current["id"]] + _excl_params
         ).fetchall()
         _new_days = set(spread)
         for _el in _existing:
@@ -576,11 +865,11 @@ def create_leave(
         # trùng oan khi khoảng mới chỉ chồng lên envelope chứ không chạm ngày
         # thực nào.
         _existing2 = db.execute(
-            """SELECT start_date, end_date, spread_dates FROM leave_records
-               WHERE staff_id=? AND status NOT IN ('rejected','cancelled')
-                 AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')
+            f"""SELECT start_date, end_date, spread_dates FROM leave_records
+               WHERE staff_id=? {_excl_sql} AND status NOT IN ('rejected','cancelled')
+                 AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))
                  AND start_date<=? AND end_date>=?""",
-            (current["id"], eff_end.isoformat(), eff_start.isoformat())
+            [current["id"]] + _excl_params + [eff_end.isoformat(), eff_start.isoformat()]
         ).fetchall()
         if _existing2:
             _new_range_days = None
@@ -625,21 +914,87 @@ def create_leave(
     cur = db.execute(
         """INSERT INTO leave_records
                (staff_id, start_date, end_date, leave_type, reason, status,
-                ksv_approver_id, gd_approver_id, gd_approved_at, spread_dates, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ksv_approver_id, gd_approver_id, gd_approved_at, spread_dates,
+                adjusts_leave_id, borrow_next_year_days, other_deduct_quota, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (current["id"], eff_start.isoformat(), eff_end.isoformat(),
          body.leave_type, body.reason, initial_status, ksv_approver_id,
-         gd_approver_id, gd_approved_at, spread_json, str(_vn_now()), str(_vn_now())),
+         gd_approver_id, gd_approved_at, spread_json, adjusts_leave_id,
+         borrow_days, int(body.other_deduct_quota), str(_vn_now()), str(_vn_now())),
     )
     leave_id = cur.lastrowid
     if body.signature:
         _save_signature(db, leave_id, "nguoi_de_nghi", current["id"], body.signature)
-    _log_action(db, leave_id, current["id"], "create", None, "", initial_status)
+    _log_action(db, leave_id, current["id"], action, None, "", initial_status)
     if initial_status == LeaveStatus.APPROVED:
         _apply_status_transition(leave_id, LeaveStatus.APPROVED, LeaveStatus.APPROVED,
                                  eff_start, eff_end, current["id"], _lich, db, is_new=True)
+        if adjusts_leave_id:
+            _cancel_adjusted_original(adjusts_leave_id, current["id"], db)
+    return leave_id
+
+
+@router.post("/")
+def create_leave(
+    body: LeaveCreate,
+    db: sqlite3.Connection = Depends(get_db),
+    current: dict = Depends(require_feature("leaves.create")),
+):
+    if current.get("role") == "admin":
+        raise HTTPException(403, "Admin không tham gia quy trình nghỉ phép")
+    leave_id = _create_leave_core(body, current, db)
     db.commit()
     return _leave_to_out(leave_id, db)
+
+
+@router.post("/{leave_id}/npbb-adjust")
+def npbb_adjust_leave(
+    leave_id: int,
+    body: LeaveCreate,
+    db: sqlite3.Connection = Depends(get_db),
+    current: dict = Depends(require_feature("leaves.create")),
+):
+    """Điều chỉnh ngày nghỉ phép bắt buộc SAU KHI đơn gốc đã "Hoàn thành" —
+    tạo 1 ĐƠN MỚI riêng (adjusts_leave_id trỏ về đơn gốc), đi qua đủ 3 bước
+    duyệt như đơn bình thường. Đơn gốc tự chuyển "Đã hủy" khi đơn này duyệt
+    xong (xem _cancel_adjusted_original, gọi từ _create_leave_core khi GĐ tự
+    tạo & tự duyệt, hoặc từ gd_review khi duyệt qua đủ 3 bước)."""
+    orig = db.execute("SELECT * FROM leave_records WHERE id=?", (leave_id,)).fetchone()
+    if not orig:
+        raise HTTPException(404, "Không tìm thấy đơn nghỉ phép")
+    if orig["staff_id"] != current["id"]:
+        raise HTTPException(403, "Chỉ chủ nhân đơn mới được điều chỉnh")
+    if orig["leave_type"] != "bat_buoc":
+        raise HTTPException(400, "Chỉ đơn nghỉ phép bắt buộc mới điều chỉnh được theo cách này")
+    # Không cho điều chỉnh CHỒNG lên 1 đơn điều chỉnh khác — mọi lần điều
+    # chỉnh luôn trỏ thẳng về đúng 1 đơn NPBB GỐC duy nhất (adjusts_leave_id
+    # IS NULL), không xếp chuỗi nhiều cấp. Muốn điều chỉnh tiếp thì phải rút/
+    # huỷ đơn điều chỉnh hiện tại trước — lúc đó đơn gốc tự khôi phục lại
+    # "Hoàn thành" (xem _restore_adjusted_original) và điều chỉnh lại được
+    # bình thường. Lý do: báo cáo NPBB (export_npbb_batch) chỉ dò đúng 1 cấp
+    # cha-con để tìm "đơn điều chỉnh mới nhất còn hiệu lực" — xếp chuỗi nhiều
+    # cấp sẽ khiến nhân sự biến mất khỏi báo cáo khi cấp giữa bị thay thế.
+    if orig["adjusts_leave_id"] is not None:
+        raise HTTPException(
+            400,
+            "Đây là đơn điều chỉnh — không thể điều chỉnh tiếp lên đơn điều chỉnh. "
+            "Vui lòng rút/hủy đơn điều chỉnh này trước, đơn gốc sẽ tự khôi phục "
+            "\"Hoàn thành\" để điều chỉnh lại.",
+        )
+    if orig["status"] != LeaveStatus.APPROVED:
+        raise HTTPException(400, "Chỉ điều chỉnh được đơn đã hoàn thành")
+    _active = db.execute(
+        """SELECT id FROM leave_records WHERE adjusts_leave_id=?
+           AND status NOT IN ('rejected','cancelled') LIMIT 1""",
+        (leave_id,),
+    ).fetchone()
+    if _active:
+        raise HTTPException(409, "Đơn này đã có đơn điều chỉnh đang xử lý")
+    if body.leave_type != "bat_buoc":
+        raise HTTPException(400, "Đơn điều chỉnh phải cùng loại nghỉ phép bắt buộc")
+    new_leave_id = _create_leave_core(body, current, db, adjusts_leave_id=leave_id, action="npbb_adjust")
+    db.commit()
+    return _leave_to_out(new_leave_id, db)
 
 
 @router.get("/")
@@ -653,7 +1008,7 @@ def list_leaves(
     # import_quota_apply) chỉ phục vụ tính _calc_used_days — không phải đơn nghỉ
     # phép thật, không có người nộp/KSV/TH/GĐ nào cả. Ẩn khỏi mọi danh sách đơn để
     # khỏi hiện như 1 đơn thật trong "Đơn của tôi"/"Chờ duyệt"/lịch/toàn trung tâm.
-    clauses: list = ["NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')"]
+    clauses: list = ["(reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))"]
     params: list  = []
 
     if scope == "mine":
@@ -677,17 +1032,26 @@ def list_leaves(
         elif _is_tong_hop_staff(current, db):
             if role in ("truong_phong", "pho_phong"):
                 # PP/TP Tổng hợp: duyệt bước TH cho toàn trung tâm
-                # VÀ duyệt bước KSV cho nhân viên phòng mình
+                # VÀ duyệt bước KSV cho nhân viên phòng mình (kể cả KSV thay
+                # thế — cùng phòng, không phải người được chỉ định ban đầu,
+                # xem _is_alt_ksv).
                 clauses.append(
                     f"(status = 'pending_tong_hop' OR "
-                    f"(ksv_approver_id = ? AND status = 'pending_ksv') OR {_gd_unack})"
+                    f"((ksv_approver_id = ? OR staff_id IN "
+                    f"(SELECT id FROM user_tttt WHERE department_id = ? AND id != ?)) "
+                    f"AND status = 'pending_ksv') OR {_gd_unack})"
                 )
-                params.append(current["id"])
+                params += [current["id"], current.get("department_id"), current["id"]]
             else:
                 clauses.append(f"(status = 'pending_tong_hop' OR {_gd_unack})")
         elif role in ("truong_phong", "pho_phong"):
-            clauses.append("ksv_approver_id = ? AND status = 'pending_ksv'")
-            params.append(current["id"])
+            # Kể cả KSV thay thế cùng phòng — xem _is_alt_ksv.
+            clauses.append(
+                "((ksv_approver_id = ? OR staff_id IN "
+                "(SELECT id FROM user_tttt WHERE department_id = ? AND id != ?)) "
+                "AND status = 'pending_ksv')"
+            )
+            params += [current["id"], current.get("department_id"), current["id"]]
         else:
             return []
 
@@ -715,10 +1079,77 @@ def list_leaves(
         raise HTTPException(400, "scope phải là mine | pending | declared | dept | all")
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    # 1 câu duy nhất cho cả danh sách (không phải 1 câu id + N câu _leave_to_out
+    # riêng từng dòng) — mệnh đề where ở trên chỉ tham chiếu cột của leave_records
+    # (không alias) nên bọc nguyên vào 1 subquery lọc id là an toàn, không đụng
+    # gì tới cách dựng clauses/params phía trên.
+    today = _vn_now().date().isoformat()
+    id_where_sql = f"SELECT id FROM leave_records {where}"
     rows = db.execute(
-        f"SELECT id FROM leave_records {where} ORDER BY created_at DESC", params
+        f"{_LEAVE_JOIN_SQL}\n           WHERE lr.id IN ({id_where_sql})\n           ORDER BY lr.created_at DESC",
+        [today, today] + params,
     ).fetchall()
-    return [_leave_to_out(r["id"], db) for r in rows]
+    if not rows:
+        return []
+
+    # Lịch làm việc: 1 lần cho cả danh sách (khoảng rộng nhất bao hết mọi đơn)
+    # thay vì mỗi đơn 1 lần — LichLamViec là tập ngày lễ/bù trong khoảng nạp,
+    # nạp rộng hơn chỉ là tập cha, la_ngay_lam_viec() vẫn ra đúng kết quả từng
+    # ngày. Bỏ qua hẳn nếu MỌI đơn đều có spread_dates (khi đó _period_days
+    # không bao giờ được gọi tới, lịch nạp về sẽ không dùng vào đâu).
+    if any(not r["spread_dates"] for r in rows):
+        lich = _load_lich(
+            db,
+            min(date.fromisoformat(r["start_date"]) for r in rows),
+            max(date.fromisoformat(r["end_date"]) for r in rows),
+        )
+    else:
+        lich = LICH_RONG
+
+    leave_ids = [r["id"] for r in rows]
+    ph = ",".join("?" for _ in leave_ids)
+    resubmitted_ids = {rr["leave_id"] for rr in db.execute(
+        f"SELECT DISTINCT leave_id FROM leave_action_logs WHERE action='resubmit' AND leave_id IN ({ph})",
+        leave_ids,
+    ).fetchall()}
+
+    # NPBB, chiều "đơn gốc mà 1 dòng trong danh sách điều chỉnh" — chỉ những
+    # đơn có adjusts_leave_id mới cần tra.
+    adj_target_ids = {r["adjusts_leave_id"] for r in rows if r["adjusts_leave_id"]}
+    adjusts_leave_by_id: dict = {}
+    if adj_target_ids:
+        ph2 = ",".join("?" for _ in adj_target_ids)
+        for rr in db.execute(
+            f"SELECT id, status, start_date, end_date, spread_dates FROM leave_records WHERE id IN ({ph2})",
+            list(adj_target_ids),
+        ).fetchall():
+            adjusts_leave_by_id[rr["id"]] = _npbb_brief_row(rr)
+
+    # NPBB, chiều "đơn điều chỉnh trỏ VỀ 1 đơn bat_buoc trong danh sách" — chỉ
+    # đơn bat_buoc mới có thể bị điều chỉnh, y hệt điều kiện trong _leave_to_out.
+    bat_buoc_ids = [r["id"] for r in rows if r["leave_type"] == "bat_buoc"]
+    npbb_adjustment_by_original: dict = {}
+    if bat_buoc_ids:
+        ph3 = ",".join("?" for _ in bat_buoc_ids)
+        for rr in db.execute(
+            f"""SELECT id, adjusts_leave_id, status, start_date, end_date, spread_dates
+               FROM leave_records WHERE adjusts_leave_id IN ({ph3})
+                 AND status NOT IN ('rejected') ORDER BY created_at DESC""",
+            bat_buoc_ids,
+        ).fetchall():
+            # Giữ dòng ĐẦU TIÊN mỗi đơn gốc (đã ORDER BY created_at DESC) — khớp
+            # đúng "ORDER BY created_at DESC LIMIT 1" của _leave_to_out.
+            npbb_adjustment_by_original.setdefault(rr["adjusts_leave_id"], _npbb_brief_row(rr))
+
+    return [
+        _leave_row_to_dict(
+            r, lich,
+            r["id"] in resubmitted_ids,
+            adjusts_leave_by_id.get(r["adjusts_leave_id"]) if r["adjusts_leave_id"] else None,
+            npbb_adjustment_by_original.get(r["id"]),
+        )
+        for r in rows
+    ]
 
 
 @router.get("/today")
@@ -739,7 +1170,7 @@ def leaves_today(
            JOIN user_tttt u ON lr.staff_id = u.id
            LEFT JOIN departments d ON u.department_id = d.id
            WHERE lr.status = 'approved'
-             AND NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')
+             AND (lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))
              AND lr.start_date <= ? AND lr.end_date >= ?""",
         (today, today),
     ).fetchall()
@@ -795,7 +1226,7 @@ def leave_calendar(
                 or _is_tong_hop_staff(current, db))
 
     clauses = ["lr.status NOT IN ('rejected','cancelled')",
-               "NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')",
+               "(lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))",
                "lr.start_date <= ?", "lr.end_date >= ?"]
     params: list = [end.isoformat(), start.isoformat()]
     if not sees_all:
@@ -856,7 +1287,7 @@ def export_leaves(
     role = current["role"]
     # Bản ghi tổng hợp giả (nhập Excel / sửa tay hạn mức) không phải đơn nghỉ phép
     # thật — ẩn khỏi file xuất, xem chú thích tương tự ở list_leaves().
-    clauses: list = ["NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')"]
+    clauses: list = ["(lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))"]
     params: list  = []
 
     # Nếu có danh sách ID cụ thể → xuất đúng những dòng đó
@@ -1041,6 +1472,44 @@ def ack_carryover_notice(
     return {"ok": True}
 
 
+_OVERDUE_PENDING_LEVEL_VN = {
+    "pending_ksv": "KSV", "pending_tong_hop": "Phòng Tổng hợp", "pending_gd": "Ban lãnh đạo",
+}
+
+
+@router.get("/overdue-pending-notice")
+def get_overdue_pending_notice(
+    db: sqlite3.Connection = Depends(get_db),
+    current: dict = Depends(get_current_staff),
+):
+    """Đơn nghỉ phép CỦA CHÍNH user này đã tới/qua ngày nghỉ mà vẫn còn ở trạng
+    thái chờ duyệt (KSV/Tổng hợp/Ban lãnh đạo) — nhắc họ theo dõi/thúc duyệt.
+    Hiện lại mỗi lần mở trang trong khi vẫn còn đơn thoả điều kiện (không phải
+    thông báo 1 lần/năm như carryover-notice — vấn đề còn tồn tại là còn nhắc)."""
+    today = _vn_now().date()
+    rows = db.execute(
+        """SELECT id, start_date, end_date, spread_dates, status FROM leave_records
+           WHERE staff_id=? AND status IN ('pending_ksv','pending_tong_hop','pending_gd')
+             AND start_date <= ?""",
+        (current["id"], today.isoformat()),
+    ).fetchall()
+    items = []
+    for r in rows:
+        if r["spread_dates"]:
+            overdue = sorted(d for d in json.loads(r["spread_dates"]) if date.fromisoformat(d) <= today)
+            if not overdue:
+                continue
+            date_label = ", ".join(date.fromisoformat(d).strftime("%d/%m/%Y") for d in overdue)
+        else:
+            date_label = date.fromisoformat(r["start_date"]).strftime("%d/%m/%Y")
+        items.append({
+            "id": r["id"],
+            "date_label": date_label,
+            "level": _OVERDUE_PENDING_LEVEL_VN.get(r["status"], r["status"]),
+        })
+    return {"show": bool(items), "items": items}
+
+
 @router.get("/my-balance")
 def get_my_balance(
     year: int = None,
@@ -1111,7 +1580,7 @@ def delete_leave(
     if leave["direct_by"] != current["id"] and current["role"] != "admin":
         raise HTTPException(403, "Không có quyền xóa đơn này")
     # Hoàn trả used_leave_days nếu đơn đã approved và không phải loại miễn quota
-    if leave["status"] == "approved" and leave["leave_type"] not in _NO_QUOTA_TYPES:
+    if leave["status"] == "approved" and not _is_no_quota_row(leave["leave_type"], leave["other_deduct_quota"]):
         if leave["spread_dates"]:
             days = len(json.loads(leave["spread_dates"]))
         else:
@@ -1142,15 +1611,17 @@ def ksv_review(
         raise HTTPException(404, "Không tìm thấy đơn nghỉ phép")
     if leave["status"] != LeaveStatus.PENDING_KSV:
         raise HTTPException(400, f"Đơn đang ở trạng thái '{leave['status']}'")
-    if leave["ksv_approver_id"] != current["id"] and current["role"] != "admin":
+    if (leave["ksv_approver_id"] != current["id"] and current["role"] != "admin"
+            and not _is_alt_ksv(current, leave["staff_id"], db)):
         raise HTTPException(403, "Bạn không phải người được chỉ định duyệt bước này")
     if body.action == "reject" and not body.comment:
         raise HTTPException(400, "Vui lòng nhập lý do từ chối")
 
     old = leave["status"]
     new_status = LeaveStatus.PENDING_TONG_HOP if body.action == "approve" else LeaveStatus.REJECTED
-    # Nếu admin thực hiện: ghi lại chính admin là người duyệt bước này
-    if current["role"] == "admin":
+    # Nếu admin hoặc KSV thay thế cùng phòng thực hiện: ghi lại đúng người vừa
+    # duyệt (không phải người được chỉ định ban đầu), xem _is_alt_ksv.
+    if leave["ksv_approver_id"] != current["id"]:
         db.execute("UPDATE leave_records SET ksv_approver_id=? WHERE id=?", (current["id"], leave_id))
     db.execute(
         "UPDATE leave_records SET ksv_approved_at=?, ksv_comment=? WHERE id=?",
@@ -1286,6 +1757,8 @@ def gd_review(
     _log_action(db, leave_id, current["id"],
                 "gd_approve" if body.action == "approve" else "gd_reject",
                 body.comment, old, new_status)
+    if new_status == LeaveStatus.APPROVED and leave["adjusts_leave_id"]:
+        _cancel_adjusted_original(leave["adjusts_leave_id"], current["id"], db)
     db.commit()
     return _leave_to_out(leave_id, db)
 
@@ -1326,29 +1799,21 @@ def resubmit_leave(
         leave_days = _period_days(eff_start, eff_end, _lich, body.leave_type)
         spread_json = None
 
-    if body.leave_type not in _NO_QUOTA_TYPES and body.leave_type != "bat_buoc":
-        ref_year  = eff_start.year
-        carry_eff = compute_carry_over(current["id"], ref_year, db,
-                                       effective=True, ref_date=eff_start)
-        _q_row = db.execute(
-            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
-            (current["id"], ref_year),
-        ).fetchone()
-        quota = (
-            float(_q_row["quota_days"]) if _q_row
-            else float(compute_annual_leave(current.get("join_industry_date"), ref_year))
-        )
-        used_cur  = _calc_used_days(current["id"], ref_year, db, include_pending=True)
-        remaining = quota + carry_eff - used_cur
-        if leave_days > remaining:
-            raise HTTPException(400, f"Vượt quá số ngày phép còn lại ({remaining:.0f} ngày)")
+    # leave["status"] lúc vào hàm luôn là REJECTED (chặn ở trên) nên không cần
+    # exclude_id — _calc_used_days trong _check_quota_or_borrow không đếm đơn
+    # rejected.
+    borrow_days = _check_quota_or_borrow(
+        current["id"], current.get("join_industry_date"), body.leave_type,
+        leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+        eff_start=eff_start, other_deduct_quota=body.other_deduct_quota,
+    )
 
     # Kiểm tra trùng ngày theo spread_dates thực tế
     if body.spread_dates:
         _existing = db.execute(
             """SELECT start_date, end_date, spread_dates FROM leave_records
                WHERE staff_id=? AND id!=? AND status NOT IN ('rejected','cancelled')
-                 AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')""",
+                 AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))""",
             (current["id"], leave_id)
         ).fetchall()
         _new_days = set(spread)
@@ -1362,7 +1827,7 @@ def resubmit_leave(
         _existing2 = db.execute(
             """SELECT start_date, end_date, spread_dates FROM leave_records
                WHERE staff_id=? AND id!=? AND status NOT IN ('rejected','cancelled')
-                 AND NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%')
+                 AND (reason IS NULL OR NOT (reason LIKE '[Import]%' OR reason LIKE '[Điều chỉnh]%'))
                  AND start_date<=? AND end_date>=?""",
             (current["id"], leave_id, eff_end.isoformat(), eff_start.isoformat())
         ).fetchall()
@@ -1414,10 +1879,11 @@ def resubmit_leave(
                ksv_approver_id=?, ksv_approved_at=NULL, ksv_comment=NULL,
                tong_hop_approver_id=NULL, tong_hop_approved_at=NULL, tong_hop_comment=NULL,
                gd_approver_id=?, gd_approved_at=?, gd_comment=NULL,
-               leave_type=?, start_date=?, end_date=?, reason=?, spread_dates=?
+               leave_type=?, start_date=?, end_date=?, reason=?, spread_dates=?,
+               borrow_next_year_days=?, other_deduct_quota=?
            WHERE id=?""",
         (ksv_approver_id, new_gd_approver_id, new_gd_approved_at, body.leave_type, eff_start.isoformat(),
-         eff_end.isoformat(), body.reason, spread_json, leave_id),
+         eff_end.isoformat(), body.reason, spread_json, borrow_days, int(body.other_deduct_quota), leave_id),
     )
     # Đơn quay lại từ đầu → chữ ký của người duyệt cũ không còn giá trị. Ngày tháng
     # và số ngày phép trên phiếu đã đổi, giữ lại là để chữ ký thật nằm trên tờ đơn khác.
@@ -1471,7 +1937,8 @@ def cancel_leave(
     start = date.fromisoformat(leave["start_date"])
     end   = date.fromisoformat(leave["end_date"])
     _lich = _load_lich(db, start, end)
-    _apply_status_transition(leave_id, old, LeaveStatus.CANCELLED, start, end, leave["staff_id"], _lich, db)
+    _apply_status_transition(leave_id, old, LeaveStatus.CANCELLED, start, end, leave["staff_id"], _lich, db,
+                             actor_id=current["id"])
     _log_action(db, leave_id, current["id"], "cancel", None, old, LeaveStatus.CANCELLED)
     db.commit()
     return _leave_to_out(leave_id, db)
@@ -1536,6 +2003,13 @@ _ROLE_VN = {
 # ở dạng NFD, ghép chuỗi NFC từ mã nguồn sẽ không khớp — xem backend/core/paths.py
 _TPL_DIR = template_path("Phòng Tổng hợp", "Nghỉ phép")
 _TPL_PATH = template_path("don_xin_nghi_phep_tpl.docx")
+# Mẫu 1 TCNS — "ĐƠN ĐĂNG KÝ ĐIỀU CHỈNH THỜI GIAN NGHỈ PHÉP BẮT BUỘC", dùng
+# riêng cho đơn có adjusts_leave_id (xem _build_form_ctx, npbb_adjust_leave).
+_NPBB_ADJUST_TPL_PATH = template_path("don_dieu_chinh_npbb_tpl.docx")
+# Mẫu 1 TCNS — "ĐƠN ĐĂNG KÝ THỜI GIAN NGHỈ PHÉP BẮT BUỘC", dùng cho đơn nghỉ
+# phép bắt buộc MỚI (chưa từng điều chỉnh) — leave_type == "bat_buoc" và
+# adjusts_leave_id rỗng, xem _build_form_ctx.
+_NPBB_REGISTER_TPL_PATH = template_path("don_dang_ky_npbb_tpl.docx")
 
 def _pick_template(staff_role: str) -> str:
     """Chọn file docx theo role. Fallback về template gốc nếu chưa có."""
@@ -1624,7 +2098,10 @@ def _can_view_form(r, current: dict, db: sqlite3.Connection) -> bool:
             or r["gd_approver_id"] == current["id"]
             or r["direct_by"] == current["id"]
             or _is_tong_hop_staff(current, db)
-            or current["role"] in ("admin", "giam_doc", "pho_giam_doc"))
+            or current["role"] in ("admin", "giam_doc", "pho_giam_doc")
+            # Trưởng/Phó phòng cùng phòng — được xem/duyệt THAY bước KSV nếu
+            # người được chỉ định vắng mặt, xem _is_alt_ksv.
+            or (r["status"] == LeaveStatus.PENDING_KSV and _is_alt_ksv(current, r["staff_id"], db)))
 
 
 def _draft_form_row(body: LeaveCreate, current: dict, db: sqlite3.Connection) -> dict:
@@ -1666,11 +2143,139 @@ def _draft_form_row(body: LeaveCreate, current: dict, db: sqlite3.Connection) ->
         "leave_type": body.leave_type, "reason": body.reason,
         "ksv_approver_id": body.ksv_approver_id, "ksv_name": ksv_name,
         "gd_approver_id": body.gd_approver_id, "gd_approver_name": gd_name, "gd_role": gd_role,
+        # Luồng xem trước (POST /preview) chỉ dùng cho tạo đơn thường — điều
+        # chỉnh NPBB (npbb_adjust_leave) không đi qua bước xem trước này nên
+        # dòng giả lập không bao giờ là đơn điều chỉnh, xem _build_form_ctx.
+        "adjusts_leave_id": None,
+        # Đơn chưa tạo — chưa thể biết có phải ứng phép năm sau không (chỉ xác
+        # định lúc gửi thật, xem _check_quota_or_borrow), luôn coi như 0 ở đây.
+        "borrow_next_year_days": 0,
+        "other_deduct_quota": body.other_deduct_quota,
+    }
+
+
+def _npbb_ksv_block(r, db: sqlite3.Connection) -> tuple:
+    """(ksv_sign, ksv_label) cho khối chữ ký "Trưởng phòng" trong 2 mẫu NPBB —
+    ẩn hẳn khi người làm đơn không có KSV cấp trên (Trưởng phòng/GĐ/PGĐ tự làm
+    đơn), y hệt điều kiện ksv_sign của đơn nghỉ phép thường ở _build_form_ctx.
+    Nhãn TUQ. khi người duyệt hộ là Phó phòng — cùng logic ksv_dept_label ở
+    đó, giữ 1 dòng cho khớp phong cách đã chốt của mẫu NPBB (khác mẫu đơn
+    thường tách 2 dòng)."""
+    dept_raw = r["dept_name"] or ""
+    dept_short = dept_raw[6:] if dept_raw.upper().startswith("PHÒNG ") else dept_raw
+    ksv_sign = r["staff_role"] not in ("truong_phong", "giam_doc", "pho_giam_doc")
+    _ksv_role = None
+    if r["ksv_approver_id"]:
+        _ksv_r = db.execute("SELECT role FROM user_tttt WHERE id=?", (r["ksv_approver_id"],)).fetchone()
+        _ksv_role = _ksv_r["role"] if _ksv_r else None
+    ksv_label = f"TUQ. Trưởng phòng {dept_short}" if _ksv_role == "pho_phong" else f"Trưởng phòng {dept_short}"
+    return ksv_sign, ksv_label
+
+
+def _build_npbb_adjust_form_ctx(r, db: sqlite3.Connection) -> dict:
+    """Ctx cho Mẫu 1 TCNS ("ĐƠN ĐĂNG KÝ ĐIỀU CHỈNH THỜI GIAN NGHỈ PHÉP BẮT
+    BUỘC") — khác hẳn phiếu nghỉ phép thường, không có hạn mức/carry-over,
+    chỉ so sánh ngày ĐÃ ĐĂNG KÝ (đơn gốc, tra qua adjusts_leave_id) với ngày
+    ĐIỀU CHỈNH (chính đơn r, tạo bởi npbb_adjust_leave)."""
+    start = date.fromisoformat(r["start_date"])
+    end   = date.fromisoformat(r["end_date"])
+    _lich = _load_lich(db, start, end)
+    so_ngay_moi = len(json.loads(r["spread_dates"])) if r["spread_dates"] else _period_days(start, end, _lich, r["leave_type"])
+
+    orig = db.execute(_FORM_ROW_SQL, (r["adjusts_leave_id"],)).fetchone()
+    if orig:
+        o_start = date.fromisoformat(orig["start_date"])
+        o_end   = date.fromisoformat(orig["end_date"])
+        o_lich  = _load_lich(db, o_start, o_end)
+        so_ngay_goc  = len(json.loads(orig["spread_dates"])) if orig["spread_dates"] else _period_days(o_start, o_end, o_lich, orig["leave_type"])
+        tu_ngay_goc  = o_start.strftime("%d/%m/%Y")
+        den_ngay_goc = o_end.strftime("%d/%m/%Y")
+    else:
+        so_ngay_goc, tu_ngay_goc, den_ngay_goc = 0, "", ""
+
+    dept_raw = r["dept_name"] or ""
+    now = _vn_now()
+    ksv_sign, ksv_label = _npbb_ksv_block(r, db)
+    return {
+        "ho_ten":             r["staff_name"] or "",
+        "chuc_vu":            _ROLE_VN.get(r["staff_role"] or "", r["staff_role"] or ""),
+        "don_vi_cong_tac":    f"{dept_raw} – Trung tâm Thanh toán" if dept_raw else "Trung tâm Thanh toán",
+        # GĐ/PGĐ không thể "kính đề nghị" chính Giám đốc TTTT — đơn của diện
+        # HĐTV kính gửi thẳng Ban Tổ chức Nhân sự (đối chiếu hồ sơ NPBB thật
+        # "DIỆN HĐTV"); các cấp còn lại giữ nguyên đối tượng cũ.
+        "doi_tuong":          "Ban Tổ chức Nhân sự" if r["staff_role"] in ("giam_doc", "pho_giam_doc") else "Giám đốc Trung tâm Thanh toán",
+        "nam":                start.year,
+        "so_ngay_goc":        f"{int(so_ngay_goc):02d}",
+        "tu_ngay_goc":        tu_ngay_goc,
+        "den_ngay_goc":       den_ngay_goc,
+        "so_ngay_moi":        f"{int(so_ngay_moi):02d}",
+        "tu_ngay_moi":        start.strftime("%d/%m/%Y"),
+        "den_ngay_moi":       end.strftime("%d/%m/%Y"),
+        "ngay_ky":            now.day, "thang_ky": now.month, "nam_ky": now.year,
+        "ksv_sign":           ksv_sign,
+        "ksv_label":          ksv_label,
+        "truong_phong_name":  r["ksv_name"] or "",
+        "nguoi_de_nghi_name": r["staff_name"] or "",
+        "gd_name":            r["gd_approver_name"] or "",
+    }
+
+
+def _build_npbb_register_form_ctx(r, leave_id: Optional[int], db: sqlite3.Connection) -> dict:
+    """Ctx cho Mẫu 1 TCNS ("ĐƠN ĐĂNG KÝ THỜI GIAN NGHỈ PHÉP BẮT BUỘC") — đơn
+    nghỉ phép bắt buộc MỚI, chưa từng điều chỉnh: chỉ 1 khoảng ngày, không so
+    sánh gốc/điều chỉnh như _build_npbb_adjust_form_ctx.
+
+    bat_buoc KHÔNG bị miễn khỏi hạn mức phép năm — nó vẫn cộng vào
+    used_leave_days/_calc_used_days (chỉ miễn bước CHẶN khi hết hạn mức, xem
+    create_leave/_create_leave_core) — nên mẫu giấy vẫn phải hiện đúng tổng
+    hạn mức và số đã nghỉ, khớp với mẫu thật (Tổng số ngày được hưởng / Đã
+    nghỉ / Đăng ký)."""
+    start = date.fromisoformat(r["start_date"])
+    end   = date.fromisoformat(r["end_date"])
+    _lich = _load_lich(db, start, end)
+    so_ngay = len(json.loads(r["spread_dates"])) if r["spread_dates"] else _period_days(start, end, _lich, r["leave_type"])
+
+    _q_row = db.execute(
+        "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
+        (r["staff_id"], start.year),
+    ).fetchone()
+    tong_ngay_phep = (
+        float(_q_row["quota_days"]) if _q_row
+        else (compute_annual_leave(r["join_industry_date"], start.year) if r["join_industry_date"] else (r["annual_leave_days"] or 12))
+    )
+    so_ngay_da_nghi = _calc_used_days(r["staff_id"], start.year, db, exclude_id=leave_id)
+
+    dept_raw = r["dept_name"] or ""
+    now = _vn_now()
+    ksv_sign, ksv_label = _npbb_ksv_block(r, db)
+    return {
+        "ho_ten":             r["staff_name"] or "",
+        "chuc_vu":            _ROLE_VN.get(r["staff_role"] or "", r["staff_role"] or ""),
+        "don_vi_cong_tac":    f"{dept_raw} – Trung tâm Thanh toán" if dept_raw else "Trung tâm Thanh toán",
+        # Xem chú thích trong _build_npbb_adjust_form_ctx.
+        "doi_tuong":          "Ban Tổ chức Nhân sự" if r["staff_role"] in ("giam_doc", "pho_giam_doc") else "Giám đốc Trung tâm Thanh toán",
+        "nam":                start.year,
+        "tong_ngay_phep":     f"{tong_ngay_phep:.0f}",
+        "so_ngay_da_nghi":    f"{so_ngay_da_nghi:.0f}",
+        "so_ngay":            f"{int(so_ngay):02d}",
+        "tu_ngay":            start.strftime("%d/%m/%Y"),
+        "den_ngay":           end.strftime("%d/%m/%Y"),
+        "ngay_ky":            now.day, "thang_ky": now.month, "nam_ky": now.year,
+        "ksv_sign":           ksv_sign,
+        "ksv_label":          ksv_label,
+        "truong_phong_name":  r["ksv_name"] or "",
+        "nguoi_de_nghi_name": r["staff_name"] or "",
+        "gd_name":            r["gd_approver_name"] or "",
     }
 
 
 def _build_form_ctx(r, leave_id: Optional[int], db: sqlite3.Connection) -> tuple:
     """(ctx cho docxtpl, đường dẫn template). `r` là dòng thật hoặc dòng giả lập."""
+    if r["adjusts_leave_id"]:
+        return _build_npbb_adjust_form_ctx(r, db), _NPBB_ADJUST_TPL_PATH
+    if r["leave_type"] == "bat_buoc":
+        return _build_npbb_register_form_ctx(r, leave_id, db), _NPBB_REGISTER_TPL_PATH
+
     tpl_path = _pick_template(r["staff_role"])
     if not os.path.exists(tpl_path):
         raise HTTPException(500, "Chưa có template đơn nghỉ phép")
@@ -1729,6 +2334,20 @@ def _build_form_ctx(r, leave_id: Optional[int], db: sqlite3.Connection) -> tuple
     dept_short = dept_raw.upper()
     if dept_short.startswith("PHÒNG "):
         dept_short = dept_short[6:]
+    # Tên phòng ngắn, giữ nguyên hoa/thường — dùng trong câu văn thường (mẫu
+    # đơn theo cấp bậc don_xin_nghi_phep_nv.docx), khác dept_short (viết hoa,
+    # dùng cho nhãn TRƯỞNG PHÒNG/TUQ. ở trên).
+    phong_ten = dept_raw[6:] if dept_raw.upper().startswith("PHÒNG ") else dept_raw
+
+    # GĐ không thể "kính đề nghị" chính mình — đơn của GĐ kính gửi thẳng Tổng
+    # Giám đốc Agribank (đối chiếu mẫu "GIẤY NGHỈ PHÉP GIÁM ĐỐC" thật); PGĐ vẫn
+    # kính đề nghị Tổng Giám đốc trong thân đơn (mẫu riêng don_xin_nghi_phep_pgd.docx
+    # tự ghi cứng khối "Kính gửi" 3 dòng — không dùng doi_tuong_full ở đó). Các
+    # cấp còn lại giữ nguyên đối tượng cũ.
+    if r["staff_role"] in ("giam_doc", "pho_giam_doc"):
+        doi_tuong, doi_tuong_full = "Tổng Giám đốc", "Tổng Giám đốc Agribank"
+    else:
+        doi_tuong, doi_tuong_full = "Giám đốc Trung tâm Thanh toán", "Giám đốc Trung tâm Thanh toán Agribank"
 
     # Nhãn KSV — luôn hiện với role thường, kể cả khai báo hộ (ksv_approver_id=NULL)
     ksv_sign = r["staff_role"] not in ("truong_phong", "giam_doc", "pho_giam_doc")
@@ -1761,6 +2380,8 @@ def _build_form_ctx(r, leave_id: Optional[int], db: sqlite3.Connection) -> tuple
     _doc_date = now.date() if r["leave_type"] in ("annual", "bat_buoc") else start
     ctx = {
         "ngay_thang_nam":   f"{_doc_date.day:02d} tháng {_doc_date.month:02d} năm {_doc_date.year}",
+        "doi_tuong":        doi_tuong,
+        "doi_tuong_full":   doi_tuong_full,
         "ho_va_ten":        r["staff_name"] or "",
         "chuc_vu":          ("Giám đốc - Trung tâm Thanh toán Agribank"
                             if r["staff_role"] == "giam_doc"
@@ -1768,6 +2389,7 @@ def _build_form_ctx(r, leave_id: Optional[int], db: sqlite3.Connection) -> tuple
                             if r["staff_role"] == "pho_giam_doc"
                             else _ROLE_VN.get(r["staff_role"] or "", r["staff_role"] or "")),
         "don_vi":           r["dept_name"] or "",
+        "phong_ten":        phong_ten,
         "nam_phep":         str(start.year),
         "tong_so_phep":      str(tong_phep),
         "so_ngay_da_nghi":   f"{da_nghi:g}",
@@ -1807,9 +2429,10 @@ def _build_form_ctx(r, leave_id: Optional[int], db: sqlite3.Connection) -> tuple
     _LEAVE_TYPE_VN = {
         "thai_san": "thai sản theo chế độ", "bao_hiem": "bảo hiểm theo chế độ",
         "annual": "phép năm", "bat_buoc": "phép bắt buộc",
+        "khong_luong": "không lương", "hop_cong_tac": "họp/công tác",
         "other": "phép khác",
     }
-    is_no_quota = r["leave_type"] in _NO_QUOTA_TYPES
+    is_no_quota = _is_no_quota_row(r["leave_type"], r["other_deduct_quota"])
     ctx["is_no_quota"]    = is_no_quota
     ctx["leave_type_vn"]  = _LEAVE_TYPE_VN.get(r["leave_type"], r["leave_type"] or "")
     # thai_san / bao_hiem không tính hạn mức — để trống các ô quota trên phiếu
@@ -1990,7 +2613,8 @@ def _sig_slot_for(r, current: dict, db: sqlite3.Connection) -> str:
     if r["staff_id"] == current["id"]:
         return "nguoi_de_nghi"
     if r["status"] == LeaveStatus.PENDING_KSV and (
-            r["ksv_approver_id"] == current["id"] or current["role"] == "admin"):
+            r["ksv_approver_id"] == current["id"] or current["role"] == "admin"
+            or _is_alt_ksv(current, r["staff_id"], db)):
         return "ksv"
     if r["status"] == LeaveStatus.PENDING_GD and (
             r["gd_approver_id"] == current["id"] or current["role"] == "admin"):
@@ -2800,121 +3424,326 @@ def export_quotas(
     )
 
 
+def _calc_occurred_days(staff_id: int, year: int, db: sqlite3.Connection, today: date) -> float:
+    """Số ngày ĐÃ THỰC SỰ NGHỈ tính đến `today` trong năm — chỉ đếm ngày đã
+    xảy ra (<= today), KHÁC _calc_used_days (đếm cả phần đơn đã duyệt nhưng
+    ngày nghỉ còn ở tương lai, dùng để kiểm tra hạn mức lúc tạo đơn). Loại trừ
+    y hệt _NO_QUOTA_TYPES — bat_buoc vẫn tính (mang tính bắt buộc nhưng vẫn
+    trừ vào quỹ phép năm khi báo cáo, xem export_all_leaves_annual)."""
+    rows = db.execute(
+        f"""SELECT spread_dates, start_date, end_date FROM leave_records
+            WHERE staff_id=? AND status='approved'
+              AND leave_type NOT IN ('thai_san','bao_hiem','khong_luong','hop_cong_tac')
+              {_OTHER_NO_QUOTA_SQL}
+              AND start_date <= ? AND end_date >= ?""",
+        (staff_id, f"{year}-12-31", f"{year}-01-01"),
+    ).fetchall()
+    total = 0.0
+    lich: LichLamViec | None = None
+    for row in rows:
+        if row["spread_dates"]:
+            for ds in json.loads(row["spread_dates"]):
+                if ds.startswith(str(year)) and date.fromisoformat(ds) <= today:
+                    total += 1
+        else:
+            if lich is None:
+                lich = _load_lich(db, date(year, 1, 1), date(year, 12, 31))
+            d = date.fromisoformat(row["start_date"])
+            e = min(date.fromisoformat(row["end_date"]), today)
+            while d <= e:
+                if d.year == year and la_ngay_lam_viec(d, lich):
+                    total += 1
+                d += timedelta(days=1)
+    return total
+
+
 @router.get("/export/annual")
 def export_all_leaves_annual(
     year: int,
     db: sqlite3.Connection = Depends(get_db),
     current: dict = Depends(require_feature("leaves.stats_export")),
 ):
-    """Xuất tất cả đơn nghỉ phép trong năm ra Excel."""
+    """Báo cáo tổng hợp phép năm theo phòng ban — đúng mẫu Phòng Tổng hợp
+    đang dùng: STT/Họ và tên/Phòng/Chức vụ/Hạn mức/Chuyển năm/Tổng phép/
+    "Đã nghỉ tính đến [ngày xuất file]"/Còn lại, có dòng tổng theo từng phòng
+    (đứng TRƯỚC danh sách nhân sự phòng đó, đúng thứ tự mẫu giấy thật).
+    """
     import openpyxl, io
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.worksheet.page import PageMargins
     from fastapi.responses import Response
+
+    today = _vn_now().date()
 
     # feature leaves.stats_export chỉ gate theo group_features, không tự ràng buộc
     # phòng ban — nếu admin lỡ gán quyền này cho nhóm không phải Tổng hợp/lãnh đạo,
     # phải tự lọc ở đây để không lộ dữ liệu toàn trung tâm (khớp leader_dashboard).
     _scope_required = (current["role"] not in ("admin", "giam_doc", "pho_giam_doc")
                        and not _is_tong_hop_staff(current, db))
-    _dept_sql    = " AND s.department_id = ?" if _scope_required else ""
+    _dept_sql    = " AND u.department_id = ?" if _scope_required else ""
     _dept_params = [current.get("department_id")] if _scope_required else []
 
-    rows = db.execute(
-        f"""SELECT lr.*, s.full_name AS staff_name, d.name AS dept_name,
-                  kv.full_name AS ksv_name, th.full_name AS th_name,
-                  gd.full_name AS gd_name
-           FROM leave_records lr
-           LEFT JOIN user_tttt s  ON lr.staff_id = s.id
-           LEFT JOIN departments d ON s.department_id = d.id
-           LEFT JOIN user_tttt kv ON lr.ksv_approver_id = kv.id
-           LEFT JOIN user_tttt th ON lr.tong_hop_approver_id = th.id
-           LEFT JOIN user_tttt gd ON lr.gd_approver_id = gd.id
-           WHERE strftime('%Y', lr.start_date) = ?{_dept_sql}
-           ORDER BY lr.created_at DESC""",
-        [str(year)] + _dept_params
+    staffs = db.execute(
+        f"""SELECT u.id, u.full_name, u.role, u.join_industry_date, d.name AS dept_name
+           FROM user_tttt u
+           LEFT JOIN departments d ON u.department_id = d.id
+           WHERE u.is_active=1 AND (u.is_deleted=0 OR u.is_deleted IS NULL)
+             AND u.department_id IS NOT NULL{_dept_sql}
+           ORDER BY d.name, u.full_name""",
+        _dept_params
     ).fetchall()
 
-    import json as _json
-
-    def _fmt_date(d_str):
-        """YYYY-MM-DD → DD/MM/YYYY"""
-        try:
-            y, mo, dd = d_str[:10].split("-")
-            return f"{dd}/{mo}/{y}"
-        except Exception:
-            return d_str or ""
-
-    _STATUS_VN = {
-        "pending_ksv": "Chờ KSV duyệt", "pending_tong_hop": "Chờ Tổng hợp",
-        "pending_gd": "Chờ Ban lãnh đạo duyệt", "approved": "Hoàn thành",
-        "rejected": "Từ chối", "cancelled": "Đã hủy"
-    }
-    headers = ["STT", "Ngày tạo", "Họ và tên", "Phòng", "Loại nghỉ", "Ngày nghỉ",
-               "Số ngày", "Trạng thái", "KSV duyệt", "Phòng Tổng hợp", "GĐ/PGĐ"]
-    widths  = [6, 14, 28, 28, 18, 40, 10, 18, 22, 22, 20]
-    hfill = PatternFill("solid", fgColor="8B0000")
-    hfont = Font(bold=True, color="FFFFFF")
-
-    # Sắp xếp theo ngày bắt đầu tăng dần
-    rows_sorted = sorted(rows, key=lambda r: r["start_date"] or "")
-
-    # "Số ngày" phải khớp cách tính dùng để trừ hạn mức (_period_days: chỉ tính
-    # ngày làm việc, trừ T7/CN/lễ — trừ thai_san/bao_hiem tính ngày lịch), không
-    # phải đếm ngày lịch thô như trước.
-    _lich_nam = _load_lich(db, date(year, 1, 1), date(year, 12, 31))
+    # Tính trước từng người — cần xong hết mới biết tổng theo phòng để ghi
+    # dòng tổng TRƯỚC danh sách nhân sự (đúng thứ tự mẫu giấy thật).
+    person_rows = []
+    for s in staffs:
+        quota_row = db.execute(
+            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
+            (s["id"], year),
+        ).fetchone()
+        han_muc = float(quota_row["quota_days"]) if quota_row else float(compute_annual_leave(s["join_industry_date"], year))
+        chuyen_nam = compute_carry_over(s["id"], year, db, effective=True, ref_date=today)
+        tong_phep = han_muc + chuyen_nam
+        da_nghi = _calc_occurred_days(s["id"], year, db, today)
+        # max(0.0, ...) — khớp đúng cách get_quotas/stats_annual đang làm. Xuất
+        # báo cáo SAU 31/03: chuyen_nam về 0 (hết hiệu lực) nhưng da_nghi vẫn
+        # đếm đủ những ngày quý I đã dùng đúng bằng số chuyển kỳ đó (đơn đã
+        # duyệt, không tự xoá theo) — trừ (số hạn mức thật đã bị coi là 0) ra
+        # khỏi (số ngày thật đã nghỉ) có thể ra âm, in ra tờ giấy đưa lãnh đạo
+        # là con số vô lý. Kẹp về 0 thay vì hiện số âm.
+        con_lai = max(0.0, tong_phep - da_nghi)
+        person_rows.append({
+            "name": s["full_name"] or "", "dept": s["dept_name"] or "(Chưa gán phòng)",
+            "chuc_vu": _ROLE_VN.get(s["role"] or "", s["role"] or ""),
+            "han_muc": han_muc, "chuyen_nam": chuyen_nam, "tong_phep": tong_phep,
+            "da_nghi": da_nghi, "con_lai": con_lai,
+        })
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = f"Don nghi phep {year}"
+    ws.title = f"Báo cáo {year}"[:31]
 
-    ws.merge_cells("A1:L1")
-    tc = ws.cell(1, 1, f"TẤT CẢ ĐƠN NGHỈ PHÉP NĂM {year}")
-    tc.font = Font(bold=True, size=13)
-    tc.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[1].height = 24
-
+    FONT_NAME = "Times New Roman"
+    FONT_SIZE = 14
+    headers = ["STT", "Họ và tên", "Phòng", "Chức vụ", "Hạn mức (ngày)", "Chuyển năm",
+               "Tổng phép", f"Đã nghỉ (ngày) tính đến {today.strftime('%d/%m/%Y')}", "Còn lại"]
+    widths  = [6, 28, 34, 22, 9, 10, 8, 20, 10]
+    hdr_font = Font(name=FONT_NAME, size=FONT_SIZE, bold=True)
     for ci, (h, w) in enumerate(zip(headers, widths), 1):
         cell = ws.cell(2, ci, h)
-        cell.fill = hfill; cell.font = hfont
-        cell.alignment = Alignment(horizontal="center")
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws.column_dimensions[cell.column_letter].width = w
+    # Cột "Đã nghỉ tính đến..." tô đỏ — mốc ngày động, dễ thấy ngay là số liệu
+    # chỉ đúng tính đến lúc xuất, không phải trọn năm.
+    ws.cell(2, 8).font = Font(name=FONT_NAME, size=FONT_SIZE, bold=True, color="FFFF0000")
+    ws.row_dimensions[2].height = 40
 
-    for idx, r in enumerate(rows_sorted, 1):
-        try:
-            nd = len(_json.loads(r["spread_dates"])) if r["spread_dates"] else _period_days(
-                date.fromisoformat(r["start_date"]), date.fromisoformat(r["end_date"]),
-                _lich_nam, r["leave_type"],
-            )
-        except Exception:
-            nd = 1
-        ri = idx + 2
-        ws.cell(ri, 1, idx).alignment = Alignment(horizontal="center")
-        # Ngày nghỉ: ghi từng ngày riêng nếu không liên nhau
-        if r["spread_dates"]:
-            try:
-                spread = _json.loads(r["spread_dates"])
-                dates_str = ", ".join(_fmt_date(d) for d in sorted(spread))
-            except Exception:
-                dates_str = _fmt_date(r["start_date"])
-        else:
-            dates_str = f"{_fmt_date(r['start_date'])} → {_fmt_date(r['end_date'])}"
+    dept_font = Font(name=FONT_NAME, size=FONT_SIZE, bold=True)
+    data_font = Font(name=FONT_NAME, size=FONT_SIZE)
 
-        ws.cell(ri, 2, _fmt_date((r["created_at"] or "")[:10])).alignment = Alignment(horizontal="center")
-        ws.cell(ri, 3, r["staff_name"] or "").alignment = Alignment(horizontal="left")
-        ws.cell(ri, 4, r["dept_name"] or "").alignment = Alignment(horizontal="left")
-        ws.cell(ri, 5, LEAVE_TYPE_LABELS.get(r["leave_type"] or "", r["leave_type"] or ""))
-        ws.cell(ri, 6, dates_str).alignment = Alignment(horizontal="left", wrap_text=True)
-        ws.cell(ri, 7, nd).alignment = Alignment(horizontal="center")
-        ws.cell(ri, 8, _STATUS_VN.get(r["status"] or "", r["status"] or ""))
-        ws.cell(ri, 9, r["ksv_name"] or "")
-        ws.cell(ri, 10, r["th_name"] or "")
-        ws.cell(ri, 11, r["gd_name"] or "")
+    ri = 3
+    stt = 0
+    idx = 0
+    while idx < len(person_rows):
+        dept = person_rows[idx]["dept"]
+        group = []
+        while idx < len(person_rows) and person_rows[idx]["dept"] == dept:
+            group.append(person_rows[idx])
+            idx += 1
+
+        dept_row = ri
+        ws.cell(dept_row, 2, dept).font = dept_font
+        for col, key in ((5, "han_muc"), (7, "tong_phep"), (8, "da_nghi"), (9, "con_lai")):
+            cell = ws.cell(dept_row, col, round(sum(p[key] for p in group), 1))
+            cell.font = dept_font
+            cell.alignment = Alignment(horizontal="center")
+        ri += 1
+
+        for p in group:
+            stt += 1
+            ws.cell(ri, 1, stt).font = data_font
+            ws.cell(ri, 1).alignment = Alignment(horizontal="center")
+            ws.cell(ri, 2, p["name"]).font = data_font
+            ws.cell(ri, 3, p["dept"]).font = data_font
+            ws.cell(ri, 4, p["chuc_vu"]).font = data_font
+            for col, key in ((5, "han_muc"), (6, "chuyen_nam"), (7, "tong_phep"), (8, "da_nghi"), (9, "con_lai")):
+                cell = ws.cell(ri, col, round(p[key], 1))
+                cell.font = data_font
+                cell.alignment = Alignment(horizontal="center")
+            ri += 1
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins = PageMargins(left=0.3, right=0.3, top=0.4, bottom=0.4, header=0.2, footer=0.2)
+    ws.print_area = f"A1:I{ri - 1}"
 
     buf = io.BytesIO(); wb.save(buf)
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="bao_cao_don_nghi_phep_{year}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="bao_cao_nghi_phep_{year}.xlsx"'},
+    )
+
+
+# ─── Báo cáo NPBB (Mẫu 18 nội bộ / Mẫu 19 gửi TCNS) ─────────────────────────
+_NPBB_MAU_TPL = {
+    "18": template_path("npbb_mau18_dieu_chinh_tpl.docx"),
+    "19": template_path("npbb_mau19_dangky_tpl.docx"),
+}
+
+
+def _npbb_set_cell_text(cell, text: str):
+    """Ghi đè text 1 ô bảng, giữ format đoạn đầu — dùng khi nhân bản dòng mẫu
+    (deepcopy) rồi điền dữ liệu thật, xem export_npbb_batch. Dữ liệu mẫu gốc
+    có ô nhiều đoạn nên XOÁ HẲN các đoạn thừa (không chỉ xoá text) — nếu
+    không, đoạn trống để lại 1 dòng trắng thừa trong ô khi in ra."""
+    paragraphs = cell.paragraphs
+    first = paragraphs[0]
+    if first.runs:
+        first.runs[0].text = text
+        for run in first.runs[1:]:
+            run.text = ""
+    else:
+        first.add_run(text)
+    for p in paragraphs[1:]:
+        p._element.getparent().remove(p._element)
+
+
+@router.get("/export/npbb-batch")
+def export_npbb_batch(
+    year: int,
+    mau: str = Query(..., pattern="^(18|19)$", description="18 = tờ trình nội bộ, 19 = gửi TCNS"),
+    month: int = Query(None, ge=1, le=12, description="Bỏ trống = xuất cả năm, đúng theo yêu cầu 'báo cáo hàng tháng'"),
+    preview: bool = Query(False, description="True = trả PDF xem trước (chuyển tạm qua Word), False = tải file .docx gốc theo mẫu TCNS"),
+    db: sqlite3.Connection = Depends(get_db),
+    current: dict = Depends(require_feature("leaves.stats_export")),
+):
+    """Danh sách nhân sự có đơn nghỉ phép bắt buộc trong năm/tháng — "Thời gian
+    đã đăng ký" lấy đúng đơn GỐC (adjusts_leave_id IS NULL), "Thời gian điều
+    chỉnh" lấy đơn điều chỉnh ĐÃ DUYỆT nếu có (xem npbb_adjust_leave). Đơn
+    gốc bị hủy do KHÔNG PHẢI điều chỉnh (rút/hủy thường) không xuất hiện.
+
+    Lọc theo THỜI GIAN ĐÃ ĐĂNG KÝ (start_date của đơn gốc) — cùng field với
+    chế độ theo năm cũ, chỉ thu hẹp thêm xuống đúng 1 tháng khi có truyền
+    `month`, không đổi field lọc sang created_at.
+
+    `preview=true` chuyển bản .docx vừa dựng sang PDF qua Word (leave_pdf.
+    docx_to_pdf, cùng cơ chế với xem trước phiếu nghỉ phép) chỉ để hiển thị —
+    bản tải về thật vẫn phải gọi lại không kèm preview để lấy đúng .docx gốc.
+    """
+    import docx
+    from copy import deepcopy
+    from fastapi.responses import Response
+
+    tpl_path = _NPBB_MAU_TPL[mau]
+    if not os.path.exists(tpl_path):
+        raise HTTPException(500, "Chưa có template báo cáo NPBB")
+
+    # feature leaves.stats_export chỉ gate theo group_features, không tự ràng buộc
+    # phòng ban — nếu admin lỡ gán quyền này cho nhóm không phải Tổng hợp/lãnh đạo,
+    # phải tự lọc ở đây để không lộ dữ liệu toàn trung tâm (khớp export_all_leaves_annual).
+    _scope_required = (current["role"] not in ("admin", "giam_doc", "pho_giam_doc")
+                       and not _is_tong_hop_staff(current, db))
+    _dept_sql    = " AND s.department_id = ?" if _scope_required else ""
+    _dept_params = [current.get("department_id")] if _scope_required else []
+
+    if month:
+        _period_sql = "strftime('%Y-%m', lr.start_date) = ?"
+        _period_param = f"{year:04d}-{month:02d}"
+    else:
+        _period_sql = "strftime('%Y', lr.start_date) = ?"
+        _period_param = str(year)
+
+    roots = db.execute(
+        f"""SELECT lr.*, s.full_name AS staff_name, s.role AS staff_role,
+                  s.join_industry_date, d.name AS dept_name
+           FROM leave_records lr
+           LEFT JOIN user_tttt s   ON lr.staff_id = s.id
+           LEFT JOIN departments d ON s.department_id = d.id
+           WHERE lr.leave_type='bat_buoc' AND lr.adjusts_leave_id IS NULL
+             AND {_period_sql}{_dept_sql}
+             AND (lr.status='approved' OR EXISTS(
+                    SELECT 1 FROM leave_records adj
+                    WHERE adj.adjusts_leave_id = lr.id AND adj.status='approved'))
+           ORDER BY d.name, s.full_name""",
+        [_period_param] + _dept_params,
+    ).fetchall()
+
+    def _fmt_range(s: str, e: str) -> str:
+        return (f"Từ {date.fromisoformat(s).strftime('%d/%m/%Y')} "
+                f"đến hết ngày {date.fromisoformat(e).strftime('%d/%m/%Y')}")
+
+    rows_data = []
+    for r in roots:
+        adj = db.execute(
+            """SELECT start_date, end_date FROM leave_records
+               WHERE adjusts_leave_id=? AND status='approved'
+               ORDER BY created_at DESC LIMIT 1""",
+            (r["id"],),
+        ).fetchone()
+        quota_row = db.execute(
+            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
+            (r["staff_id"], year),
+        ).fetchone()
+        tong_phep = (float(quota_row["quota_days"]) if quota_row
+                     else float(compute_annual_leave(r["join_industry_date"], year)))
+        da_nghi = _calc_used_days(r["staff_id"], year, db)
+        rows_data.append({
+            "name":       r["staff_name"] or "",
+            "chuc_vu":    _ROLE_VN.get(r["staff_role"] or "", r["staff_role"] or ""),
+            "tong_phep":  tong_phep,
+            "da_nghi":    da_nghi,
+            "da_dang_ky": _fmt_range(r["start_date"], r["end_date"]),
+            "dieu_chinh": _fmt_range(adj["start_date"], adj["end_date"]) if adj else "",
+        })
+
+    doc = docx.Document(tpl_path)
+    table = doc.tables[1]
+    tbl = table._tbl
+    # Dòng dữ liệu mẫu (row index 2, sau 2 dòng tiêu đề) — nhân bản XML của nó
+    # cho mỗi nhân sự thật, xoá hết các dòng mẫu gốc trước khi chèn lại.
+    template_tr = deepcopy(table.rows[2]._tr)
+    for row in table.rows[2:]:
+        tbl.remove(row._tr)
+    for idx, item in enumerate(rows_data, 1):
+        tbl.append(deepcopy(template_tr))
+        cells = table.rows[-1].cells
+        _npbb_set_cell_text(cells[0], str(idx))
+        _npbb_set_cell_text(cells[1], item["name"])
+        _npbb_set_cell_text(cells[2], "")
+        _npbb_set_cell_text(cells[3], "")
+        _npbb_set_cell_text(cells[4], item["chuc_vu"])
+        _npbb_set_cell_text(cells[5], "TTTT")
+        _npbb_set_cell_text(cells[6], f"{item['tong_phep']:g}")
+        _npbb_set_cell_text(cells[7], f"{item['da_nghi']:g}")
+        _npbb_set_cell_text(cells[8], item["da_dang_ky"])
+        _npbb_set_cell_text(cells[9], item["dieu_chinh"])
+    if not rows_data:
+        tbl.append(deepcopy(template_tr))
+        cells = table.rows[-1].cells
+        _npbb_set_cell_text(cells[1], f"Không có nhân sự nghỉ phép bắt buộc năm {year}")
+        for ci in (0, 2, 3, 4, 5, 6, 7, 8, 9):
+            _npbb_set_cell_text(cells[ci], "")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    docx_bytes = buf.getvalue()
+
+    if preview:
+        try:
+            pdf_bytes = leave_pdf.docx_to_pdf(docx_bytes)
+        except leave_pdf.PdfConvertError as e:
+            raise HTTPException(503, f"Không tạo được bản xem trước: {e}")
+        return Response(content=pdf_bytes, media_type="application/pdf")
+
+    fname = f"bao_cao_npbb_mau{mau}_{year}.docx"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 
@@ -3009,6 +3838,309 @@ def stats_annual(
     )
 
 
+# ─── Báo cáo chấm công tháng (suy ra từ đơn nghỉ phép đã duyệt) ────────────
+def _build_attendance_month_sheet(ws, db: sqlite3.Connection, year: int, month: int, staffs):
+    """Dựng 1 sheet chấm công cho đúng 1 tháng vào worksheet `ws` đã tạo sẵn —
+    theo mẫu giấy "TONG HOP CHAM CONG TTTT" của Phòng Tổng hợp: nhóm theo
+    phòng ban, mỗi người 1 dòng, X = đi làm, P = nghỉ phép (suy ra từ
+    leave_records đã duyệt), để trống = T7/CN/lễ.
+
+    CHỈ tự động được phần suy ra từ đơn nghỉ phép đã duyệt — cột xếp loại thi
+    đua không có nguồn dữ liệu nào trong phần mềm nên không tự điền được;
+    Phòng Tổng hợp bổ sung thủ công sau khi tải về, đúng như mẫu giấy vẫn dùng.
+
+    Ngày sau thời điểm xuất file (kể cả các ngày còn lại của tháng hiện tại)
+    để trống — chưa xảy ra thì chưa có gì để tính, không suy đoán "X".
+    """
+    import calendar
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.page import PageMargins
+
+    today = _vn_now().date()
+    ws.title = f"Thang {month:02d}-{year}"
+
+    days_in_month = calendar.monthrange(year, month)[1]
+    start = date(year, month, 1)
+    end = date(year, month, days_in_month)
+    lich = _load_lich(db, start, end)
+
+    # Ký hiệu theo loại nghỉ (theo yêu cầu Phòng Tổng hợp) — loại nào không có
+    # ký hiệu riêng thì dùng chung "P". "hop_cong_tac" giờ là leave_type thật
+    # (đi qua đúng luồng đơn nghỉ phép bình thường) nên tự điền được từ dữ liệu
+    # thật, không còn phải để trống như trước khi loại này chưa tồn tại.
+    # "CT" (không phải "H") — bảng attendance_symbols có sẵn "H" = "Đi học"
+    # (dùng bởi hệ chấm công thật của Phòng Kế toán, backend/db/migrations.py
+    # ::trg_leave_*_sync_attendance) — dùng lại "H" ở đây cho "họp/công tác"
+    # sẽ đụng ký hiệu, hiểu sai bản chất khi đọc báo cáo. "CT" = "Công tác" đã
+    # có sẵn trong attendance_symbols (review PR #77, Người 1, 2026-09-06).
+    _ATTENDANCE_SYMBOL = {"bat_buoc": "BB", "hop_cong_tac": "CT"}
+
+    staff_ids = [s["id"] for s in staffs]
+    leave_symbol_by_staff: dict[int, dict] = {sid: {} for sid in staff_ids}
+    if staff_ids:
+        placeholders = ",".join("?" for _ in staff_ids)
+        rows = db.execute(
+            f"""SELECT staff_id, start_date, end_date, spread_dates, leave_type FROM leave_records
+               WHERE status='approved' AND staff_id IN ({placeholders})
+                 AND start_date <= ? AND end_date >= ?""",
+            (*staff_ids, end.isoformat(), start.isoformat()),
+        ).fetchall()
+        for r in rows:
+            symbol = _ATTENDANCE_SYMBOL.get(r["leave_type"], "P")
+            if r["spread_dates"]:
+                for ds in json.loads(r["spread_dates"]):
+                    d = date.fromisoformat(ds)
+                    if start <= d <= end:
+                        leave_symbol_by_staff[r["staff_id"]][d] = symbol
+            else:
+                d = max(date.fromisoformat(r["start_date"]), start)
+                e = min(date.fromisoformat(r["end_date"]), end)
+                while d <= e:
+                    leave_symbol_by_staff[r["staff_id"]][d] = symbol
+                    d += timedelta(days=1)
+
+    # Font/cỡ chữ lấy đúng nguyên file mẫu thật "TONG HOP CHAM CONG TTTT-2026.xlsx"
+    # (sheet T12026/T22026 — bản 2026 hiện hành, không phải bản 2023 cũ đã đổi mẫu).
+    FONT_NAME = "Times New Roman"
+    total_cols = 3 + days_in_month + 3  # STT, Họ và tên, Mã cán bộ, các ngày, X, N.L, Ăn ca
+    last_col = get_column_letter(total_cols)
+    left_end = total_cols // 2
+
+    ws.merge_cells(f"A1:{get_column_letter(left_end)}1")
+    a1 = ws.cell(1, 1, "NGÂN HÀNG NÔNG NGHIỆP")
+    a1.font = Font(name=FONT_NAME, size=12, bold=False)
+    a1.alignment = Alignment(horizontal="center")
+    ws.merge_cells(f"{get_column_letter(left_end + 1)}1:{last_col}1")
+    c = ws.cell(1, left_end + 1, "CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM")
+    c.font = Font(name=FONT_NAME, size=12, bold=True)
+    c.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A2:{get_column_letter(left_end)}2")
+    a2 = ws.cell(2, 1, "VÀ PHÁT TRIỂN NÔNG THÔN VIỆT NAM")
+    a2.font = Font(name=FONT_NAME, size=12, bold=False)
+    a2.alignment = Alignment(horizontal="center")
+    ws.merge_cells(f"{get_column_letter(left_end + 1)}2:{last_col}2")
+    c = ws.cell(2, left_end + 1, "Độc lập - Tự do - Hạnh phúc")
+    c.font = Font(name=FONT_NAME, size=12, bold=True)
+    c.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A3:{get_column_letter(left_end)}3")
+    a3 = ws.cell(3, 1, "TRUNG TÂM THANH TOÁN")
+    a3.font = Font(name=FONT_NAME, size=12, bold=True)
+    a3.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(f"A5:{last_col}5")
+    tc = ws.cell(5, 1, "BẢNG CHẤM CÔNG LAO ĐỘNG")
+    tc.font = Font(name=FONT_NAME, size=14, bold=True)
+    tc.alignment = Alignment(horizontal="center")
+    ws.row_dimensions[5].height = 18.75
+
+    ws.merge_cells(f"A6:{last_col}6")
+    tc = ws.cell(6, 1, f"Tháng {month:02d} năm {year}")
+    tc.font = Font(name=FONT_NAME, size=14, bold=True)
+    tc.alignment = Alignment(horizontal="center")
+    ws.row_dimensions[6].height = 18.75
+
+    HEADER_ROW = 8
+    # Mẫu thật dùng cỡ chữ KHÁC NHAU theo từng cột ở dòng tiêu đề, không đồng
+    # nhất 1 cỡ: STT/Mã cán bộ 10, Họ và tên 12, các cột ngày 10, X/N.L/Ăn ca 9.
+    hdr_font_stt  = Font(name=FONT_NAME, size=10, bold=True)
+    hdr_font_name = Font(name=FONT_NAME, size=12, bold=True)
+    hdr_font_day  = Font(name=FONT_NAME, size=10, bold=True)
+    hdr_font_sum  = Font(name=FONT_NAME, size=9, bold=True)
+    weekend_fill = PatternFill("solid", fgColor="FFFFFF00")
+    holiday_fill = PatternFill("solid", fgColor="C8E6C9")
+    thin = Side(style="thin", color="000000")
+    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    wrap_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.row_dimensions[HEADER_ROW].height = 27
+    ws.cell(HEADER_ROW, 1, "STT").font = hdr_font_stt
+    ws.cell(HEADER_ROW, 2, "Họ và tên").font = hdr_font_name
+    ws.cell(HEADER_ROW, 3, "Mã cán bộ").font = hdr_font_stt
+    ws.column_dimensions["A"].width = 4
+    ws.column_dimensions["B"].width = 24
+    ws.column_dimensions["C"].width = 10
+    day_col0 = 4
+    for dnum in range(1, days_in_month + 1):
+        col = day_col0 + dnum - 1
+        cell = ws.cell(HEADER_ROW, col, dnum)
+        cell.font = hdr_font_day
+        cell.border = cell_border
+        ws.column_dimensions[get_column_letter(col)].width = 3.5
+        d = date(year, month, dnum)
+        if not la_ngay_lam_viec(d, lich):
+            cell.fill = holiday_fill if d in lich.ngay_le else weekend_fill
+    sum_col0 = day_col0 + days_in_month
+    for i, label in enumerate(("X", "N.L", "Ăn ca")):
+        col = sum_col0 + i
+        cell = ws.cell(HEADER_ROW, col, label)
+        cell.font = hdr_font_sum
+        ws.column_dimensions[get_column_letter(col)].width = 4.3
+    for ci in range(1, total_cols + 1):
+        cell = ws.cell(HEADER_ROW, ci)
+        cell.border = cell_border
+        cell.alignment = wrap_center
+
+    # Font/cỡ chữ dòng dữ liệu (khác dòng tiêu đề): STT 11, Họ tên/Mã cán bộ 12,
+    # ô ngày + cột tổng 10 — không bold, màu chữ mặc định (đen). Mẫu thật có vài
+    # dòng tô chữ đỏ nhưng KHÔNG theo quy luật cố định nào (chỉ 1 số cán bộ ở 1
+    # số tháng) nên không có cách suy ra tự động — để mặc định đen cho mọi dòng.
+    data_font_stt  = Font(name=FONT_NAME, size=11)
+    data_font_name = Font(name=FONT_NAME, size=12)
+    data_font_code = Font(name=FONT_NAME, size=10)
+    data_font_day  = Font(name=FONT_NAME, size=10)
+    data_font_sum  = Font(name=FONT_NAME, size=10)
+    dept_font      = Font(name=FONT_NAME, size=10, bold=True)
+
+    ri = HEADER_ROW + 1
+    cur_dept = None
+    dept_stt = 0
+    for s in staffs:
+        if s["dept_name"] != cur_dept:
+            if cur_dept is not None:
+                ws.cell(ri, 2, dept_stt).font = dept_font
+                ri += 1
+            cur_dept = s["dept_name"]
+            dept_stt = 0
+            dc = ws.cell(ri, 2, cur_dept or "(Chưa gán phòng)")
+            dc.font = dept_font
+            dc.alignment = wrap_center
+            ri += 1
+        ws.row_dimensions[ri].height = 22.5
+        dept_stt += 1
+        c1 = ws.cell(ri, 1, dept_stt); c1.font = data_font_stt; c1.alignment = Alignment(horizontal="center")
+        ws.cell(ri, 2, s["full_name"] or "").font = data_font_name
+        c3 = ws.cell(ri, 3, s["employee_code"] or ""); c3.font = data_font_code; c3.alignment = Alignment(horizontal="center")
+        x_count = 0
+        for dnum in range(1, days_in_month + 1):
+            d = date(year, month, dnum)
+            col = day_col0 + dnum - 1
+            cell = ws.cell(ri, col)
+            cell.font = data_font_day
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = cell_border
+            if not la_ngay_lam_viec(d, lich):
+                cell.fill = holiday_fill if d in lich.ngay_le else weekend_fill
+                continue
+            # Ngày chưa tới (sau thời điểm xuất file) — chưa có dữ liệu thật, để
+            # trống, không suy đoán "X" cho ngày chưa xảy ra.
+            if d > today:
+                continue
+            _sym = leave_symbol_by_staff.get(s["id"], {}).get(d)
+            if _sym:
+                cell.value = _sym
+            else:
+                cell.value = "X"
+                x_count += 1
+        total_work_days = sum(
+            1 for dnum in range(1, days_in_month + 1)
+            if la_ngay_lam_viec(date(year, month, dnum), lich) and date(year, month, dnum) <= today
+        )
+        for i, val in enumerate((x_count, total_work_days, x_count)):
+            cell = ws.cell(ri, sum_col0 + i, val)
+            cell.font = data_font_sum
+            cell.alignment = Alignment(horizontal="center")
+        for ci in range(1, total_cols + 1):
+            ws.cell(ri, ci).border = cell_border
+        ri += 1
+    if cur_dept is not None:
+        ws.cell(ri, 2, dept_stt).font = dept_font
+        ri += 1
+
+    ri += 1
+    note = ws.cell(ri, 1,
+        "Ghi chú: X = đi làm, P = nghỉ phép, BB = nghỉ phép bắt buộc, H = họp/công tác "
+        "(tất cả tự động lấy từ đơn nghỉ phép đã duyệt trong hệ thống). Ô để trống tô màu = Thứ Bảy/Chủ "
+        "nhật/ngày lễ, ô để trống không tô màu = ngày chưa tới "
+        f"(tính đến {today.strftime('%d/%m/%Y')}, thời điểm xuất file). Cột xếp loại thi đua KHÔNG có dữ "
+        "liệu nên chưa tự điền.")
+    note.font = Font(name=FONT_NAME, size=9, italic=True, color="666666")
+    ws.merge_cells(f"A{ri}:{last_col}{ri}")
+
+    ri += 2
+    footer_font = Font(name=FONT_NAME, size=12, bold=True)
+    third = total_cols // 3
+    # Merge 1 khoảng nhỏ quanh mỗi nhãn — chữ căn giữa (center) trong Excel
+    # KHÔNG tự tràn sang ô trống bên cạnh như chữ căn trái, cột A lại rất hẹp
+    # (width=4) nên nếu chỉ ghi vào đúng 1 ô, "LẬP BẢNG" sẽ bị cắt chữ khi mở
+    # bằng Excel thật (chỉ hiện được "BẢNG"). Excel/LibreOffice không kiểm
+    # tra chồng lấn merge khi ghi bằng openpyxl nên vẫn phải tự canh đủ hẹp.
+    for col, label in ((1, "LẬP BẢNG"), (third + 1, "KIỂM SOÁT"), (2 * third + 1, "GIÁM ĐỐC")):
+        end_col = min(col + 3, total_cols)
+        ws.merge_cells(start_row=ri, start_column=col, end_row=ri, end_column=end_col)
+        cell = ws.cell(ri, col, label)
+        cell.font = footer_font
+        cell.alignment = Alignment(horizontal="center")
+
+    # Canh in vừa 1 trang ngang — bảng rộng tới hơn 30 cột (mỗi ngày 1 cột)
+    # nên khổ dọc mặc định của Excel sẽ luôn bị tràn sang trang 2 nếu không
+    # ép khổ ngang + fit-to-width. fitToPage PHẢI bật thì fitToWidth mới có
+    # tác dụng — thiếu dòng đó Excel bỏ qua toàn bộ cấu hình fit, in theo
+    # scale 100% mặc định.
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins = PageMargins(left=0.2, right=0.2, top=0.4, bottom=0.4, header=0.2, footer=0.2)
+    ws.print_area = f"A1:{last_col}{ri}"
+
+
+@router.get("/export/attendance-monthly")
+def export_attendance_monthly(
+    year: int,
+    month: int = Query(None, ge=1, le=12, description="Bỏ trống = xuất cả năm, mỗi tháng 1 sheet"),
+    db: sqlite3.Connection = Depends(get_db),
+    current: dict = Depends(require_feature("leaves.stats_export")),
+):
+    """Xuất báo cáo chấm công — 1 tháng (1 sheet) hoặc cả năm (12 sheet, mỗi
+    tháng 1 sheet, đúng cấu trúc file mẫu "TONG HOP CHAM CONG TTTT")."""
+    import openpyxl
+
+    _scope_required = (current["role"] not in ("admin", "giam_doc", "pho_giam_doc")
+                       and not _is_tong_hop_staff(current, db))
+    _dept_sql    = " AND u.department_id = ?" if _scope_required else ""
+    _dept_params = [current.get("department_id")] if _scope_required else []
+
+    staffs = db.execute(
+        f"""SELECT u.id, u.full_name, u.employee_code, d.name AS dept_name
+           FROM user_tttt u
+           LEFT JOIN departments d ON u.department_id = d.id
+           WHERE u.is_active=1 AND (u.is_deleted=0 OR u.is_deleted IS NULL)
+             AND u.department_id IS NOT NULL{_dept_sql}
+           ORDER BY d.name, u.full_name""",
+        _dept_params
+    ).fetchall()
+
+    wb = openpyxl.Workbook()
+    if month is None:
+        # Cả năm: chỉ xuất tới tháng hiện tại — tháng chưa tới thì chưa có
+        # ngày nào xảy ra, không có gì để tính, xuất sheet trống vô nghĩa.
+        today = _vn_now().date()
+        months_so_far = [m for m in range(1, 13) if date(year, m, 1) <= today]
+        if not months_so_far:
+            raise HTTPException(400, f"Năm {year} chưa tới, chưa có tháng nào để xuất báo cáo")
+        wb.remove(wb.active)
+        for m in months_so_far:
+            ws = wb.create_sheet()
+            _build_attendance_month_sheet(ws, db, year, m, staffs)
+        fname = f"bao_cao_cham_cong_ca_nam_{year}.xlsx"
+    else:
+        ws = wb.active
+        _build_attendance_month_sheet(ws, db, year, month, staffs)
+        fname = f"bao_cao_cham_cong_{month:02d}_{year}.xlsx"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"},
+    )
+
+
 # ─── Dashboard lãnh đạo ─────────────────────────────────────────────────────
 
 @router.get("/stats/leader-dashboard")
@@ -3088,7 +4220,7 @@ def leader_dashboard(
     # Bản ghi tổng hợp giả (nhập Excel/sửa tay hạn mức) không phải đơn nghỉ phép
     # thật — loại khỏi "Hoàn thành"/"Khai báo hộ" để khớp với list_leaves() (đã ẩn
     # tương tự) và không đếm 1 thao tác đối soát hạn mức như 1 đơn đã hoàn thành.
-    _not_synthetic = "AND NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')"
+    _not_synthetic = "AND (lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))"
     approved_cnt = db.execute(
         f"""SELECT COUNT(*) FROM leave_records lr JOIN user_tttt s ON lr.staff_id = s.id
            WHERE lr.status='approved' AND strftime('%Y', lr.start_date)=?{_dept_sql} {_not_synthetic}""",
@@ -3194,7 +4326,7 @@ def create_direct_leave(
         """SELECT lr.id, lr.start_date, lr.end_date, lr.spread_dates
            FROM leave_records lr
            WHERE lr.staff_id=? AND lr.status NOT IN ('cancelled','rejected')
-             AND NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%')""",
+             AND (lr.reason IS NULL OR NOT (lr.reason LIKE '[Import]%' OR lr.reason LIKE '[Điều chỉnh]%'))""",
         (body.staff_id,)
     ).fetchall()
     conflict_dates = []
@@ -3210,38 +4342,26 @@ def create_direct_leave(
         conflict_str = ", ".join(sorted(set(conflict_dates))[:5])
         raise HTTPException(409, f"Nhân viên đã có đơn nghỉ vào ngày: {conflict_str}. Vui lòng kiểm tra lại.")
 
-    # Kiểm tra hạn mức (không áp dụng cho thai_san, bao_hiem)
-    if body.leave_type not in _NO_QUOTA_TYPES:
-        # sqlite3.Row không có .get() — (row or {}).get(...) crash 500 nếu đã có
-        # dòng leave_quotas (kể cả quota_days=0). Ưu tiên leave_quotas (nhập tay/
-        # upload file), chỉ fallback công thức ngày vào ngành khi chưa có.
-        _q_row = db.execute(
-            "SELECT quota_days FROM leave_quotas WHERE staff_id=? AND year=?",
-            (body.staff_id, eff_start.year),
-        ).fetchone()
-        quota = (
-            float(_q_row["quota_days"]) if _q_row
-            else float(compute_annual_leave(staff["join_industry_date"], eff_start.year))
-        )
-        carry     = compute_carry_over(body.staff_id, eff_start.year, db, effective=True, ref_date=eff_start)
-        used      = _calc_used_days(body.staff_id, eff_start.year, db, include_pending=True)
-        remaining = quota + carry - used
-        if leave_days > remaining:
-            raise HTTPException(400,
-                f"Vượt quá hạn mức phép năm {eff_start.year}. "
-                f"Còn lại {remaining:.0f} ngày, khai báo {leave_days} ngày.")
+    # Kiểm tra hạn mức — dùng chung _check_quota_or_borrow (trước đây khối này
+    # tự viết riêng, thiếu điều kiện miễn bat_buoc nên "khai báo hộ" nghỉ bắt
+    # buộc bị từ chối sai khi hết hạn mức, khác với create_leave/resubmit_leave).
+    borrow_days = _check_quota_or_borrow(
+        body.staff_id, staff["join_industry_date"], body.leave_type,
+        leave_days, eff_start.year, body.confirm_borrow_next_year, db,
+        eff_start=eff_start, other_deduct_quota=body.other_deduct_quota,
+    )
 
     cur = db.execute(
         """INSERT INTO leave_records
                (staff_id, start_date, end_date, leave_type, reason, status,
-                is_direct, direct_by, spread_dates, created_at, updated_at)
-           VALUES (?,?,?,?,?,'approved',1,?,?,?,?)""",
+                is_direct, direct_by, spread_dates, borrow_next_year_days, other_deduct_quota, created_at, updated_at)
+           VALUES (?,?,?,?,?,'approved',1,?,?,?,?,?,?)""",
         (body.staff_id, eff_start.isoformat(), eff_end.isoformat(),
          body.leave_type, body.reason,
-         current["id"], spread_json, str(_vn_now()), str(_vn_now())),
+         current["id"], spread_json, borrow_days, int(body.other_deduct_quota), str(_vn_now()), str(_vn_now())),
     )
     leave_id = cur.lastrowid
-    if body.leave_type not in _NO_QUOTA_TYPES:
+    if not _is_no_quota_row(body.leave_type, body.other_deduct_quota):
         db.execute(
             "UPDATE user_tttt SET used_leave_days = COALESCE(used_leave_days,0) + ? WHERE id=?",
             (leave_days, body.staff_id),
@@ -3310,9 +4430,30 @@ def approve_recall(
         if leave["status"] != LeaveStatus.PENDING_TONG_HOP or not leave["recall_reason"]:
             raise HTTPException(400, "Đơn này không trong trạng thái chờ xác nhận rút")
     old = leave["status"]
+    # Khoá lạc quan (giống _apply_status_transition): chỉ chuyển trạng thái nếu
+    # status hiện tại trong DB đúng bằng old — chặn 2 request xác nhận rút trùng
+    # cùng lúc (double-click, 2 tab Phòng Tổng hợp) trừ used_leave_days 2 lần
+    # cho cùng 1 đơn. Đổi trạng thái TRƯỚC rồi mới trừ hạn mức — request thua
+    # cuộc dừng lại ở đây (409), không chạm tới bước trừ hạn mức nữa.
+    cur = db.execute(
+        "UPDATE leave_records SET status=?, updated_at=? WHERE id=? AND status=?",
+        (LeaveStatus.CANCELLED, str(_vn_now()), leave_id, old),
+    )
+    if cur.rowcount == 0:
+        raise HTTPException(409, "Đơn đã được xử lý bởi một yêu cầu khác, vui lòng tải lại trang")
+    # Đơn điều chỉnh NPBB bị rút — đơn gốc từng bị _cancel_adjusted_original
+    # chuyển "Đã hủy" lúc đơn điều chỉnh này duyệt xong phải được khôi phục
+    # lại "Hoàn thành", nếu không sẽ kẹt vĩnh viễn không điều chỉnh lại được
+    # nữa (npbb_adjust_leave chỉ nhận điều chỉnh đơn đang "Hoàn thành"). Kiểm
+    # tra thẳng adjusts_leave_id — không cần so `old` vì luồng 2 bước của
+    # nhân viên thường có old='pending_tong_hop' (đã đổi từ request_recall)
+    # chứ không phải 'approved' lúc tới ĐÂY, dù bản chất vẫn là rút 1 đơn đã
+    # từng "Hoàn thành".
+    if leave["adjusts_leave_id"]:
+        _restore_adjusted_original(leave["adjusts_leave_id"], current["id"], db)
     # Trừ used_leave_days khi xác nhận rút (approved → cancelled) — trừ thai_san/bao_hiem
     # vì loại này chưa từng được cộng vào used_leave_days lúc duyệt.
-    if leave["leave_type"] not in _NO_QUOTA_TYPES:
+    if not _is_no_quota_row(leave["leave_type"], leave["other_deduct_quota"]):
         start = date.fromisoformat(leave["start_date"])
         end   = date.fromisoformat(leave["end_date"])
         _lich = _load_lich(db, start, end)
@@ -3321,10 +4462,6 @@ def approve_recall(
             "UPDATE user_tttt SET used_leave_days = MAX(0, COALESCE(used_leave_days,0) - ?) WHERE id=?",
             (days, leave["staff_id"]),
         )
-    db.execute(
-        "UPDATE leave_records SET status=?, updated_at=? WHERE id=?",
-        (LeaveStatus.CANCELLED, str(_vn_now()), leave_id),
-    )
     _log_action(db, leave_id, current["id"], "recall_approve", None, old, LeaveStatus.CANCELLED)
     db.commit()
     return _leave_to_out(leave_id, db)

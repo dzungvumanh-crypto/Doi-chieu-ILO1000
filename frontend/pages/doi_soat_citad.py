@@ -65,11 +65,20 @@ FILTERS = [
     ("Lệch trạng thái", ("lech_trang_thai",)),
 ]
 
+# Đổi 09/09/2026 theo yêu cầu Phòng Thanh toán (đồng bộ với
+# doi_soat_citad/exporters.py::HEADERS vừa sửa): bỏ "Dịch vụ" (suy được từ
+# "Loại GD"), thêm "Số RefHub" — đặt SAU "Trạng thái" (cuối nhóm dữ liệu
+# Agribank/IPCAS, đúng nguồn — refhub là dữ liệu gốc từ file IPCAS, không
+# phải CITAD) thay vì đúng chỗ cũ của "Dịch vụ" (giữa nhóm CITAD). Bảng
+# trên màn hình không có dải nhóm tiêu đề như Excel nên đổi vị trí ở đây
+# an toàn tuyệt đối — cols dựng từ list này theo TÊN field, không theo
+# chỉ số vị trí (xem `cols = [...]` bên dưới).
 DISPLAY_COLS = [
     ("stt", "STT"), ("status_lbl", "Kết quả"), ("loai", "Loại GD"), ("chieu_lbl", "Chiều"),
-    ("so_gd", "Số GD (CITAD)"), ("key_agri", "Số GD (Agribank)"), ("dich_vu", "Dịch vụ"),
+    ("so_gd", "Số GD (CITAD)"), ("key_agri", "Số GD (Agribank)"),
     ("so_tien", "Số tiền"), ("loai_tien", "Loại tiền"), ("ngay", "Ngày GD"),
-    ("nh_nhan", "Ngân hàng"), ("trang_thai", "Trạng thái"), ("cong", "Ghi chú"),
+    ("nh_nhan", "Ngân hàng"), ("trang_thai", "Trạng thái"), ("refhub", "Số RefHub"),
+    ("cong", "Ghi chú"),
 ]
 
 
@@ -405,12 +414,12 @@ def _build_result_panel(tab, state):
                         "chieu_lbl": "Đi" if r.get("chieu") == "di" else "Đến",
                         "so_gd": r.get("so_gd") or "",
                         "key_agri": r.get("key_agri") or "",
-                        "dich_vu": r.get("dich_vu") or "",
                         "so_tien": r.get("so_tien") or 0,
                         "loai_tien": r.get("loai_tien") or "VNĐ",
                         "ngay": r.get("ngay") or "",
                         "nh_nhan": r.get("nh_nhan") or "",
                         "trang_thai": r.get("trang_thai") or "",
+                        "refhub": r.get("refhub") or "",
                         # Ưu tiên ghi_chu tường minh (vd. phát hiện dup) nếu có,
                         # không thì mới rơi về "Cổng X" mặc định.
                         "cong": r.get("ghi_chu") or (f"Cổng {r['cong']}" if r.get("cong") else ""),

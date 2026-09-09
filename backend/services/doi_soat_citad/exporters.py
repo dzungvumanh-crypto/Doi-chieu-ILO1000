@@ -10,6 +10,21 @@ label, độ rộng cột, freeze pane như bản gốc.
 định nghĩa lặp lại y hệt ở 3 nơi: export_doiSoat, _add_filter_sheet, và UI
 tkinter) để cả export lẫn trang frontend `doi_soat_citad.py` dùng chung 1
 nguồn — không đổi giá trị nào so với bản gốc.
+
+NGOẠI LỆ duy nhất (theo yêu cầu Phòng Thanh toán 09/09/2026): bỏ cột "Dịch
+vụ" (mô tả "Chuyển có giá trị cao/thấp") — thông tin đó đã suy được thẳng từ
+cột "Loại GD" (IH/IL) sẵn có ngay bên cạnh — thêm cột "Số RefHub" (`refhub`,
+mã tham chiếu gốc của điện đến, xem parsers.py) vốn có sẵn trong dữ liệu
+nhưng chưa từng hiện ra báo cáo. Đặt Ở CUỐI nhóm "AGRIBANK (IPCAS)" (không
+đặt lại chỗ cũ của "Dịch vụ", trong nhóm "CITAD (NHNN)") — xác nhận qua
+review thực tế (09/09/2026): `refhub` là dữ liệu gốc từ file IPCAS
+(`_parse_ipcas_text`), CITAD/Hub không hề có field này, xếp vào nhóm CITAD
+là sai nguồn. Đổi vị trí kéo theo phải sửa lại MỌI chỉ số cột cứng (nhóm
+tiêu đề, căn lề, độ rộng, `ci <=`/`ci ==` rải rác) trong cả 3 hàm xuất bên
+dưới — xem từng chỗ có ghi chú "09/09/2026" đi kèm. Field `dich_vu` trong
+`parsers.py`/`reconcile.py` KHÔNG bị xoá — vẫn tính như cũ, chỉ không còn
+hiển thị ở đây (frontend `doi_soat_citad.py` vẫn hiện cột này trên màn
+hình, ngoài phạm vi yêu cầu).
 """
 from __future__ import annotations
 
@@ -22,8 +37,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 HEADERS = ['STT', 'Kết quả', 'Loại GD', 'Chiều', 'Số GD (CITAD)', 'Số GD (Agribank)',
-           'Dịch vụ', 'Số tiền', 'Loại tiền', 'Ngày GD', 'Ngân hàng', 'Trạng thái',
+           'Số tiền', 'Loại tiền', 'Ngày GD', 'Ngân hàng', 'Trạng thái', 'Số RefHub',
            'Ghi chú']
+# Cột 12 "Số RefHub" — thêm 09/09/2026 theo yêu cầu Phòng Thanh toán, đặt
+# CUỐI nhóm "AGRIBANK (IPCAS)" (đúng nguồn dữ liệu, xem docstring đầu file)
+# thay cho cột "Dịch vụ" đã bỏ (thông tin đó đã suy được từ "Loại GD").
 # Cột 13 "Ghi chú" — thêm sau (không có trong bản gốc): số cổng CITAD của
 # dòng chỉ có ở CITAD ('only_citad'/'lech_trang_thai', xem parsers.py::cong
 # và reconcile.py — chỉ 2 status này giữ nguyên dict gốc từ citad_rows nên
@@ -55,13 +73,13 @@ CLR_FG = {
     'dup_citad': CLR['org_txt'],
 }
 
-_COL_WIDTHS = [5, 14, 8, 8, 18, 18, 28, 15, 10, 12, 28, 12, 12]
+_COL_WIDTHS = [5, 14, 8, 8, 18, 18, 15, 10, 12, 28, 12, 28, 12]
 # Riêng cho export_doiSoat_full() — cột "Số tiền" ở export_doiSoat() hiếm khi
 # quá dài (chỉ liệt kê phần lệch, số lượng nhỏ), nhưng "Tất cả lệnh" có cả
 # ~38.000 dòng khớp, gặp số tiền cỡ vài trăm tỷ VNĐ (vd "307,195,253,272")
 # — độ rộng 15 của _COL_WIDTHS bị hiện "####". Dàn rộng thêm các cột hay bị
-# cắt (Số tiền, Dịch vụ, Ghi chú) để đọc đủ không cần tự kéo tay.
-_COL_WIDTHS_FULL = [6, 14, 9, 9, 17, 17, 32, 20, 10, 12, 22, 12, 34]
+# cắt (Số tiền, Số RefHub, Ghi chú) để đọc đủ không cần tự kéo tay.
+_COL_WIDTHS_FULL = [6, 14, 9, 9, 17, 17, 20, 10, 12, 22, 12, 32, 34]
 
 
 def _ghi_chu(r):
@@ -153,21 +171,26 @@ def export_doiSoat(lech_rows, n_khop, ngay_cham, filepath):
     ws.row_dimensions[3].height = 6
 
     # ── Row 4: group headers ──────────────────────────────────────
+    # CITAD (NHNN) co lại còn E-G (Số GD CITAD/Agribank/Số tiền — mất "Dịch
+    # vụ"); AGRIBANK (IPCAS) rộng ra H-L, nhận thêm "Số RefHub" (đổi
+    # 09/09/2026: refhub là dữ liệu gốc từ file IPCAS, không phải CITAD —
+    # xếp nhầm nhóm là sai nguồn dữ liệu, không chỉ sai vị trí).
     ws.merge_cells('A4:D4'); ws['A4'].value = 'THÔNG TIN CHUNG'
-    ws.merge_cells('E4:H4'); ws['E4'].value = 'CITAD (NHNN)'
-    ws.merge_cells('I4:L4'); ws['I4'].value = 'AGRIBANK (IPCAS)'
+    ws.merge_cells('E4:G4'); ws['E4'].value = 'CITAD (NHNN)'
+    ws.merge_cells('H4:L4'); ws['H4'].value = 'AGRIBANK (IPCAS)'
     ws['M4'].value = 'GHI CHÚ'  # cột mới, không thuộc nhóm nào — chỉ 1 cột, không cần merge
-    for col, bg in [('A', CLR['hdr_dark']), ('E', CLR['hdr_dark']), ('I', CLR['hdr_med']), ('M', CLR['hdr_dark'])]:
+    for col, bg in [('A', CLR['hdr_dark']), ('E', CLR['hdr_dark']), ('H', CLR['hdr_med']), ('M', CLR['hdr_dark'])]:
         cell = ws[col + '4']
         _apply(cell, **_style(bg=bg, fg='FFFFFF', bold=True, sz=10, h='center'))
     # fill merged cells
-    for rng, bg in [('B4:D4', CLR['hdr_dark']), ('F4:H4', CLR['hdr_dark']), ('J4:L4', CLR['hdr_med'])]:
+    for rng, bg in [('B4:D4', CLR['hdr_dark']), ('F4:G4', CLR['hdr_dark']), ('I4:L4', CLR['hdr_med'])]:
         for cell in ws[rng][0]:
             _apply(cell, **_style(bg=bg, fg='FFFFFF', bold=True, sz=10, h='center'))
 
     # ── Row 5: column headers ─────────────────────────────────────
+    # Ranh giới dark/med lùi từ 8 xuống 7 — nhóm CITAD (NHNN) mất 1 cột.
     for ci, h in enumerate(HEADERS, 1):
-        bg = CLR['hdr_dark'] if ci <= 8 else CLR['hdr_med']
+        bg = CLR['hdr_dark'] if ci <= 7 else CLR['hdr_med']
         cell = ws.cell(5, ci, h)
         _apply(cell, **_style(bg=bg, fg='FFFFFF', bold=True, sz=9, h='center'))
 
@@ -200,22 +223,22 @@ def export_doiSoat(lech_rows, n_khop, ngay_cham, filepath):
             'Đi' if r.get('chieu') == 'di' else 'Đến',
             r.get('so_gd') or '',
             r.get('key_agri') or '',
-            r.get('dich_vu') or '',
             so_tien,
             r.get('loai_tien') or 'VNĐ',
             _ngay(r, ngay_cham),
             r.get('nh_nhan') or '',
             r.get('trang_thai') or '',
+            r.get('refhub') or '',
             _ghi_chu(r),
         ]
 
         for ci, val in enumerate(vals, 1):
             cell = ws.cell(row_num, ci, val)
-            h = 'right' if ci == 8 else ('center' if ci in (1, 2, 3, 4, 9, 13) else 'left')
+            h = 'right' if ci == 7 else ('center' if ci in (1, 2, 3, 4, 8, 13) else 'left')
             fg = st_fg if ci == 2 else '111827'
             bold = ci == 2
             _apply(cell, **_style(bg=bg, fg=fg, bold=bold, sz=10, h=h))
-            if ci == 8 and isinstance(val, int):
+            if ci == 7 and isinstance(val, int):
                 cell.number_format = '#,##0'
 
     # ── Độ rộng cột ───────────────────────────────────────────────
@@ -289,7 +312,7 @@ def export_doiSoat_full(lech_rows, khop_rows, ngay_cham, filepath):
         # file .xlsx sinh ra, không phải suy đoán. Dòng LỆCH vẫn gán style
         # riêng từng ô nên vẫn đè lên style cột như cũ.
         cd.alignment = _align_cached('center' if i == 1 else 'left')
-        if i == 8:
+        if i == 7:  # "Số tiền" — lùi từ 8 xuống 7 (đổi 09/09/2026: bỏ "Dịch vụ")
             cd.number_format = '#,##0'
     ws.freeze_panes = 'A6'
 
@@ -328,23 +351,25 @@ def export_doiSoat_full(lech_rows, khop_rows, ngay_cham, filepath):
 
     ws.append([])  # dòng 3 — trống, cách dòng (không ghi ô nào, khỏi cần style)
 
-    # Dòng 4 — nhãn nhóm cột, merge thật A4:D4/E4:H4/I4:L4 (M4 đứng riêng,
-    # đúng 4 nhóm khớp thứ tự cột trong HEADERS).
+    # Dòng 4 — nhãn nhóm cột, merge thật A4:D4/E4:G4/H4:L4 (M4 đứng riêng,
+    # đúng 4 nhóm khớp thứ tự cột trong HEADERS). CITAD (NHNN) co còn 3 cột
+    # (mất "Dịch vụ"), AGRIBANK (IPCAS) rộng ra 5 cột (nhận "Số RefHub") —
+    # đổi 09/09/2026, xem docstring đầu file.
     ws.append([
         _wo_cell(ws, 'THÔNG TIN CHUNG', bg=CLR['hdr_dark'], fg='FFFFFF', bold=True, sz=10, h='center'),
         None, None, None,
         _wo_cell(ws, 'CITAD (NHNN)', bg=CLR['hdr_dark'], fg='FFFFFF', bold=True, sz=10, h='center'),
-        None, None, None,
+        None, None,
         _wo_cell(ws, 'AGRIBANK (IPCAS)', bg=CLR['hdr_med'], fg='FFFFFF', bold=True, sz=10, h='center'),
-        None, None, None,
+        None, None, None, None,
         _wo_cell(ws, 'GHI CHÚ', bg=CLR['hdr_dark'], fg='FFFFFF', bold=True, sz=10, h='center'),
     ])
     ws.merged_cells.add('A4:D4')
-    ws.merged_cells.add('E4:H4')
-    ws.merged_cells.add('I4:L4')
+    ws.merged_cells.add('E4:G4')
+    ws.merged_cells.add('H4:L4')
 
     ws.append([
-        _wo_cell(ws, h, bg=(CLR['hdr_dark'] if ci <= 8 else CLR['hdr_med']), fg='FFFFFF', bold=True, sz=9, h='center')
+        _wo_cell(ws, h, bg=(CLR['hdr_dark'] if ci <= 7 else CLR['hdr_med']), fg='FFFFFF', bold=True, sz=9, h='center')
         for ci, h in enumerate(HEADERS, 1)
     ])
 
@@ -376,12 +401,12 @@ def export_doiSoat_full(lech_rows, khop_rows, ngay_cham, filepath):
             'Đi' if r.get('chieu') == 'di' else 'Đến',
             r.get('so_gd') or '',
             r.get('key_agri') or '',
-            r.get('dich_vu') or '',
             so_tien,
             r.get('loai_tien') or 'VNĐ',
             _ngay(r, ngay_cham),
             r.get('nh_nhan') or '',
             r.get('trang_thai') or '',
+            r.get('refhub') or '',
             _ghi_chu(r),
         ]
 
@@ -396,7 +421,7 @@ def export_doiSoat_full(lech_rows, khop_rows, ngay_cham, filepath):
                 h = 'center' if ci == 1 else 'left'
                 fg = CLR['yellow_txt'] if ci == 2 else '111827'
                 cell = _wo_cell(ws, val, bg=bg, fg=fg, bold=(ci == 2), sz=10, h=h)
-                if ci == 8 and isinstance(val, int):
+                if ci == 7 and isinstance(val, int):  # "Số tiền" — lùi từ 8 xuống 7
                     cell.number_format = '#,##0'
                 row_cells.append(cell)
             ws.append(row_cells)
@@ -431,12 +456,14 @@ def export_doiSoat_full(lech_rows, khop_rows, ngay_cham, filepath):
             row_cells = list(vals)
             c0 = WriteOnlyCell(ws, value=vals[0])
             c0.alignment = _align_cached('center')
-            c7 = WriteOnlyCell(ws, value=vals[7])
+            # vals[6] = "Số tiền" (index 0-based) — lùi từ 7 xuống 6, đúng
+            # cột 7 (1-based) sau khi bỏ "Dịch vụ" (đổi 09/09/2026).
+            c7 = WriteOnlyCell(ws, value=vals[6])
             c7.alignment = _align_cached('left')
-            if isinstance(vals[7], int):
+            if isinstance(vals[6], int):
                 c7.number_format = '#,##0'
             row_cells[0] = c0
-            row_cells[7] = c7
+            row_cells[6] = c7
             ws.append(row_cells)
 
     wb.save(filepath)
@@ -473,17 +500,18 @@ def _add_filter_sheet(wb, rows, n_khop, ngay_cham, title, status_filter):
                 (r.get('loai') or '').upper(),
                 'Đi' if r.get('chieu') == 'di' else 'Đến',
                 r.get('so_gd') or '', r.get('key_agri') or '',
-                r.get('dich_vu') or '', so_tien,
+                so_tien,
                 r.get('loai_tien') or 'VNĐ', _ngay(r, ngay_cham),
                 r.get('nh_nhan') or '', r.get('trang_thai') or '',
+                r.get('refhub') or '',
                 _ghi_chu(r)]
 
         for ci, val in enumerate(vals, 1):
             cell = ws.cell(row_num, ci, val)
-            h = 'right' if ci == 8 else ('center' if ci in (1, 2, 3, 4, 9, 13) else 'left')
+            h = 'right' if ci == 7 else ('center' if ci in (1, 2, 3, 4, 8, 13) else 'left')
             fg = CLR_FG.get(st, '111827') if ci == 2 else '111827'
             _apply(cell, **_style(bg=bg, fg=fg, bold=(ci == 2), sz=10, h=h))
-            if ci == 8 and isinstance(val, int):
+            if ci == 7 and isinstance(val, int):  # "Số tiền" — lùi từ 8 xuống 7
                 cell.number_format = '#,##0'
 
     for i, w in enumerate(_COL_WIDTHS, 1):

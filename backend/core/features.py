@@ -58,6 +58,7 @@ FEATURES: dict[str, str] = {
     "ttqt_branches.delete":    "Xoá chi nhánh",
     "ttqt_branches.import":    "Nhập danh sách từ Excel",
     "ttqt_branches.export":    "Xuất danh sách ra Excel",
+    "ttqt_branches.history":   "Xem lịch sử sửa đổi",
 
     # Quản lý User — thao tác
     "staff.create":            "Tạo tài khoản mới",
@@ -367,6 +368,7 @@ FEATURE_GROUPS: list[dict] = [
             "ttqt_branches.delete",
             "ttqt_branches.import",
             "ttqt_branches.export",
+            "ttqt_branches.history",
         ],
     },
     {

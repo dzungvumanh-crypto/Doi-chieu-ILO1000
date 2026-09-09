@@ -72,13 +72,14 @@ def export_excel(ket_qua: dict, out_dir: str | Path, base_name: str) -> list[Pat
     core_df.drop(columns=[KEY_COL], errors="ignore").to_csv(core_csv_path, index=False, encoding="utf-8-sig")
 
     hub_csv_path = out_dir / f"{base_name}_hub_chi_tiet.csv"
-    # `.copy()` KHÔNG thừa dù `.drop()` đã trả về DataFrame "mới" — cột giữ nguyên có thể vẫn
-    # chia sẻ block bộ nhớ với `hub_df` gốc tuỳ phiên bản pandas/Copy-on-Write. `hub_df` còn được
-    # dùng lại TRONG RAM sau lệnh gọi này (báo cáo tổng hợp dựng từ `ket_qua["hub_df"]`, xem
-    # `doi_chieu_song_phuong_kenh_core_service.py`) — thiếu `.copy()` thì gán `="..."` bên dưới có
-    # thể lây `="..."` ngược vào `hub_df` gốc, làm nhiễm báo cáo tổng hợp trong RAM một cách âm
-    # thầm (review PR#75, Khánh, 2026-09-09 — không test nào bắt được vì bộ test hiện chỉ kiểm 3
-    # file CSV, không kiểm workbook tổng hợp).
+    # `.copy()` là hàng rào phòng xa, KHÔNG phải vá một lỗi có thật: `hub_out[c] = <Series mới>`
+    # là thay CẢ CỘT nên pandas cấp block mới, không ghi đè mảng dùng chung — đo trên pandas 2.3.x
+    # (bản thấp nhất `requirements.txt` cho phép là 2.0) thấy bỏ `.copy()` thì `hub_df` gốc VẪN
+    # nguyên vẹn. Giữ lại vì `hub_df` còn được dùng TRONG RAM sau lệnh này (báo cáo tổng hợp dựng
+    # từ `ket_qua["hub_df"]`, xem `doi_chieu_song_phuong_kenh_core_service.py`) và vì không muốn
+    # tính đúng đắn của hàm phụ thuộc vào chi tiết nội bộ pandas — thứ đã đổi nhiều lần qua các
+    # bản. Giá phải trả: ~0,8 giây + ~110MB mảng con trỏ ở df 800k×17 (review PR#75, 2026-09-09;
+    # đính chính nhận định ban đầu của Khánh cho rằng thiếu `.copy()` sẽ nhiễm báo cáo tổng hợp).
     hub_out = hub_df.drop(columns=[KEY_COL], errors="ignore").copy()
     for c in COT_KHOA_HUB_CAN_BAO_VE:
         if c in hub_out.columns:

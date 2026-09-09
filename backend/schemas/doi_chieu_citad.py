@@ -50,6 +50,12 @@ class SessionIn(BaseModel):
     # trạng thái vẫn sửa được còn hơn vô tình khoá cứng 1 ngày không ai sửa
     # lại được nữa — xem session_save() trong service.
     status: str = "draft"
+    # None = LUÔN tạo bảng MỚI của chính người gọi (07/09/2026: 1 người có
+    # thể có nhiều bảng độc lập/ngày, không còn "bảng của ngày đó" duy nhất
+    # để đè lên). Có giá trị = đang lưu tiếp ĐÚNG bảng đó (`id` cụ thể) — có
+    # thể là bảng của chính mình (sửa được mọi field) hoặc bảng người khác
+    # (chỉ góp Napas/PSS-MDP) — xem session_save() trong service.
+    session_id: Optional[int] = None
 
 
 class CitadBufferIn(BaseModel):
