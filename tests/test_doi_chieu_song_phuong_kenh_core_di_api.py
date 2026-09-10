@@ -138,6 +138,11 @@ class TestStartUploadEndpointDi:
         assert prog["ket_qua"]["kenh_hub_di"] is not None
         assert prog["ket_qua"]["hub_core_di"] is not None
 
+        # Review Khánh PR#86 A2 (2026-09-10): `hub_t_override` đã bật lại — Hub↔Core PHẢI tái
+        # dùng HUB đọc sẵn ở bước Kênh↔Hub, không đọc+giải nén lại từ đĩa lần thứ hai.
+        logs = "\n".join(prog["logs"])
+        assert "[HUB T] dùng lại HUB đã đọc từ bước Kênh↔Hub" in logs, logs
+
     def test_bao_cao_tong_hop_co_sheet_ghichu(self, admin_client, monkeypatch, tmp_path):
         """Giai đoạn 2 (2026-09-09, card 123): file báo cáo tổng hợp tải qua API phải có sheet
         "GhiChu" giải thích phạm vi Bảng 1 Kênh↔Hub (chỉ SCNL) — không cần thiếu file HUB/CORE

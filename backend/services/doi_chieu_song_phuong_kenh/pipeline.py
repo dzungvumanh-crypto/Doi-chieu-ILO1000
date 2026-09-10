@@ -129,8 +129,14 @@ def main_from_dir(
 
         kenh_path = find_kenh_path(input_dir, ma_nh, loai, chieu)
         if kenh_path is None:
+            # Review Khánh PR#86 B2 (2026-09-10): từ 03/09/2026 tên file kênh BẮT BUỘC có từ khoá
+            # chiều ("đến"/"đi", không dấu cũng được — "den"/"di") mới nhận diện được, không chỉ
+            # cần đủ "kênh"+mã NH+loại như trước. Log cũ không nói rõ điều này, dễ khiến người đọc
+            # tưởng file đang nằm ngay đó mà chương trình không thấy là lỗi chương trình.
             log(f"{nhan} BỎ QUA — thiếu file kênh: {kenh_filename(ma_nh, loai, chieu)} "
-                f"(đã thử cả tên đảo thứ tự {ma_nh}/{loai})")
+                f"(đã thử cả tên đảo thứ tự {ma_nh}/{loai}; tên file BẮT BUỘC có đủ 4 từ khoá "
+                f"không phân biệt dấu/hoa-thường/thứ tự: \"kênh\", \"{ma_nh}\", \"{loai}\", và "
+                f"từ chỉ chiều \"{chieu.lower()}\" — VD \"đến\"/\"den\" hoặc \"đi\"/\"di\")")
             don_vi_results.append({"ma_nh": ma_nh, "loai": loai, "ngay": ngay, "trang_thai": "thieu_file_kenh"})
             continue
 

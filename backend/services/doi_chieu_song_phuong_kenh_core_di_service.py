@@ -5,12 +5,13 @@ cuối, "lỗi 1 bước không chặn bước còn lại". Tách file riêng (k
 1 service) vì thuật toán Hub↔Core khác nhau đủ nhiều (`doi_chieu_song_phuong_core_di/` là package
 riêng, không phải nhánh `if/else` trong package "đến") — xem PLAN.md.
 
-Khác "đến" ở 1 điểm tối ưu hiệu năng CHƯA làm: không tái dùng HUB đã đọc ở bước Kênh↔Hub cho bước
-Hub↔Core (`hub_t_override` của "đến") — vì Kênh↔Hub-đi trả về `hub_raw` CHƯA lọc SCNL (đi không
-lọc gì trước khi khớp kênh, xem `kenh/pipeline.py`), trong khi Hub↔Core-đi cần bản ĐÃ lọc SCNL —
-tái dùng thẳng sẽ sai. Hub↔Core-đi tự đọc lại HUB T từ đĩa (chi phí thêm nhỏ, đổi lấy đơn giản +
-đúng đắn — có thể tối ưu sau khi "đi" đã chạy ổn định, giống cách "đến" cũng thêm tối ưu này sau
-khi phần cơ bản đã chạy được, 2026-08-31)."""
+Dùng chung `hub_t_override` với "đến" (bật lại 2026-09-10, review Khánh PR#86 A2) — tái dùng HUB
+đã đọc ở bước Kênh↔Hub (`kenh/pipeline.py::main_from_dir`, `hub_theo_nh[ma_nh]`) cho bước
+Hub↔Core, tránh giải nén + parse lại cùng 1 file HUB zip lần thứ hai trong 1 job. Ban đầu (đến
+2026-09-09) cố tình KHÔNG bật vì tưởng nhầm Kênh↔Hub-đi trả về bản chưa lọc SCNL trong khi
+Hub↔Core-đi cần bản đã lọc — sai: `core_di/pipeline.py::_doc_hub_di_tu_goc()` (hàm xử lý override
+riêng cho chiều đi) tự gọi `_loc_scnl()` bên trong, đúng thiết kế để nhận bản GỐC chưa lọc mà
+`hub_theo_nh[ma_nh]` cung cấp khi `chieu == "DI"` (xem `kenh/pipeline.py:112-115`)."""
 
 import os
 import shutil
@@ -254,10 +255,18 @@ def _run(job_id: str, goc_dir: str, ngay: str, ma_nh: str, output_dir: str) -> N
             job["status"] = "cancelled"
             log("[JOB] Đã dừng theo yêu cầu.")
             return
+        # Review Khánh PR#86 A2 (2026-09-10): bật lại `hub_t_override` — HUB đã đọc ở bước
+        # Kênh↔Hub (`kenh/pipeline.py::main_from_dir`, `hub_theo_nh[ma_nh]`) chiều đi chính là
+        # bản GỐC chưa lọc (`chieu == "DI"` dùng thẳng `hub_raw`, xem `pipeline.py:112-115`) —
+        # đúng thứ `_doc_hub_di_tu_goc()` cần (hàm đó tự gọi `_loc_scnl()` bên trong). Lý do cũ
+        # "tái dùng thẳng sẽ sai" không đúng với chính implementation — đọc + giải nén lại từ đĩa
+        # là tốn không cần thiết mỗi job.
+        hub_t_da_doc = (ket_qua_kenh or {}).get("hub_theo_nh", {}).get(ma_nh)
         try:
             with do_thoi_gian(log, "Bước 2/2 Hub↔Core (tổng)"):
                 ket_qua_core = doi_chieu_hub_core_di(
                     goc_dir_p, ngay, ma_nh, log_callback=lambda m: log(f"[Hub↔Core] {m}"),
+                    hub_t_override=hub_t_da_doc,
                 )
         except ValueError as e:
             loi.append(f"Hub↔Core: {e}")

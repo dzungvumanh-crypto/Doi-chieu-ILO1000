@@ -536,6 +536,13 @@ Ghi lại từng đợt push lên GitHub / deploy sang máy chính (qua `deploy.
       chiếu Kênh↔Hub, cách nhận diện giao dịch quyết toán/lệnh FX...) — người chấm đã xác nhận quy
       tắc trước khi triển khai, không cần thao tác gì thêm ngoài việc cấp quyền ở trên
     + ✅ Không đổi dữ liệu/quyền của tab "Đối chiếu đến" đang dùng
+    + ⚠️ **Bổ sung 10/09/2026 (review Khánh PR#86):** tên file kênh (Excel do ngân hàng đối tác
+      gửi) từ nay BẮT BUỘC phải có chữ "đến" hoặc "đi" trong tên (không dấu cũng được: "den"/"di")
+      — trước đó chỉ cần đủ "kênh" + mã ngân hàng + loại (SPRT/SPT). Đổi để phân biệt 1 thư mục có
+      cả file kênh chiều đến lẫn chiều đi cùng mã NH. **Ảnh hưởng cả tab "Đối chiếu đến" đang
+      dùng** — file kênh cũ đặt tên không có từ khoá chiều giờ không được nhận diện nữa, hệ thống
+      ghi "thiếu file kênh" dù file vẫn nằm đúng chỗ. Cách xử lý: đổi tên file kênh thêm chữ
+      "đến"/"đi" cho khớp chiều thật của file.
 
 - 03/09/2026 Chuẩn hoá văn bản - **Kẻ đúng đường kẻ ngang, không để tên ngân hàng bị cắt đôi, trích yếu 2 dòng không còn lệch**
     + **Đường kẻ ngang dưới Tiêu ngữ, tên đơn vị và trích yếu nay được vẽ đúng.** Quy định đòi
