@@ -18,6 +18,9 @@ from pathlib import Path
 import pandas as pd
 
 from backend.services.ach.so_tien import doc_so_tien
+from backend.services.doi_chieu_song_phuong_common import (
+    COT_KHOA_HUB_CAN_BAO_VE, bao_ve_khoa_so_khoi_excel,
+)
 
 from .match import KEY_COL, tim_nhom_lenh_fx_trung_remark
 
@@ -88,8 +91,19 @@ def export_excel_di(ket_qua: dict, out_dir: str | Path, base_name: str) -> list[
         core_csv_path, index=False, encoding="utf-8-sig")
 
     hub_csv_path = out_dir / f"{base_name}_hub_chi_tiet.csv"
-    hub_df.drop(columns=[KEY_COL], errors="ignore").to_csv(
-        hub_csv_path, index=False, encoding="utf-8-sig")
+    # Bảo vệ khoá số khỏi Excel (review Khánh PR#86 B1, 2026-09-10) — bản đi trước đó BỎ SÓT lớp
+    # bảo vệ này mà chiều đến đã có (PR#75): MSGREF 16 chữ số (đúng khoá khớp SPT-đi sau khi PR
+    # này đổi sang MSGREF) bị Excel tự làm tròn/rụng số 0 đầu khi mở CSV trực tiếp. Chỉ bọc
+    # `hub_chi_tiet.csv`, KHÔNG bọc `core_chi_tiet.csv` — đúng docstring
+    # `bao_ve_khoa_so_khoi_excel()` cảnh báo (CSV core là trung gian, bị đọc lại làm khoá đối
+    # chiếu ở module khác). `.copy()` bắt buộc: `hub_df` còn dùng lại ở
+    # `_export_bao_cao_tong_hop()` (build_tong_hop_di) sau lời gọi này — đúng bài học PR#75 đã
+    # ghi ở export.py chiều đến.
+    hub_out = hub_df.drop(columns=[KEY_COL], errors="ignore").copy()
+    for c in COT_KHOA_HUB_CAN_BAO_VE:
+        if c in hub_out.columns:
+            hub_out[c] = bao_ve_khoa_so_khoi_excel(hub_out[c])
+    hub_out.to_csv(hub_csv_path, index=False, encoding="utf-8-sig")
 
     ket_qua_files = [tonghop_path, core_csv_path, hub_csv_path]
 
