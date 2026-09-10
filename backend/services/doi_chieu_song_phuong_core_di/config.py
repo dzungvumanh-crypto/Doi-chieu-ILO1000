@@ -41,7 +41,9 @@ TRANG_THAI_HUB_LENH_LOI = "TPER"
 USERID_QT_OSB = "1000OSB"
 USERID_API_KEYWORD = "API"  # USERID KHÔNG chứa chuỗi này → "lệnh fx"
 
-# ─── Bước 2.19 — quyết toán vốn ───────────────────────────────────────────────
+# ─── Bước 2.10 — quyết toán vốn ───────────────────────────────────────────────
+# Số hiệu đúng theo docx `Đối chiếu SP chiều đi V2.docx` (đã tra lại, review Khánh PR#86 A3 phát
+# hiện comment cũ ghi nhầm "2.19" — 2.19 là "CORE THỪA", nhãn cuối cùng của waterfall).
 # KHÔNG khai báo lại `QT_VON_TRBRCD`/`QT_VON_REMARK_KEYWORD` ở đây: luật giống HỆT chiều đến
 # ("TRBRCD == 1000" + REMARK chứa "quyet toan von", không phân biệt hoa/thường), `match.py` gọi
 # thẳng `doi_chieu_song_phuong_core/load_core.py::mask_qt_von`. Cùng một khái niệm nghiệp vụ →

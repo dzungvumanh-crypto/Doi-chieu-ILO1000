@@ -235,10 +235,28 @@ def _loc_scnl(hub_goc: pd.DataFrame, log: Callable[[str], None]) -> pd.DataFrame
     return hub_goc[giu].reset_index(drop=True)
 
 
+_HUB_REQUIRED_COLS_DI = {"TRACE", "SE_TRACE"}
+
+
+def _kiem_cot_hub_di(hub_goc: pd.DataFrame) -> None:
+    """Review Khánh PR#86 vụn (2026-09-10): `HUB_REQUIRED_COLS` (kiểm ở `load_hub_zip()`, dùng
+    chung cả 2 chiều) không đòi `TRACE`/`SE_TRACE` — 2 cột này chỉ chiều ĐI cần
+    (`mask_lenh_fx()`/`build_key_hub_core_di()` đọc thẳng, không qua try/except nào). Thiếu 1
+    trong 2 cột trước đây ném `KeyError` trần lên `job["error"]`, không tên file, không tiếng
+    Việt. Kiểm riêng ở đây (điểm hẹp nhất của chiều đi) thay vì thêm vào `HUB_REQUIRED_COLS` —
+    thêm ở đó sẽ bắt buộc CẢ chiều đến phải có `SE_TRACE`, mà schema HUB đến (14 cột,
+    `kenh/config.py::HUB_COLS`) không có cột này, sẽ hỏng luồng đến đang chạy tốt."""
+    missing = _HUB_REQUIRED_COLS_DI - set(hub_goc.columns)
+    if missing:
+        raise ValueError(
+            f"File HUB chiều đi thiếu cột bắt buộc: {', '.join(sorted(missing))}.")
+
+
 def _doc_hub_di(path: Path, log: Callable[[str], None]) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Trả `(hub_goc, hub_scnl)` — `hub_goc` CHƯA lọc gì (cần cho Bước 2.17/2.18), `hub_scnl` đã
     lọc SCNL + gắn cột `_KEY`."""
     hub_goc = load_hub_zip(path.read_bytes(), log=log)
+    _kiem_cot_hub_di(hub_goc)
     hub_scnl = _loc_scnl(hub_goc, log)
     hub_scnl[match.KEY_COL] = build_key_hub_core_di(hub_scnl)
     return hub_goc, hub_scnl
@@ -248,6 +266,7 @@ def _doc_hub_di_tu_goc(hub_goc: pd.DataFrame, log: Callable[[str], None]) -> tup
     """Như `_doc_hub_di` nhưng nhận thẳng HUB gốc đã đọc ở bước Kênh↔Hub (`kenh/pipeline.py::
     main_from_dir` trả `hub_theo_nh`, chiều đi KHÔNG lọc gì nên đó đúng là bản gốc) — tránh
     đọc + giải nén lại cùng 1 file HUB lần thứ hai trong cùng job."""
+    _kiem_cot_hub_di(hub_goc)
     hub_scnl = _loc_scnl(hub_goc, log)
     hub_scnl[match.KEY_COL] = build_key_hub_core_di(hub_scnl)
     return hub_goc, hub_scnl
@@ -330,9 +349,16 @@ def doi_chieu_hub_core_di(
         log(f"[HUB {nhan}] đang đọc {p.name}...")
         with do_thoi_gian(log, f"đọc+parse HUB {nhan}"):
             hub_goc, hub_scnl = _doc_hub_di(p, log_off)
-        hub_theo_offset[off] = hub_scnl
         if off == 0:
+            hub_theo_offset[off] = hub_scnl
             hub_goc_t = hub_goc
+        else:
+            # Review Khánh PR#86 A1 (2026-09-10): HUB T-1/T-2/T-3 chỉ được đọc để
+            # `classify_core_di()` tra `hub_theo_offset[off][KEY_COL]` (Bước 2.7-2.9) — giữ
+            # nguyên cả DataFrame (17 cột) tốn RAM vô ích, đo được ~0,5-1 GB/file với dữ liệu thật.
+            # Cắt ngay xuống 1 cột trước khi lưu vào dict, giảm hẳn mức đỉnh khi người dùng nộp đủ
+            # nhiều ngày cùng lúc (đúng kịch bản UI mời gọi + test `test_du_7_file_csv...`).
+            hub_theo_offset[off] = hub_scnl[[match.KEY_COL]]
 
     if 0 not in hub_theo_offset:
         raise ValueError(f"Không tìm thấy file HUB chiều đi ngày {ngay} cho NH {ma_nh} — không "
@@ -369,7 +395,17 @@ def doi_chieu_hub_core_di(
             continue
         loai, p = found
         with do_thoi_gian(log, f"đọc/giải mã CORE {nhan} ({loai})"):
-            core_theo_offset[off] = _doc_core_di(loai, p, ma_nh, log_off)
+            core_df_off = _doc_core_di(loai, p, ma_nh, log_off)
+        if off == 0:
+            core_theo_offset[off] = core_df_off
+        else:
+            # Review Khánh PR#86 A1 (2026-09-10): CORE T-3..T-1/T+1..T+3 chỉ dùng cho (a)
+            # `classify_hub_di()` tra `[KEY_COL]` (offset dương) và (b) nhánh huỷ chéo ngày của
+            # `classify_core_di()` — cần đúng `TRBRCD`/`REFERENCE`/`CRAMOUNT` để dựng lại
+            # `so_trace`/`build_khoa_huy_cheo_ngay()`, không đọc cột nào khác. Giữ nguyên 17 cột
+            # cho cả 6 offset này (song song với 7 file CORE full nếu người dùng nộp đủ 1 lượt)
+            # là nguồn RAM lớn nhất theo đo đạc của Khánh — cắt ngay còn 4/17 cột.
+            core_theo_offset[off] = core_df_off[["TRBRCD", "REFERENCE", "CRAMOUNT", match.KEY_COL]]
 
     if 0 not in core_theo_offset:
         raise ValueError(f"Không tìm thấy file CSV/GL02 chiều đi ngày {ngay} — không thể đối chiếu.")

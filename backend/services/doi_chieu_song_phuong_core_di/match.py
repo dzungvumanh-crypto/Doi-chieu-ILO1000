@@ -214,6 +214,14 @@ def classify_core_di(
         cac_buoc.append((NHAN_CORE_KHOP_HUB[off], hub_df[KEY_COL] if hub_df is not None else None))
     _phan_loai_chuoi_khoa(khoa, con_lai, cac_buoc, nhan)
 
+    # ── Bước 2.10 — quyết toán vốn ── (đúng nguyên văn docx: chạy ngay sau 2.6-2.9, TRƯỚC
+    # 2.11-2.16 huỷ chéo ngày — review Khánh PR#86 A3 phát hiện bản trước đặt SAU huỷ chéo ngày,
+    # sai thứ tự waterfall dù chưa có ca thật nào lộ ra vì 0 dòng REMARK "quyet toan von" trong
+    # dữ liệu đã kiểm)
+    mask_von = con_lai & load_core.mask_qt_von(core_df)
+    nhan.loc[mask_von] = NHAN_QT_VON  # CHƯA verify bằng dữ liệu thật — xem PLAN.md mục 6, chỉ có test tự dựng
+    con_lai.loc[mask_von] = False
+
     # ── Bước 2.11-2.16 — huỷ CHÉO NGÀY (chiều đến không có nhóm này) ──
     cac_buoc_huy = []
     for off in OFFSET_CORE_HUY_CHEO_NGAY:
@@ -229,11 +237,6 @@ def classify_core_di(
         )
     # CHƯA verify bằng dữ liệu thật — xem PLAN.md mục 6, chỉ có test tự dựng (6 nhãn huỷ chéo ngày)
     _phan_loai_chuoi_khoa(khoa, con_lai, cac_buoc_huy, nhan)
-
-    # ── Bước 2.10 — quyết toán vốn ──
-    mask_von = con_lai & load_core.mask_qt_von(core_df)
-    nhan.loc[mask_von] = NHAN_QT_VON  # CHƯA verify bằng dữ liệu thật — xem PLAN.md mục 6, chỉ có test tự dựng
-    con_lai.loc[mask_von] = False
 
     # ── Bước 2.17/2.18 — 2 bước áp chót: tra HUB GỐC chưa lọc, ngay trước "CORE THỪA" ──
     _tra_hub_goc_theo_trang_thai(

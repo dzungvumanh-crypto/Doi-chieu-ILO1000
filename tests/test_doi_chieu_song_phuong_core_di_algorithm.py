@@ -317,6 +317,21 @@ class TestClassifyCoreDi:
         nhan = match.classify_core_di(core, {})
         assert nhan.tolist() == [NHAN_QT_VON, NHAN_QT_VON, NHAN_CORE_THUA]
 
+    def test_buoc2_10_quyet_toan_von_uu_tien_truoc_huy_cheo_ngay(self):
+        """Review Khánh PR#86 A3 (2026-09-10): docx đánh số quyết toán vốn là Bước 2.10, chạy
+        NGAY SAU 2.6-2.9 (khớp HUB) và TRƯỚC 2.11-2.16 (huỷ chéo ngày) — bản trước đặt SAU huỷ
+        chéo ngày nên 1 dòng thoả CẢ HAI điều kiện sẽ bị "cướp" nhãn huỷ chéo ngày trước khi kịp
+        xét quyết toán vốn. 0 dòng thật nào rơi vào tình huống này (0 REMARK "quyet toan von"
+        trong dữ liệu đã kiểm) nên chưa ai từng thấy sai — vẫn phải khoá đúng thứ tự trước khi có
+        ca thật."""
+        core_t = _core_df([
+            _core_row(trbrcd="1000", reference="1000API111", cramount="500000",
+                      remark="Quyet toan von"),
+        ])
+        core_khac = _core_df([_core_row(trbrcd="1000", reference="1000API111", cramount="-500000")])
+        nhan = match.classify_core_di(core_t, {}, {-1: core_khac})
+        assert nhan.iloc[0] == NHAN_QT_VON
+
     def test_buoc12_con_lai_la_core_thua(self):
         core = _core_df([_core_row(reference="1000API999", cramount="500000")])
         assert match.classify_core_di(core, {}).iloc[0] == NHAN_CORE_THUA
@@ -640,6 +655,26 @@ class TestLoadCoreDenCsvFileHongDi:
         p.write_bytes(b"khong phai file excel that")
         with pytest.raises(ValueError, match="201_DI.xlsx"):
             load_core.load_core_den_csv(p)
+
+
+class TestKiemCotHubDi:
+    """Review Khánh PR#86 vụn C (2026-09-10): HUB thiếu TRACE/SE_TRACE trước đây ném `KeyError`
+    trần lên `job["error"]` (từ `mask_lenh_fx()`/`build_key_hub_core_di()`), không tiếng Việt,
+    không tên cột — nay `_kiem_cot_hub_di()` chặn sớm với thông báo rõ ràng."""
+
+    def test_thieu_se_trace_bao_loi_ro_rang(self):
+        df = _hub_df([_hub_row()]).drop(columns=["SE_TRACE"])
+        with pytest.raises(ValueError, match="SE_TRACE"):
+            pipeline._kiem_cot_hub_di(df)
+
+    def test_thieu_trace_bao_loi_ro_rang(self):
+        df = _hub_df([_hub_row()]).drop(columns=["TRACE"])
+        with pytest.raises(ValueError, match="TRACE"):
+            pipeline._kiem_cot_hub_di(df)
+
+    def test_du_cot_khong_raise(self):
+        df = _hub_df([_hub_row()])
+        pipeline._kiem_cot_hub_di(df)  # không raise
 
 
 # ── pipeline: dò file theo ngày ──────────────────────────────────────────────
