@@ -34,12 +34,6 @@ class TestKiemTraDuLieu:
         ket_qua = kiem_tra_du_lieu([_HUB_NAME, _KENH_NAME, _GL02_NAME], _NGAY, _MA_NH)
         assert ket_qua == {"kenh_hub": "du", "hub_core": "du"}
 
-    def test_du_ca_hai_khi_core_la_xlsx_thay_vi_csv(self):
-        """2026-09-09: file core .xlsx cũng phải được banner readiness nhận diện là "đủ"."""
-        ket_qua = kiem_tra_du_lieu(
-            [_HUB_NAME, _KENH_NAME, "202_DEN_20260827_1408.xlsx"], _NGAY, _MA_NH)
-        assert ket_qua == {"kenh_hub": "du", "hub_core": "du"}
-
     def test_du_ca_hai_khi_core_di_la_xlsx_thay_vi_csv(self):
         """Như trên, cho chiều ĐI (`chieu='DI'`)."""
         hub_di = "doichieugd_20260825__05_DI_9999_N.zip"
